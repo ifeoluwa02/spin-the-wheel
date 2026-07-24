@@ -16,7 +16,6 @@ interface RegistrationFormProps {
 }
 
 function isValidPhone(phone: string): boolean {
-  // Accepts digits, spaces, +, -, () — requires at least 7 digits total.
   const digits = phone.replace(/\D/g, "");
   return digits.length >= 7;
 }
@@ -32,7 +31,7 @@ export default function RegistrationForm({
   const [email, setEmail] = useState("");
   const [touched, setTouched] = useState(false);
 
-  const nameValid = name.trim().length > 1;
+  const nameValid = name.trim().length >= 2;
   const phoneValid = isValidPhone(phone);
   const canSubmit = nameValid && phoneValid && !submitting;
 
@@ -40,39 +39,49 @@ export default function RegistrationForm({
     e.preventDefault();
     setTouched(true);
     if (!canSubmit) return;
-    onSubmit({ name: name.trim(), phone: phone.trim(), email: email.trim() || undefined });
+    onSubmit({
+      name: name.trim(),
+      phone: phone.trim(),
+      email: email.trim() || undefined,
+    });
   }
 
   return (
     <form className="reg-form" onSubmit={handleSubmit} noValidate>
       <label className="field">
-        <span>Name</span>
+        <span>Full Name</span>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Your full name"
+          placeholder="e.g. Akin Omisakin"
           autoComplete="name"
           required
         />
-        {touched && !nameValid && <small className="field-error">Enter your name to continue.</small>}
+        {touched && !nameValid && (
+          <small className="field-error">Please enter your full name.</small>
+        )}
       </label>
 
       <label className="field">
-        <span>Phone number</span>
+        <span>Phone Number</span>
         <input
           type="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
-          placeholder="080 000 0000"
+          placeholder="080 1234 5678"
           autoComplete="tel"
           required
         />
-        {touched && !phoneValid && <small className="field-error">Enter a valid phone number.</small>}
+        {touched && !phoneValid && (
+          <small className="field-error">Please enter a valid phone number.</small>
+        )}
       </label>
 
       <label className="field">
-        <span>Email <em>(optional)</em></span>
+        <span>
+          Email Address <em>(optional)</em>
+        </span>
         <input
           type="email"
           value={email}
@@ -87,10 +96,10 @@ export default function RegistrationForm({
       <button
         type="submit"
         className="btn-primary"
-        style={{ background: accentColor }}
+        style={{ background: accentColor || "#0E7C7B" }}
         disabled={!canSubmit}
       >
-        {submitting ? "Checking…" : "Continue to spin"}
+        {submitting ? "Checking eligibility…" : "Continue to Spin"}
       </button>
     </form>
   );

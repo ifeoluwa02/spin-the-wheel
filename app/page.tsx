@@ -2,11 +2,18 @@
 
 import { useEffect, useState } from "react";
 import type { Campaign, Prize } from "@/types";
-import { getCampaign, hasAlreadySpun, recordParticipant } from "@/lib/campaign";
+import {
+  getCampaign,
+  hasAlreadySpun,
+  recordParticipant,
+  generateVoucherCode,
+} from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
 import RegistrationForm, { RegistrationValues } from "@/components/RegistrationForm";
 import SpinWheel from "@/components/SpinWheel";
 import WinnerModal from "@/components/WinnerModal";
+import Link from "next/link";
+import { Settings } from "lucide-react";
 
 type Step = "loading" | "not-found" | "register" | "wheel" | "already-spun";
 
@@ -21,6 +28,7 @@ export default function Home() {
   const [spinToken, setSpinToken] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
   const [wonPrize, setWonPrize] = useState<Prize | null>(null);
+  const [voucherCode, setVoucherCode] = useState<string>("");
 
   const campaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
 
@@ -73,7 +81,12 @@ export default function Home() {
 
   async function handleFinish(prize: Prize) {
     setIsSpinning(false);
+    const code = prize.isLosing
+      ? ""
+      : generateVoucherCode(prize.voucherPrefix || "SPIN");
+    setVoucherCode(code);
     setWonPrize(prize);
+
     if (campaign && participant) {
       try {
         await recordParticipant({
@@ -83,6 +96,7 @@ export default function Home() {
           campaignId: campaign.id,
           prizeId: prize.id,
           prizeLabel: prize.label,
+          voucherCode: code,
           won: !prize.isLosing,
           createdAt: Date.now(),
         });
@@ -92,30 +106,59 @@ export default function Home() {
     }
   }
 
-  const glowStyle = campaign
-    ? ({ ["--glow-color" as any]: campaign.primaryColor } as React.CSSProperties)
+  function handleReset() {
+    setWonPrize(null);
+    setParticipant(null);
+    setTargetIndex(null);
+    setStep("register");
+  }
+
+  const customStyle = campaign
+    ? ({
+        "--gradient-top": campaign.gradientStart || campaign.primaryColor || "#ea580c",
+        "--gradient-bottom": campaign.gradientEnd || campaign.secondaryColor || "#1e40af",
+      } as React.CSSProperties)
     : undefined;
 
   return (
-    <div className="stage" style={glowStyle}>
+    <div className="stage" style={customStyle}>
+      {/* Discreet Admin Link */}
+      <Link
+        href="/admin"
+        className="fixed top-4 right-4 text-white/40 hover:text-white transition-colors z-50 p-2"
+        title="Admin Portal"
+      >
+        <Settings className="w-5 h-5" />
+      </Link>
+
       {step === "loading" && <p className="hello-name">Loading campaign…</p>}
 
       {step === "not-found" && (
-        <p className="hello-name">This campaign isn&apos;t available right now.</p>
+        <div className="card" style={{ textAlign: "center" }}>
+          <h1 className="card-title">Campaign Inactive</h1>
+          <p className="card-sub">This promotional campaign is currently unavailable.</p>
+          <Link href="/admin" className="btn-secondary">
+            Go to Admin Dashboard
+          </Link>
+        </div>
       )}
 
-      {campaign && (
+      {campaign && step !== "loading" && (
         <div className="brand-row">
-          {campaign.logoUrl && <img src={campaign.logoUrl} alt={campaign.name} className="brand-logo" />}
+          {campaign.logoUrl && (
+            <img src={campaign.logoUrl} alt={campaign.name} className="brand-logo" />
+          )}
           <span className="brand-name">{campaign.name}</span>
-          {step === "register" && <span className="brand-tagline">{campaign.welcomeMessage}</span>}
+          {step === "register" && (
+            <p className="brand-tagline">{campaign.welcomeMessage}</p>
+          )}
         </div>
       )}
 
       {step === "register" && campaign && (
         <div className="card">
-          <h1 className="card-title">Enter your details</h1>
-          <p className="card-sub">We just need a couple of things before you spin.</p>
+          <h1 className="card-title">Enter Your Details</h1>
+          <p className="card-sub">Register before spinning the wheel for instant prizes.</p>
           <RegistrationForm
             onSubmit={handleRegister}
             submitting={submitting}
@@ -127,8 +170,10 @@ export default function Home() {
 
       {step === "already-spun" && campaign && (
         <div className="card" style={{ textAlign: "center" }}>
-          <h1 className="card-title">Already entered</h1>
-          <p className="card-sub">This phone number has already been used for a spin in this campaign.</p>
+          <h1 className="card-title">Already Played</h1>
+          <p className="card-sub">
+            This phone number has already been used for a spin in this campaign.
+          </p>
           <button
             className="btn-secondary"
             onClick={() => {
@@ -143,31 +188,39 @@ export default function Home() {
 
       {step === "wheel" && campaign && participant && (
         <div className="wheel-stage">
-          <p className="hello-name">{participant.name}, tap the wheel or press spin!</p>
+          <p className="hello-name">Welcome {participant.name}! Tap Spin to win!</p>
           <SpinWheel
             prizes={campaign.prizes}
             targetIndex={targetIndex}
             spinToken={spinToken}
             onFinish={handleFinish}
             accentColor={campaign.primaryColor}
+            logoUrl={campaign.logoUrl}
           />
           <button
             className="btn-primary"
-            style={{ background: campaign.primaryColor, width: "100%", maxWidth: 260 }}
+            style={{
+              background: campaign.primaryColor || "#0E7C7B",
+              width: "100%",
+              maxWidth: 280,
+            }}
             onClick={handleSpinClick}
             disabled={isSpinning}
           >
-            {isSpinning ? "Spinning…" : "Spin the wheel"}
+            {isSpinning ? "Spinning…" : "Spin the Wheel!"}
           </button>
         </div>
       )}
 
-      {wonPrize && campaign && (
+      {wonPrize && campaign && participant && (
         <WinnerModal
           prize={wonPrize}
+          participantName={participant.name}
+          voucherCode={voucherCode}
           campaignName={campaign.name}
+          subTitle={campaign.subTitle}
           accentColor={campaign.primaryColor}
-          onClose={() => setWonPrize(null)}
+          onClose={handleReset}
         />
       )}
     </div>
