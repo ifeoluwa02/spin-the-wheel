@@ -11,19 +11,18 @@ export default function TvDisplayMode() {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [qrUrl, setQrUrl] = useState("");
 
-  const campaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setQrUrl(window.location.origin);
-    }
-  }, []);
-
   useEffect(() => {
     async function loadData() {
-      const c = await getCampaign(campaignId);
+      let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const queryId = params.get("c");
+        if (queryId) targetCampaignId = queryId;
+      }
+
+      const c = await getCampaign(targetCampaignId);
       setCampaign(c);
-      const p = await getParticipants(campaignId);
+      const p = await getParticipants(targetCampaignId);
       setParticipants(p);
     }
     loadData();
@@ -31,7 +30,7 @@ export default function TvDisplayMode() {
     // Auto-refresh every 5 seconds for live activation feeds
     const interval = setInterval(loadData, 5000);
     return () => clearInterval(interval);
-  }, [campaignId]);
+  }, []);
 
   const recentWinners = participants.filter((p) => p.won).slice(0, 8);
   const totalSpins = participants.length;

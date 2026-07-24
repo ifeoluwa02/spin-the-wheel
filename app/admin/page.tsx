@@ -53,8 +53,6 @@ export default function AdminDashboard() {
   // Participant search filter
   const [searchQuery, setSearchQuery] = useState("");
 
-  const campaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
-
   useEffect(() => {
     if (typeof window !== "undefined") {
       setQrUrl(window.location.origin);
@@ -67,14 +65,21 @@ export default function AdminDashboard() {
     if (!authenticated) return;
     async function loadData() {
       setLoading(true);
-      const c = await getCampaign(campaignId);
+      let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const queryId = params.get("c");
+        if (queryId) targetCampaignId = queryId;
+      }
+
+      const c = await getCampaign(targetCampaignId);
       setCampaign(c);
-      const p = await getParticipants(campaignId);
+      const p = await getParticipants(targetCampaignId);
       setParticipants(p);
       setLoading(false);
     }
     loadData();
-  }, [authenticated, campaignId]);
+  }, [authenticated]);
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -344,6 +349,14 @@ export default function AdminDashboard() {
           </div>
 
           <div className="flex items-center gap-3">
+            <Link
+              href="/create-campaign"
+              className="flex items-center gap-2 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold text-sm px-4 py-2 rounded-xl transition-all shadow-md shadow-teal-500/20"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Host New Campaign</span>
+            </Link>
+
             <button
               onClick={() => setShowQrModal(true)}
               className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm px-3.5 py-2 rounded-xl border border-slate-700 transition-all"

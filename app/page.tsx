@@ -30,11 +30,17 @@ export default function Home() {
   const [wonPrize, setWonPrize] = useState<Prize | null>(null);
   const [voucherCode, setVoucherCode] = useState<string>("");
 
-  const campaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
-
   useEffect(() => {
     let cancelled = false;
-    getCampaign(campaignId).then((c) => {
+    let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryId = params.get("c");
+      if (queryId) targetCampaignId = queryId;
+    }
+
+    getCampaign(targetCampaignId).then((c) => {
       if (cancelled) return;
       if (!c || !c.active || !c.prizes?.length) {
         setStep("not-found");
@@ -46,7 +52,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [campaignId]);
+  }, []);
 
   async function handleRegister(values: RegistrationValues) {
     if (!campaign) return;
