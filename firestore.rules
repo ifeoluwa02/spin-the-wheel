@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Campaign config is public read-only from the client.
+    // Only edit it yourself via the Firebase console or a future admin panel
+    // using an authenticated/admin SDK, never from this public app.
+    match /campaigns/{campaignId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Participants can be created by anyone playing the wheel, but never
+    // read back, updated, or deleted from the client — that keeps other
+    // players' phone numbers and prize results private and prevents
+    // tampering with past results.
+    match /participants/{participantId} {
+      allow create: if request.resource.data.keys().hasAll(
+                        ['name', 'phone', 'campaignId', 'prizeId', 'prizeLabel', 'won', 'createdAt']
+                      )
+                      && request.resource.data.name is string
+                      && request.resource.data.phone is string
+                      && request.resource.data.campaignId is string;
+      allow read, update, delete: if false;
+    }
+  }
+}
