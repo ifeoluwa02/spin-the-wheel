@@ -235,3 +235,72 @@ export async function getParticipants(campaignId = "demo-campaign"): Promise<Par
   return SAMPLE_PARTICIPANTS;
 }
 
+/** Fetches all active & past campaigns for Super Admin Master Portal */
+export async function getAllCampaigns(): Promise<Campaign[]> {
+  let campaigns: Campaign[] = [];
+
+  try {
+    const snap = await getDocs(collection(db, "campaigns"));
+    snap.forEach((docSnap) => {
+      campaigns.push({ ...DEFAULT_CAMPAIGN, ...(docSnap.data() as Partial<Campaign>), id: docSnap.id });
+    });
+  } catch (err) {
+    console.warn("Firestore getAllCampaigns failed, scanning local storage:", err);
+  }
+
+  // Scan local storage for saved campaigns
+  if (typeof window !== "undefined") {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LOCAL_STORAGE_KEY_CAMPAIGN)) {
+        try {
+          const item: Campaign = JSON.parse(localStorage.getItem(key) || "");
+          if (item && item.id && !campaigns.some((c) => c.id === item.id)) {
+            campaigns.push(item);
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (!campaigns.some((c) => c.id === DEFAULT_CAMPAIGN.id)) {
+    campaigns.unshift(DEFAULT_CAMPAIGN);
+  }
+
+  return campaigns;
+}
+
+/** Fetches all participant spin records across all campaigns for Super Admin global export */
+export async function getAllGlobalParticipants(): Promise<Participant[]> {
+  let allParticipants: Participant[] = [];
+
+  try {
+    const snap = await getDocs(collection(db, "participants"));
+    snap.forEach((docSnap) => {
+      allParticipants.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+    });
+  } catch (err) {
+    console.warn("Firestore getAllGlobalParticipants failed, scanning local storage:", err);
+  }
+
+  if (typeof window !== "undefined") {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LOCAL_STORAGE_KEY_PARTICIPANTS)) {
+        try {
+          const items: Participant[] = JSON.parse(localStorage.getItem(key) || "[]");
+          items.forEach((item) => {
+            if (!allParticipants.some((p) => p.phone === item.phone && p.createdAt === item.createdAt)) {
+              allParticipants.push(item);
+            }
+          });
+        } catch (e) {}
+      }
+    }
+  }
+
+  if (allParticipants.length === 0) return SAMPLE_PARTICIPANTS;
+  return allParticipants;
+}
+
+
