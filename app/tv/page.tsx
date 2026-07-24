@@ -39,10 +39,10 @@ export default function TvDisplayMode() {
 
   const bgStyle = {
     background: `radial-gradient(circle at 20% 20%, ${
-      campaign.gradientStart || "#ea580c"
+      campaign.gradientStart || "#FF6B35"
     } 0%, transparent 50%), radial-gradient(circle at 80% 80%, ${
-      campaign.gradientEnd || "#1e40af"
-    } 0%, transparent 50%), #0f172a`,
+      campaign.gradientEnd || "#00BFA6"
+    } 0%, transparent 50%), #0D1B2A`,
   };
 
   return (

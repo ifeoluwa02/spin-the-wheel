@@ -139,35 +139,35 @@ export default function AdminDashboard() {
   // Preset segments
   function handleApplyPreset(count: 6 | 8 | 10 | 12) {
     const defaultColors = [
-      "#0E7C7B",
-      "#F2A93B",
-      "#2563eb",
-      "#ea580c",
-      "#10b981",
-      "#8b5cf6",
-      "#ec4899",
-      "#06b6d4",
-      "#f59e0b",
-      "#3b82f6",
-      "#10b981",
-      "#6366f1",
+      "#00BFA6", // Digital Turquoise
+      "#FF6B35", // Vibrant Orange
+      "#0D1B2A", // Midnight Blue
+      "#00BFA6",
+      "#FF6B35",
+      "#0D1B2A",
+      "#00BFA6",
+      "#FF6B35",
+      "#0D1B2A",
+      "#00BFA6",
+      "#FF6B35",
+      "#0D1B2A",
     ];
 
     const presets: Record<number, Prize[]> = {
       6: [
-        { id: "1", label: "Umbrella", color: "#0E7C7B", weight: 2 },
-        { id: "2", label: "T-shirt", color: "#F2A93B", weight: 5 },
-        { id: "3", label: "Hand Sanitizer", color: "#0E7C7B", weight: 20 },
-        { id: "4", label: "Face Cap", color: "#F2A93B", weight: 10 },
-        { id: "5", label: "Try Again", color: "#374151", weight: 60, isLosing: true },
-        { id: "6", label: "Water Bottle", color: "#F2A93B", weight: 3 },
+        { id: "1", label: "Umbrella", color: "#00BFA6", weight: 2 },
+        { id: "2", label: "T-shirt", color: "#FF6B35", weight: 5 },
+        { id: "3", label: "Hand Sanitizer", color: "#00BFA6", weight: 20 },
+        { id: "4", label: "Face Cap", color: "#FF6B35", weight: 10 },
+        { id: "5", label: "Try Again", color: "#0D1B2A", weight: 60, isLosing: true },
+        { id: "6", label: "Water Bottle", color: "#00BFA6", weight: 3 },
       ],
       8: [
         { id: "1", label: "Umbrella", color: defaultColors[0], weight: 5 },
         { id: "2", label: "T-shirt", color: defaultColors[1], weight: 10 },
         { id: "3", label: "Hand Sanitizer", color: defaultColors[2], weight: 20 },
         { id: "4", label: "Face Cap", color: defaultColors[3], weight: 10 },
-        { id: "5", label: "Try Again", color: "#374151", weight: 40, isLosing: true },
+        { id: "5", label: "Try Again", color: "#0D1B2A", weight: 40, isLosing: true },
         { id: "6", label: "Water Bottle", color: defaultColors[5], weight: 5 },
         { id: "7", label: "Keyring", color: defaultColors[6], weight: 8 },
         { id: "8", label: "Pen", color: defaultColors[7], weight: 2 },
@@ -177,7 +177,7 @@ export default function AdminDashboard() {
         { id: "2", label: "T-shirt", color: defaultColors[1], weight: 5 },
         { id: "3", label: "Hand Sanitizer", color: defaultColors[2], weight: 15 },
         { id: "4", label: "Face Cap", color: defaultColors[3], weight: 10 },
-        { id: "5", label: "Try Again", color: "#374151", weight: 45, isLosing: true },
+        { id: "5", label: "Try Again", color: "#0D1B2A", weight: 45, isLosing: true },
         { id: "6", label: "Water Bottle", color: defaultColors[5], weight: 5 },
         { id: "7", label: "Backpack", color: defaultColors[6], weight: 2 },
         { id: "8", label: "Powerbank", color: defaultColors[7], weight: 3 },
@@ -189,7 +189,7 @@ export default function AdminDashboard() {
         { id: "2", label: "T-shirt", color: defaultColors[1], weight: 5 },
         { id: "3", label: "Hand Sanitizer", color: defaultColors[2], weight: 15 },
         { id: "4", label: "Face Cap", color: defaultColors[3], weight: 10 },
-        { id: "5", label: "Try Again", color: "#374151", weight: 40, isLosing: true },
+        { id: "5", label: "Try Again", color: "#0D1B2A", weight: 40, isLosing: true },
         { id: "6", label: "Water Bottle", color: defaultColors[5], weight: 5 },
         { id: "7", label: "Flash Drive", color: defaultColors[6], weight: 5 },
         { id: "8", label: "Powerbank", color: defaultColors[7], weight: 2 },
@@ -605,10 +605,10 @@ export default function AdminDashboard() {
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { name: "Sunset Orange to Blue", start: "#f97316", end: "#2563eb" },
-                    { name: "Deep Teal & Gold", start: "#0E7C7B", end: "#F2A93B" },
-                    { name: "Neon Violet & Pink", start: "#8b5cf6", end: "#ec4899" },
-                    { name: "Emerald & Cyan", start: "#10b981", end: "#06b6d4" },
+                    { name: "Vibrant Orange & Turquoise", start: "#FF6B35", end: "#00BFA6" },
+                    { name: "Midnight Blue & Turquoise", start: "#0D1B2A", end: "#00BFA6" },
+                    { name: "Vibrant Orange & Midnight", start: "#FF6B35", end: "#0D1B2A" },
+                    { name: "Digital Turquoise & Gray", start: "#00BFA6", end: "#F3F4F6" },
                   ].map((preset) => (
                     <button
                       key={preset.name}
