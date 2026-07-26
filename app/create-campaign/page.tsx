@@ -6,43 +6,45 @@ import { updateCampaign } from "@/lib/campaign";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  Sparkles,
+  ArrowRight,
+  ArrowLeft,
   Rocket,
   CheckCircle2,
   Copy,
   ExternalLink,
-  ArrowRight,
-  ArrowLeft,
-  Trophy,
-  Palette,
-  Briefcase,
-  Sliders,
   Plus,
   Trash2,
+  Building2,
+  Palette,
+  Trophy,
+  Zap,
+  Check,
 } from "lucide-react";
+
+const STEPS = [
+  { id: 1, label: "Brand Info", icon: Building2, desc: "Campaign identity" },
+  { id: 2, label: "Visual Style", icon: Palette, desc: "Colors & gradients" },
+  { id: 3, label: "Prizes", icon: Trophy, desc: "Wheel segments" },
+  { id: 4, label: "Launch", icon: Zap, desc: "Copy your links" },
+];
 
 export default function CreateCampaignWizard() {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
-  // Form State
   const [brandName, setBrandName] = useState("");
   const [campaignTitle, setCampaignTitle] = useState("");
   const [subTitle, setSubTitle] = useState("");
   const [logoUrl, setLogoUrl] = useState("");
   const [campaignSlug, setCampaignSlug] = useState("");
-  const [welcomeMessage, setWelcomeMessage] = useState(
-    "Spin the wheel for a chance to win instant rewards!"
-  );
+  const [welcomeMessage, setWelcomeMessage] = useState("Spin the wheel for a chance to win instant rewards!");
   const [adminPin, setAdminPin] = useState("1234");
   const [oneSpinPerPhone, setOneSpinPerPhone] = useState(true);
 
-  // Theme State
   const [primaryColor, setPrimaryColor] = useState("#00BFA6");
   const [secondaryColor, setSecondaryColor] = useState("#FF6B35");
   const [gradientStart, setGradientStart] = useState("#FF6B35");
   const [gradientEnd, setGradientEnd] = useState("#00BFA6");
 
-  // Prizes State
   const [prizes, setPrizes] = useState<Prize[]>([
     { id: "1", label: "Umbrella", color: "#00BFA6", weight: 2 },
     { id: "2", label: "T-shirt", color: "#FF6B35", weight: 5 },
@@ -55,23 +57,18 @@ export default function CreateCampaignWizard() {
   const [saving, setSaving] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
+  const [slugEdited, setSlugEdited] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setBaseUrl(window.location.origin);
-    }
+    if (typeof window !== "undefined") setBaseUrl(window.location.origin);
   }, []);
 
-  // Auto-generate slug from campaign title
   useEffect(() => {
-    if (campaignTitle && !campaignSlug) {
-      const generated = campaignTitle
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)+/g, "");
+    if (campaignTitle && !slugEdited) {
+      const generated = campaignTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "");
       setCampaignSlug(generated);
     }
-  }, [campaignTitle, campaignSlug]);
+  }, [campaignTitle, slugEdited]);
 
   function handleUpdatePrize(index: number, field: keyof Prize, value: any) {
     const updated = [...prizes];
@@ -80,14 +77,7 @@ export default function CreateCampaignWizard() {
   }
 
   function handleAddPrize() {
-    const newPrize: Prize = {
-      id: `prize-${Date.now()}`,
-      label: "New Reward",
-      color: "#00BFA6",
-      weight: 10,
-      isLosing: false,
-    };
-    setPrizes([...prizes, newPrize]);
+    setPrizes([...prizes, { id: `prize-${Date.now()}`, label: "New Reward", color: "#00BFA6", weight: 10, isLosing: false }]);
   }
 
   function handleDeletePrize(index: number) {
@@ -96,10 +86,7 @@ export default function CreateCampaignWizard() {
 
   async function handleLaunchCampaign() {
     setSaving(true);
-    const finalSlug =
-      campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") ||
-      `campaign-${Date.now()}`;
-
+    const finalSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `campaign-${Date.now()}`;
     const newCampaign: Campaign = {
       id: finalSlug,
       name: campaignTitle || "Brand Experiential Activation",
@@ -116,7 +103,6 @@ export default function CreateCampaignWizard() {
       adminPin: adminPin || "1234",
       prizes,
     };
-
     await updateCampaign(newCampaign);
     setSaving(false);
     setStep(4);
@@ -128,404 +114,443 @@ export default function CreateCampaignWizard() {
     setTimeout(() => setCopiedLink(null), 2000);
   }
 
-  const activeSlug =
-    campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") ||
-    "demo-campaign";
-
+  const activeSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "demo-campaign";
   const wheelUrl = `${baseUrl}/?c=${activeSlug}`;
   const adminUrl = `${baseUrl}/admin?c=${activeSlug}`;
   const tvUrl = `${baseUrl}/tv?c=${activeSlug}`;
+  const totalWeight = prizes.reduce((sum, p) => sum + Math.max(p.weight, 0), 0);
 
-  const totalWeight = prizes.reduce(
-    (sum, p) => sum + Math.max(p.weight, 0),
-    0
-  );
+  const inputStyle = {
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    color: "white",
+    outline: "none",
+    transition: "border-color 0.2s",
+  };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
+    <div
+      className="min-h-screen font-sans pb-20 relative overflow-hidden"
+      style={{ background: "#070d14", fontFamily: "Nunito, sans-serif" }}
+    >
+      {/* Background ambient glow */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-0 right-0 w-[500px] h-[500px] rounded-full blur-3xl opacity-10" style={{ background: "radial-gradient(circle, #00BFA6, transparent)" }} />
+        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] rounded-full blur-3xl opacity-10" style={{ background: "radial-gradient(circle, #FF6B35, transparent)" }} />
+      </div>
+
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+      <header
+        className="relative z-10 px-4 py-3.5"
+        style={{
+          background: "rgba(7,13,20,0.85)",
+          backdropFilter: "blur(24px)",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+        }}
+      >
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-teal-500 to-orange-500 rounded-xl flex items-center justify-center font-bold text-white shadow-md">
+            <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm" style={{ background: "linear-gradient(135deg, #FF6B35, #00BFA6)" }}>
               🚀
             </div>
             <div>
-              <h1 className="font-bold text-lg text-white leading-tight">
-                Brand Campaign Builder
-              </h1>
-              <p className="text-xs text-slate-400">
-                Host experiential marketing spin-the-wheel promotions
+              <p className="font-black text-white text-sm leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
+                Campaign Builder
               </p>
+              <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>Create a hosted spin-the-wheel activation</p>
             </div>
           </div>
-
-          <Link
-            href="/admin"
-            className="text-xs text-slate-400 hover:text-white transition-colors"
-          >
-            ← Back to Admin
+          <Link href="/admin" className="text-xs font-bold transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)" }}>
+            ← Admin Portal
           </Link>
         </div>
       </header>
 
-      {/* Main Wizard Container */}
-      <main className="max-w-4xl mx-auto px-4 pt-10">
-        {/* Progress Bar */}
-        <div className="mb-10">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-400 mb-3">
-            <span className={step >= 1 ? "text-teal-400 font-bold" : ""}>
-              1. Brand Info
-            </span>
-            <span className={step >= 2 ? "text-teal-400 font-bold" : ""}>
-              2. Visual Identity
-            </span>
-            <span className={step >= 3 ? "text-teal-400 font-bold" : ""}>
-              3. Prizes & Odds
-            </span>
-            <span className={step === 4 ? "text-teal-400 font-bold" : ""}>
-              4. Launch & Links
-            </span>
+      <main className="relative z-10 max-w-3xl mx-auto px-4 pt-8">
+        {/* Step indicator */}
+        {step !== 4 && (
+          <div className="mb-8">
+            <div className="flex items-center justify-between mb-4">
+              {STEPS.map((s, i) => {
+                const Icon = s.icon;
+                const done = step > s.id;
+                const active = step === s.id;
+                return (
+                  <div key={s.id} className="flex items-center flex-1">
+                    <div className="flex flex-col items-center">
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center transition-all"
+                        style={{
+                          background: done ? "linear-gradient(135deg, #00BFA6, #0D9488)" : active ? "linear-gradient(135deg, rgba(255,107,53,0.3), rgba(0,191,166,0.3))" : "rgba(255,255,255,0.04)",
+                          border: active ? "1px solid rgba(255,255,255,0.15)" : done ? "1px solid rgba(0,191,166,0.4)" : "1px solid rgba(255,255,255,0.06)",
+                          boxShadow: active ? "0 0 20px rgba(0,191,166,0.2)" : "none",
+                        }}
+                      >
+                        {done ? <Check className="w-5 h-5 text-white" /> : <Icon className="w-5 h-5" style={{ color: active ? "#ffffff" : "rgba(255,255,255,0.25)" }} />}
+                      </div>
+                      <p className="text-[10px] mt-1.5 font-bold hidden sm:block" style={{ color: active ? "white" : done ? "#00BFA6" : "rgba(255,255,255,0.25)", fontFamily: "Rubik, sans-serif" }}>
+                        {s.label}
+                      </p>
+                    </div>
+                    {i < STEPS.length - 1 && (
+                      <div className="flex-1 h-px mx-3 mt-[-18px] sm:mt-[-8px]" style={{ background: step > s.id ? "rgba(0,191,166,0.4)" : "rgba(255,255,255,0.06)" }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {/* Progress bar */}
+            <div className="w-full h-1 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${((step - 1) / 3) * 100}%`, background: "linear-gradient(90deg, #FF6B35, #00BFA6)" }}
+              />
+            </div>
           </div>
-          <div className="w-full bg-slate-900 h-2.5 rounded-full overflow-hidden border border-slate-800">
-            <div
-              className="h-full bg-gradient-to-r from-orange-500 to-teal-400 transition-all duration-300"
-              style={{ width: `${(step / 4) * 100}%` }}
-            />
-          </div>
-        </div>
+        )}
 
-        {/* STEP 1: BRAND INFO */}
+        {/* ─── STEP 1: BRAND INFO ─── */}
         {step === 1 && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6 shadow-xl">
-            <div className="border-b border-slate-800 pb-4">
-              <h2 className="text-2xl font-bold text-white">Brand & Campaign Identity</h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Enter details for your client or promotional campaign.
+          <div
+            className="rounded-3xl p-7 space-y-6"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 24px 48px rgba(0,0,0,0.3)" }}
+          >
+            <div style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "1.25rem" }}>
+              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>
+                Brand & Campaign Identity
+              </h2>
+              <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>
+                Enter your client brand details and campaign information.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Brand / Agency Name *
-                </label>
-                <input
-                  type="text"
-                  value={brandName}
-                  onChange={(e) => setBrandName(e.target.value)}
-                  placeholder="e.g. Nestlé or EXP Marketing"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none"
-                  required
-                />
-              </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {[
+                { label: "Brand / Agency Name *", value: brandName, set: setBrandName, placeholder: "e.g. Nestlé or EXP Marketing", type: "text" },
+                { label: "Campaign Title *", value: campaignTitle, set: setCampaignTitle, placeholder: "e.g. Dettol Hygiene Challenge", type: "text" },
+                { label: "Sub-Brand / Tagline", value: subTitle, set: setSubTitle, placeholder: "e.g. GOLDEN MORN", type: "text" },
+                { label: "Brand Logo URL", value: logoUrl, set: setLogoUrl, placeholder: "https://example.com/logo.png", type: "url" },
+              ].map(({ label, value, set, placeholder, type }) => (
+                <div key={label}>
+                  <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {label}
+                  </label>
+                  <input
+                    type={type}
+                    value={value}
+                    onChange={(e) => set(e.target.value)}
+                    placeholder={placeholder}
+                    className="w-full rounded-xl px-4 py-3 text-sm"
+                    style={inputStyle}
+                    onFocus={(e) => (e.target.style.borderColor = "rgba(0,191,166,0.5)")}
+                    onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
+                  />
+                </div>
+              ))}
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Campaign Title *
+                <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  URL Slug
                 </label>
-                <input
-                  type="text"
-                  value={campaignTitle}
-                  onChange={(e) => setCampaignTitle(e.target.value)}
-                  placeholder="e.g. Dettol Hygiene Challenge"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Sub-Brand / Product Tagline (Winner Screen Subtext)
-                </label>
-                <input
-                  type="text"
-                  value={subTitle}
-                  onChange={(e) => setSubTitle(e.target.value)}
-                  placeholder="e.g. GOLDEN MORN or Instant Rewards"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Brand Logo Image URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  value={logoUrl}
-                  onChange={(e) => setLogoUrl(e.target.value)}
-                  placeholder="https://example.com/logo.png"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Campaign URL Slug (Unique Identifier)
-                </label>
-                <input
-                  type="text"
-                  value={campaignSlug}
-                  onChange={(e) => setCampaignSlug(e.target.value)}
-                  placeholder="e.g. dettol-hygiene-2026"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-teal-400 font-mono text-sm outline-none"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  URL: {baseUrl}/?c={activeSlug}
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={campaignSlug}
+                    onChange={(e) => { setSlugEdited(true); setCampaignSlug(e.target.value); }}
+                    placeholder="e.g. dettol-hygiene-2026"
+                    className="w-full rounded-xl px-4 py-3 text-sm font-mono"
+                    style={{ ...inputStyle, color: "#00BFA6" }}
+                    onFocus={(e) => (e.target.style.borderColor = "rgba(0,191,166,0.5)")}
+                    onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
+                  />
+                </div>
+                <p className="text-[11px] mt-1.5 font-mono truncate" style={{ color: "rgba(255,255,255,0.2)" }}>
+                  {baseUrl}/?c={activeSlug}
                 </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Admin Passcode PIN (Secret Access)
+                <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  Admin PIN
                 </label>
                 <input
                   type="text"
                   value={adminPin}
                   onChange={(e) => setAdminPin(e.target.value)}
                   placeholder="1234"
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none font-mono"
+                  className="w-full rounded-xl px-4 py-3 text-sm font-mono"
+                  style={inputStyle}
+                  onFocus={(e) => (e.target.style.borderColor = "rgba(255,107,53,0.4)")}
+                  onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Welcome Message Copy
+              <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Welcome Message
               </label>
               <textarea
                 rows={2}
                 value={welcomeMessage}
                 onChange={(e) => setWelcomeMessage(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 rounded-xl px-4 py-3 text-white text-sm outline-none resize-none"
+                className="w-full rounded-xl px-4 py-3 text-sm resize-none"
+                style={inputStyle}
+                onFocus={(e) => (e.target.style.borderColor = "rgba(0,191,166,0.5)")}
+                onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
               />
             </div>
 
-            <div className="flex items-center justify-between border-t border-slate-800 pt-6">
-              <label className="flex items-center gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={oneSpinPerPhone}
-                  onChange={(e) => setOneSpinPerPhone(e.target.checked)}
-                  className="w-5 h-5 rounded accent-teal-500 cursor-pointer"
+            {/* Toggle */}
+            <label className="flex items-center justify-between cursor-pointer p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div>
+                <p className="text-sm font-bold text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  1 Spin per Phone Number
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  Prevent duplicate spins per device
+                </p>
+              </div>
+              <div
+                onClick={() => setOneSpinPerPhone(!oneSpinPerPhone)}
+                className="relative w-12 h-6 rounded-full transition-all cursor-pointer flex-shrink-0"
+                style={{
+                  background: oneSpinPerPhone ? "linear-gradient(135deg, #00BFA6, #0D9488)" : "rgba(255,255,255,0.1)",
+                  boxShadow: oneSpinPerPhone ? "0 0 12px rgba(0,191,166,0.4)" : "none",
+                }}
+              >
+                <div
+                  className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-md transition-all"
+                  style={{ left: oneSpinPerPhone ? "calc(100% - 22px)" : "2px" }}
                 />
-                <span className="text-xs text-slate-300 font-semibold">
-                  Enforce 1 spin per phone number
-                </span>
-              </label>
+              </div>
+            </label>
 
+            <div className="flex justify-end pt-2">
               <button
                 onClick={() => setStep(2)}
                 disabled={!campaignTitle}
-                className="flex items-center gap-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold px-6 py-3 rounded-xl transition-all disabled:opacity-50"
+                className="flex items-center gap-2 px-7 py-3.5 rounded-2xl font-black text-white transition-all disabled:opacity-40 group"
+                style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", boxShadow: "0 8px 24px rgba(0,191,166,0.35)", fontFamily: "Rubik, sans-serif" }}
               >
-                <span>Next: Visual Identity</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>Next: Visual Style</span>
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
             </div>
           </div>
         )}
 
-        {/* STEP 2: VISUAL IDENTITY */}
+        {/* ─── STEP 2: VISUAL STYLE ─── */}
         {step === 2 && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6 shadow-xl">
-            <div className="border-b border-slate-800 pb-4">
-              <h2 className="text-2xl font-bold text-white">Visual Identity & Colors</h2>
-              <p className="text-slate-400 text-xs mt-1">
-                Customize brand colors and gradient themes to match client guidelines.
+          <div
+            className="rounded-3xl p-7 space-y-6"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 24px 48px rgba(0,0,0,0.3)" }}
+          >
+            <div style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "1.25rem" }}>
+              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>
+                Visual Identity
+              </h2>
+              <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>
+                Customize brand colors and gradient themes.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Primary Accent Color
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="color"
-                    value={primaryColor}
-                    onChange={(e) => setPrimaryColor(e.target.value)}
-                    className="w-12 h-12 rounded-xl border-0 bg-transparent cursor-pointer"
-                  />
-                  <input
-                    type="text"
-                    value={primaryColor}
-                    onChange={(e) => setPrimaryColor(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white font-mono"
-                  />
+            <div className="grid grid-cols-2 gap-5">
+              {[
+                { label: "Primary Color", value: primaryColor, set: setPrimaryColor },
+                { label: "Secondary Color", value: secondaryColor, set: setSecondaryColor },
+              ].map(({ label, value, set }) => (
+                <div key={label}>
+                  <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {label}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-shrink-0">
+                      <input
+                        type="color"
+                        value={value}
+                        onChange={(e) => set(e.target.value)}
+                        className="w-12 h-12 rounded-xl cursor-pointer border-0 p-1"
+                        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={(e) => set(e.target.value)}
+                      className="w-full rounded-xl px-3 py-3 text-sm font-mono"
+                      style={inputStyle}
+                    />
+                  </div>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Secondary Color
-                </label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="color"
-                    value={secondaryColor}
-                    onChange={(e) => setSecondaryColor(e.target.value)}
-                    className="w-12 h-12 rounded-xl border-0 bg-transparent cursor-pointer"
-                  />
-                  <input
-                    type="text"
-                    value={secondaryColor}
-                    onChange={(e) => setSecondaryColor(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white font-mono"
-                  />
-                </div>
-              </div>
+              ))}
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Preset Brand Gradient Themes
+              <label className="block text-xs font-bold mb-3 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Background Gradient Presets
               </label>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 {[
-                  { name: "Vibrant Orange & Turquoise", start: "#FF6B35", end: "#00BFA6" },
-                  { name: "Midnight Blue & Turquoise", start: "#0D1B2A", end: "#00BFA6" },
-                  { name: "Vibrant Orange & Midnight", start: "#FF6B35", end: "#0D1B2A" },
-                  { name: "Digital Turquoise & Gray", start: "#00BFA6", end: "#F3F4F6" },
-                ].map((preset) => (
-                  <button
-                    key={preset.name}
-                    onClick={() => {
-                      setGradientStart(preset.start);
-                      setGradientEnd(preset.end);
-                    }}
-                    className="p-4 rounded-xl border border-slate-800 flex items-center gap-3 hover:border-teal-500 transition-all text-left bg-slate-950"
-                  >
-                    <div
-                      className="w-10 h-10 rounded-lg shadow-inner flex-shrink-0"
+                  { name: "Brand Default", desc: "Orange → Turquoise", start: "#FF6B35", end: "#00BFA6" },
+                  { name: "Deep Ocean", desc: "Midnight → Turquoise", start: "#0D1B2A", end: "#00BFA6" },
+                  { name: "Sunset Blaze", desc: "Orange → Midnight", start: "#FF6B35", end: "#0D1B2A" },
+                  { name: "Arctic Glow", desc: "Turquoise → Light", start: "#00BFA6", end: "#F3F4F6" },
+                ].map((preset) => {
+                  const active = gradientStart === preset.start && gradientEnd === preset.end;
+                  return (
+                    <button
+                      key={preset.name}
+                      onClick={() => { setGradientStart(preset.start); setGradientEnd(preset.end); }}
+                      className="p-4 rounded-2xl flex items-center gap-3 text-left transition-all hover:scale-[1.02]"
                       style={{
-                        background: `linear-gradient(135deg, ${preset.start}, ${preset.end})`,
+                        background: active ? "rgba(0,191,166,0.1)" : "rgba(255,255,255,0.03)",
+                        border: active ? "1px solid rgba(0,191,166,0.35)" : "1px solid rgba(255,255,255,0.06)",
+                        boxShadow: active ? "0 0 16px rgba(0,191,166,0.15)" : "none",
                       }}
-                    />
-                    <span className="text-xs font-semibold text-slate-200">
-                      {preset.name}
-                    </span>
-                  </button>
-                ))}
+                    >
+                      <div
+                        className="w-10 h-10 rounded-xl flex-shrink-0 shadow-lg"
+                        style={{ background: `linear-gradient(135deg, ${preset.start}, ${preset.end})` }}
+                      />
+                      <div>
+                        <p className="text-sm font-bold text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{preset.name}</p>
+                        <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.35)" }}>{preset.desc}</p>
+                      </div>
+                      {active && <Check className="w-4 h-4 ml-auto flex-shrink-0" style={{ color: "#00BFA6" }} />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="flex items-center justify-between border-t border-slate-800 pt-6">
+            {/* Live preview */}
+            <div>
+              <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Live Preview
+              </label>
+              <div
+                className="w-full h-32 rounded-2xl flex flex-col items-center justify-center text-white shadow-inner overflow-hidden relative"
+                style={{
+                  background: `radial-gradient(circle at 25% 25%, ${gradientStart}, transparent 60%), radial-gradient(circle at 75% 75%, ${gradientEnd}, transparent 60%), #0D1B2A`,
+                }}
+              >
+                <p className="font-black text-lg" style={{ fontFamily: "Rubik, sans-serif" }}>{campaignTitle || "Your Campaign"}</p>
+                {subTitle && <p className="text-xs mt-1 font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.7)" }}>{subTitle}</p>}
+              </div>
+            </div>
+
+            <div className="flex justify-between pt-2">
               <button
                 onClick={() => setStep(1)}
-                className="flex items-center gap-2 text-slate-400 hover:text-white font-semibold text-sm"
+                className="flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-sm transition-all"
+                style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}
               >
                 <ArrowLeft className="w-4 h-4" /> Back
               </button>
-
               <button
                 onClick={() => setStep(3)}
-                className="flex items-center gap-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold px-6 py-3 rounded-xl transition-all"
+                className="flex items-center gap-2 px-7 py-3.5 rounded-2xl font-black text-white transition-all group"
+                style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", boxShadow: "0 8px 24px rgba(0,191,166,0.35)", fontFamily: "Rubik, sans-serif" }}
               >
                 <span>Next: Prize Setup</span>
-                <ArrowRight className="w-4 h-4" />
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
             </div>
           </div>
         )}
 
-        {/* STEP 3: PRIZES SETUP */}
+        {/* ─── STEP 3: PRIZES ─── */}
         {step === 3 && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6 shadow-xl">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+          <div
+            className="rounded-3xl p-7 space-y-5"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", boxShadow: "0 24px 48px rgba(0,0,0,0.3)" }}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", paddingBottom: "1.25rem" }}>
               <div>
-                <h2 className="text-2xl font-bold text-white">Wheel Prizes & Probabilities</h2>
-                <p className="text-slate-400 text-xs mt-1">
-                  Configure segment labels, colors, and relative winning weights.
+                <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>
+                  Prize Segments
+                </h2>
+                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  Configure wheel segments, colors, and win probabilities.
                 </p>
               </div>
-
               <button
                 onClick={handleAddPrize}
-                className="flex items-center gap-1.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition-all"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm text-white flex-shrink-0"
+                style={{ background: "linear-gradient(135deg, #FF6B35, #e0531f)", boxShadow: "0 4px 12px rgba(255,107,53,0.3)", fontFamily: "Rubik, sans-serif" }}
               >
                 <Plus className="w-4 h-4" /> Add Segment
               </button>
             </div>
 
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+            <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
               {prizes.map((prize, idx) => {
-                const pct =
-                  totalWeight > 0
-                    ? Math.round((Math.max(prize.weight, 0) / totalWeight) * 100)
-                    : 0;
-
+                const pct = totalWeight > 0 ? Math.round((Math.max(prize.weight, 0) / totalWeight) * 100) : 0;
                 return (
                   <div
                     key={prize.id || idx}
-                    className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+                    className="rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
                   >
                     <div className="flex items-center gap-3 w-full md:w-auto">
-                      <span className="text-xs font-mono font-bold text-slate-500 w-6">
-                        #{idx + 1}
-                      </span>
+                      <span className="text-xs font-mono font-bold w-5 text-center flex-shrink-0" style={{ color: "rgba(255,255,255,0.2)" }}>{idx + 1}</span>
                       <input
                         type="color"
                         value={prize.color}
-                        onChange={(e) =>
-                          handleUpdatePrize(idx, "color", e.target.value)
-                        }
-                        className="w-9 h-9 rounded-lg border-0 bg-transparent cursor-pointer"
+                        onChange={(e) => handleUpdatePrize(idx, "color", e.target.value)}
+                        className="w-9 h-9 rounded-xl cursor-pointer border-0 flex-shrink-0"
+                        style={{ background: "transparent", padding: "2px" }}
                       />
                       <input
                         type="text"
                         value={prize.label}
-                        onChange={(e) =>
-                          handleUpdatePrize(idx, "label", e.target.value)
-                        }
+                        onChange={(e) => handleUpdatePrize(idx, "label", e.target.value)}
                         placeholder="Prize name"
-                        className="flex-1 md:w-48 bg-slate-900 border border-slate-800 focus:border-teal-500 rounded-lg px-3 py-2 text-sm text-white outline-none font-semibold"
+                        className="flex-1 md:w-44 rounded-xl px-3 py-2 text-sm font-bold outline-none"
+                        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)", color: "white" }}
+                        onFocus={(e) => (e.target.style.borderColor = "rgba(0,191,166,0.4)")}
+                        onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.06)")}
                       />
                     </div>
 
-                    <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                    <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
                       <div className="flex items-center gap-2">
-                        <label className="text-xs text-slate-400 font-semibold">
-                          Weight:
-                        </label>
+                        <span className="text-xs font-bold" style={{ color: "rgba(255,255,255,0.3)" }}>Wt.</span>
                         <input
                           type="number"
                           min="0"
                           value={prize.weight}
-                          onChange={(e) =>
-                            handleUpdatePrize(
-                              idx,
-                              "weight",
-                              Math.max(0, parseInt(e.target.value) || 0)
-                            )
-                          }
-                          className="w-20 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white outline-none text-center font-mono"
+                          onChange={(e) => handleUpdatePrize(idx, "weight", Math.max(0, parseInt(e.target.value) || 0))}
+                          className="w-16 rounded-xl px-2 py-2 text-sm text-center font-mono outline-none"
+                          style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)", color: "white" }}
                         />
-                        <span className="text-xs font-bold text-teal-400 w-12 text-right">
+                        <div
+                          className="w-12 text-center rounded-lg py-1.5 text-xs font-black font-mono"
+                          style={{ background: `${prize.color}20`, color: prize.color, border: `1px solid ${prize.color}30` }}
+                        >
                           {pct}%
-                        </span>
+                        </div>
                       </div>
 
-                      <label className="flex items-center gap-2 cursor-pointer bg-slate-900 border border-slate-800 px-3 py-2 rounded-lg">
+                      <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-2 rounded-xl" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
                         <input
                           type="checkbox"
                           checked={!!prize.isLosing}
-                          onChange={(e) =>
-                            handleUpdatePrize(idx, "isLosing", e.target.checked)
-                          }
-                          className="w-4 h-4 rounded accent-red-500 cursor-pointer"
+                          onChange={(e) => handleUpdatePrize(idx, "isLosing", e.target.checked)}
+                          className="w-3.5 h-3.5 accent-red-500 cursor-pointer"
                         />
-                        <span className="text-xs text-slate-300 font-medium">
-                          Try Again
-                        </span>
+                        <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.4)" }}>Loss</span>
                       </label>
 
                       <button
                         onClick={() => handleDeletePrize(idx)}
-                        className="p-2 text-slate-500 hover:text-red-400 transition-colors"
-                        title="Delete prize"
+                        className="p-2 rounded-xl transition-colors"
+                        style={{ color: "rgba(255,255,255,0.2)" }}
+                        onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "#f87171")}
+                        onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.2)")}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -535,10 +560,11 @@ export default function CreateCampaignWizard() {
               })}
             </div>
 
-            <div className="flex items-center justify-between border-t border-slate-800 pt-6">
+            <div className="flex justify-between pt-2">
               <button
                 onClick={() => setStep(2)}
-                className="flex items-center gap-2 text-slate-400 hover:text-white font-semibold text-sm"
+                className="flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-sm transition-all"
+                style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}
               >
                 <ArrowLeft className="w-4 h-4" /> Back
               </button>
@@ -546,139 +572,165 @@ export default function CreateCampaignWizard() {
               <button
                 onClick={handleLaunchCampaign}
                 disabled={saving || !prizes.length}
-                className="flex items-center gap-2 bg-gradient-to-r from-teal-400 to-emerald-500 text-slate-950 font-extrabold px-8 py-3.5 rounded-xl shadow-lg shadow-teal-500/25 transition-all text-base disabled:opacity-50"
+                className="flex items-center gap-2.5 px-8 py-3.5 rounded-2xl font-black text-white transition-all disabled:opacity-40 group"
+                style={{
+                  background: "linear-gradient(135deg, #FF6B35, #00BFA6)",
+                  boxShadow: "0 8px 24px rgba(255,107,53,0.4)",
+                  fontFamily: "Rubik, sans-serif",
+                  fontSize: "15px",
+                }}
               >
                 <Rocket className="w-5 h-5" />
-                <span>{saving ? "Launching Campaign..." : "Launch Campaign Live!"}</span>
+                {saving ? "Launching…" : "Launch Campaign!"}
               </button>
             </div>
           </div>
         )}
 
-        {/* STEP 4: LAUNCH & LINKS */}
+        {/* ─── STEP 4: LAUNCH & LINKS ─── */}
         {step === 4 && (
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center space-y-8 shadow-2xl">
-            <div className="w-20 h-20 bg-emerald-500/20 border border-emerald-500/30 rounded-3xl flex items-center justify-center mx-auto text-emerald-400 shadow-lg">
-              <CheckCircle2 className="w-10 h-10" />
-            </div>
-
-            <div className="space-y-2">
-              <h2 className="text-3xl font-extrabold text-white">
-                Campaign Live & Ready!
-              </h2>
-              <p className="text-slate-400 text-sm max-w-lg mx-auto">
-                Your brand campaign <span className="text-teal-400 font-bold">"{campaignTitle}"</span> is live. Share these links with attendees, event managers, and TV displays.
-              </p>
-            </div>
-
-            {/* Generated Links Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
-              {/* Card 1: Attendee Wheel */}
-              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="w-10 h-10 bg-teal-500/20 border border-teal-500/30 rounded-xl flex items-center justify-center text-teal-400">
-                    📱
-                  </div>
-                  <h3 className="font-bold text-white text-base">Attendee Wheel URL</h3>
-                  <p className="text-slate-400 text-xs">
-                    Link for attendees to register and spin on their mobile phones.
-                  </p>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-xs font-mono text-teal-400">
-                  <span className="truncate">{wheelUrl}</span>
-                  <button
-                    onClick={() => handleCopy(wheelUrl, "wheel")}
-                    className="ml-2 text-slate-400 hover:text-white"
-                  >
-                    {copiedLink === "wheel" ? "Copied!" : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <Link
-                  href={`/?c=${activeSlug}`}
-                  target="_blank"
-                  className="w-full bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold py-2.5 rounded-xl transition-all text-xs flex items-center justify-center gap-2"
-                >
-                  <span>Open Wheel</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </Link>
+          <div className="space-y-6">
+            {/* Hero success card */}
+            <div
+              className="rounded-3xl p-8 text-center space-y-4"
+              style={{
+                background: "radial-gradient(circle at 50% 40%, rgba(0,191,166,0.12), transparent 70%), rgba(255,255,255,0.03)",
+                border: "1px solid rgba(0,191,166,0.15)",
+              }}
+            >
+              <div
+                className="w-20 h-20 rounded-3xl flex items-center justify-center mx-auto shadow-2xl"
+                style={{ background: "linear-gradient(135deg, rgba(0,191,166,0.3), rgba(16,185,129,0.3))", border: "1px solid rgba(0,191,166,0.3)" }}
+              >
+                <CheckCircle2 className="w-10 h-10" style={{ color: "#00BFA6" }} />
               </div>
 
-              {/* Card 2: Brand Admin */}
-              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="w-10 h-10 bg-purple-500/20 border border-purple-500/30 rounded-xl flex items-center justify-center text-purple-400">
-                    🔐
-                  </div>
-                  <h3 className="font-bold text-white text-base">Admin Dashboard</h3>
-                  <p className="text-slate-400 text-xs">
-                    View real-time analytics, export attendee CSV data, and edit prizes.
-                  </p>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-xs font-mono text-purple-400">
-                  <span className="truncate">{adminUrl}</span>
-                  <button
-                    onClick={() => handleCopy(adminUrl, "admin")}
-                    className="ml-2 text-slate-400 hover:text-white"
-                  >
-                    {copiedLink === "admin" ? "Copied!" : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <Link
-                  href={`/admin?c=${activeSlug}`}
-                  target="_blank"
-                  className="w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 rounded-xl transition-all text-xs flex items-center justify-center gap-2"
-                >
-                  <span>Open Dashboard</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </Link>
-              </div>
-
-              {/* Card 3: TV Display */}
-              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="w-10 h-10 bg-orange-500/20 border border-orange-500/30 rounded-xl flex items-center justify-center text-orange-400">
-                    📺
-                  </div>
-                  <h3 className="font-bold text-white text-base">TV Stage Display</h3>
-                  <p className="text-slate-400 text-xs">
-                    Fullscreen 4K TV mode with large QR code and live winner feed.
-                  </p>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between text-xs font-mono text-orange-400">
-                  <span className="truncate">{tvUrl}</span>
-                  <button
-                    onClick={() => handleCopy(tvUrl, "tv")}
-                    className="ml-2 text-slate-400 hover:text-white"
-                  >
-                    {copiedLink === "tv" ? "Copied!" : <Copy className="w-4 h-4" />}
-                  </button>
-                </div>
-
-                <Link
-                  href={`/tv?c=${activeSlug}`}
-                  target="_blank"
-                  className="w-full bg-orange-600 hover:bg-orange-500 text-white font-bold py-2.5 rounded-xl transition-all text-xs flex items-center justify-center gap-2"
-                >
-                  <span>Launch TV View</span>
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </Link>
+              <div>
+                <h2 className="text-3xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>
+                  Campaign Live! 🎉
+                </h2>
+                <p className="text-sm mt-2" style={{ color: "rgba(255,255,255,0.5)" }}>
+                  <span style={{ color: "#00BFA6", fontWeight: 700 }}>"{campaignTitle}"</span> is configured and ready for activation.
+                </p>
               </div>
             </div>
 
-            {/* QR Code Container */}
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-6 max-w-sm mx-auto space-y-4">
-              <h4 className="text-sm font-bold text-white">Event Activation QR Code</h4>
-              <div className="bg-white p-4 rounded-xl flex items-center justify-center mx-auto w-fit">
-                <QRCodeSVG value={wheelUrl} size={180} />
+            {/* Three link cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[
+                {
+                  emoji: "📱",
+                  title: "Attendee Wheel",
+                  desc: "Mobile URL for participants to register and spin.",
+                  url: wheelUrl,
+                  type: "wheel",
+                  href: `/?c=${activeSlug}`,
+                  accent: "#00BFA6",
+                  btnLabel: "Open Wheel",
+                },
+                {
+                  emoji: "🔐",
+                  title: "Admin Dashboard",
+                  desc: "Manage prizes, view analytics, export CSV data.",
+                  url: adminUrl,
+                  type: "admin",
+                  href: `/admin?c=${activeSlug}`,
+                  accent: "#a78bfa",
+                  btnLabel: "Open Admin",
+                },
+                {
+                  emoji: "📺",
+                  title: "TV Stage Display",
+                  desc: "Fullscreen mode with QR code and live winner feed.",
+                  url: tvUrl,
+                  type: "tv",
+                  href: `/tv?c=${activeSlug}`,
+                  accent: "#FF6B35",
+                  btnLabel: "Open TV",
+                },
+              ].map(({ emoji, title, desc, url, type, href, accent, btnLabel }) => (
+                <div
+                  key={type}
+                  className="rounded-2xl p-5 flex flex-col justify-between space-y-4"
+                  style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+                >
+                  <div className="space-y-2">
+                    <div
+                      className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+                      style={{ background: `${accent}18`, border: `1px solid ${accent}25` }}
+                    >
+                      {emoji}
+                    </div>
+                    <h3 className="font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{title}</h3>
+                    <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>{desc}</p>
+                  </div>
+
+                  <div
+                    className="rounded-xl p-2.5 flex items-center justify-between"
+                    style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)" }}
+                  >
+                    <span className="text-[11px] font-mono truncate" style={{ color: accent }}>{url}</span>
+                    <button
+                      onClick={() => handleCopy(url, type)}
+                      className="ml-2 p-1 rounded-lg flex-shrink-0 transition-all"
+                      style={{ color: "rgba(255,255,255,0.3)" }}
+                      onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "white")}
+                      onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.3)")}
+                    >
+                      {copiedLink === type ? <Check className="w-3.5 h-3.5" style={{ color: "#10b981" }} /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+
+                  <Link
+                    href={href}
+                    target="_blank"
+                    className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 text-white transition-all"
+                    style={{
+                      background: `${accent}25`,
+                      border: `1px solid ${accent}35`,
+                      color: accent,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = `${accent}35`)}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = `${accent}25`)}
+                  >
+                    {btnLabel}
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              ))}
+            </div>
+
+            {/* QR Code */}
+            <div
+              className="rounded-2xl p-6 flex flex-col sm:flex-row items-center gap-6"
+              style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
+            >
+              <div className="bg-white p-4 rounded-2xl shadow-xl flex-shrink-0">
+                <QRCodeSVG value={wheelUrl} size={160} />
               </div>
-              <p className="text-xs text-slate-400">
-                Print or project this QR code at activation booths.
-              </p>
+              <div className="text-center sm:text-left space-y-2">
+                <h4 className="font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Event Activation QR Code</h4>
+                <p className="text-sm" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  Print, display, or project this QR code at your activation booth so attendees can scan and spin from their mobile phones.
+                </p>
+                <div className="flex gap-2 pt-2">
+                  <Link
+                    href="/create-campaign"
+                    onClick={() => { setStep(1); setBrandName(""); setCampaignTitle(""); setCampaignSlug(""); setSlugEdited(false); }}
+                    className="px-4 py-2 rounded-xl text-xs font-bold transition-all"
+                    style={{ background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  >
+                    + Create Another
+                  </Link>
+                  <Link
+                    href="/super-admin"
+                    className="px-4 py-2 rounded-xl text-xs font-bold transition-all"
+                    style={{ background: "rgba(245,158,11,0.1)", color: "#f59e0b", border: "1px solid rgba(245,158,11,0.2)" }}
+                  >
+                    View All Campaigns →
+                  </Link>
+                </div>
+              </div>
             </div>
           </div>
         )}

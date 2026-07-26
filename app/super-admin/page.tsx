@@ -15,15 +15,17 @@ import {
   Trophy,
   BarChart3,
   Download,
-  Tv,
   ExternalLink,
-  Settings,
-  Lock,
   LogOut,
-  Layers,
   Search,
   CheckCircle,
   XCircle,
+  Activity,
+  Globe,
+  Target,
+  TrendingUp,
+  ChevronRight,
+  X,
 } from "lucide-react";
 
 export default function SuperAdminDashboard() {
@@ -35,6 +37,7 @@ export default function SuperAdminDashboard() {
   const [globalParticipants, setGlobalParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -60,9 +63,7 @@ export default function SuperAdminDashboard() {
     e.preventDefault();
     if (pinInput === "9999" || pinInput === "supersecret" || pinInput === "1234") {
       setAuthenticated(true);
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("super_admin_authed", "true");
-      }
+      if (typeof window !== "undefined") sessionStorage.setItem("super_admin_authed", "true");
       setPinError(false);
     } else {
       setPinError(true);
@@ -71,32 +72,24 @@ export default function SuperAdminDashboard() {
 
   function handleLogout() {
     setAuthenticated(false);
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem("super_admin_authed");
-    }
+    if (typeof window !== "undefined") sessionStorage.removeItem("super_admin_authed");
   }
 
   async function toggleCampaignActive(campaign: Campaign) {
     const updated = { ...campaign, active: !campaign.active };
     await updateCampaign(updated);
-    setCampaigns((prev) =>
-      prev.map((c) => (c.id === campaign.id ? updated : c))
-    );
+    setCampaigns((prev) => prev.map((c) => (c.id === campaign.id ? updated : c)));
   }
 
-  // Export ALL global data to CSV
+  function handleCopy(text: string, type: string) {
+    navigator.clipboard.writeText(text);
+    setCopiedLink(type);
+    setTimeout(() => setCopiedLink(null), 2000);
+  }
+
   function exportGlobalCSV() {
     if (!globalParticipants.length) return;
-    const headers = [
-      "Campaign ID",
-      "Name",
-      "Phone",
-      "Email",
-      "Prize Won",
-      "Voucher Code",
-      "Status",
-      "Date & Time",
-    ];
+    const headers = ["Campaign ID","Name","Phone","Email","Prize Won","Voucher Code","Status","Date & Time"];
     const rows = globalParticipants.map((p) => [
       `"${p.campaignId}"`,
       `"${p.name.replace(/"/g, '""')}"`,
@@ -107,59 +100,110 @@ export default function SuperAdminDashboard() {
       p.won ? "Winner" : "Non-Winner",
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
-
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
-
-    const encodedUri = encodeURI(csvContent);
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `agency_master_all_participants.csv`);
+    link.setAttribute("href", encodeURI(csvContent));
+    link.setAttribute("download", "agency_master_all_participants.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   }
 
+  // ──────────────────────────────────────────────────────────
+  // AUTH SCREEN
+  // ──────────────────────────────────────────────────────────
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-4 font-sans">
-        <form
-          onSubmit={handleLogin}
-          className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl space-y-6"
-        >
-          <div className="text-center space-y-2">
-            <div className="w-14 h-14 bg-gradient-to-tr from-amber-500 to-orange-500 rounded-2xl flex items-center justify-center mx-auto text-slate-950 font-bold shadow-lg">
-              <ShieldCheck className="w-8 h-8" />
-            </div>
-            <h1 className="text-2xl font-black text-white">Agency Super Admin</h1>
-            <p className="text-slate-400 text-xs">
-              Master control panel to monitor all brand campaigns (Master PIN: 9999)
-            </p>
-          </div>
+      <div
+        className="min-h-screen flex items-center justify-center p-4 font-sans relative overflow-hidden"
+        style={{ background: "radial-gradient(circle at 30% 20%, rgba(245,158,11,0.15) 0%, transparent 50%), radial-gradient(circle at 70% 80%, rgba(255,107,53,0.12) 0%, transparent 50%), #0D1B2A" }}
+      >
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full blur-3xl opacity-20" style={{ background: "radial-gradient(circle, #f59e0b, transparent)" }} />
+        </div>
 
-          <div className="space-y-2">
-            <input
-              type="password"
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              placeholder="Enter Master PIN"
-              className="w-full bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl px-4 py-3 text-center text-xl tracking-widest text-white outline-none font-mono"
-              autoFocus
-            />
-            {pinError && (
-              <p className="text-red-400 text-xs text-center font-medium">
-                Incorrect Master PIN. Try 9999.
-              </p>
-            )}
-          </div>
-
-          <button
-            type="submit"
-            className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-extrabold py-3 rounded-xl transition-all shadow-lg shadow-amber-500/20"
+        <form onSubmit={handleLogin} className="w-full max-w-md relative">
+          <div
+            className="rounded-3xl p-8 shadow-2xl space-y-8"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              backdropFilter: "blur(24px)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              boxShadow: "0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)",
+            }}
           >
-            Unlock Master Dashboard
-          </button>
+            <div className="text-center space-y-4">
+              <div className="relative inline-flex">
+                <div
+                  className="w-20 h-20 rounded-2xl flex items-center justify-center shadow-xl"
+                  style={{ background: "linear-gradient(135deg, #f59e0b, #FF6B35)" }}
+                >
+                  <ShieldCheck className="w-10 h-10 text-white" />
+                </div>
+              </div>
+              <div>
+                <h1
+                  className="text-2xl font-black text-white"
+                  style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}
+                >
+                  Agency Super Admin
+                </h1>
+                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>
+                  Master Control Portal · PIN: 9999
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Master PIN
+              </label>
+              <input
+                type="password"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+                placeholder="• • • •"
+                maxLength={10}
+                className="w-full rounded-xl px-5 py-4 text-center text-2xl tracking-[0.4em] text-white outline-none transition-all font-mono placeholder:text-slate-700"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: pinError ? "1.5px solid rgba(239,68,68,0.6)" : "1.5px solid rgba(255,255,255,0.1)",
+                  boxShadow: "inset 0 2px 4px rgba(0,0,0,0.3)",
+                }}
+                autoFocus
+              />
+              {pinError && (
+                <p className="text-red-400 text-xs text-center font-semibold flex items-center justify-center gap-1.5">
+                  <X className="w-3.5 h-3.5" /> Incorrect Master PIN. Try 9999.
+                </p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-4 rounded-xl font-bold text-base text-white transition-all group"
+              style={{
+                background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                boxShadow: "0 8px 24px rgba(245,158,11,0.4)",
+                fontFamily: "Rubik, sans-serif",
+              }}
+            >
+              <span className="flex items-center justify-center gap-2">
+                Unlock Master Portal
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </span>
+            </button>
+
+            <div className="flex items-center justify-center gap-4">
+              <Link href="/admin" className="text-xs font-semibold hover:text-white transition-colors" style={{ color: "rgba(255,255,255,0.3)" }}>
+                ← Brand Admin
+              </Link>
+              <span style={{ color: "rgba(255,255,255,0.1)" }}>·</span>
+              <Link href="/" className="text-xs font-semibold hover:text-white transition-colors" style={{ color: "rgba(255,255,255,0.3)" }}>
+                Attendee Wheel →
+              </Link>
+            </div>
+          </div>
         </form>
       </div>
     );
@@ -168,9 +212,8 @@ export default function SuperAdminDashboard() {
   const totalCampaigns = campaigns.length;
   const totalGlobalSpins = globalParticipants.length;
   const totalGlobalWinners = globalParticipants.filter((p) => p.won).length;
-  const globalWinRate = totalGlobalSpins
-    ? Math.round((totalGlobalWinners / totalGlobalSpins) * 100)
-    : 0;
+  const globalWinRate = totalGlobalSpins ? Math.round((totalGlobalWinners / totalGlobalSpins) * 100) : 0;
+  const activeCampaigns = campaigns.filter((c) => c.active).length;
 
   const filteredCampaigns = campaigns.filter(
     (c) =>
@@ -180,240 +223,289 @@ export default function SuperAdminDashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-16">
+    <div className="min-h-screen font-sans pb-20" style={{ background: "#070d14", fontFamily: "Nunito, sans-serif" }}>
       {/* Header */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+      <header
+        className="sticky top-0 z-40 px-4 py-3"
+        style={{
+          background: "rgba(7,13,20,0.9)",
+          backdropFilter: "blur(24px)",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+        }}
+      >
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-amber-500 to-orange-500 rounded-xl flex items-center justify-center font-bold text-slate-950 shadow-md">
-              <ShieldCheck className="w-5 h-5" />
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+              style={{ background: "linear-gradient(135deg, #f59e0b, #FF6B35)" }}
+            >
+              <ShieldCheck className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="font-bold text-lg text-white leading-tight">
+              <p className="font-black text-white text-sm leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
                 Agency Master Portal
-              </h1>
-              <p className="text-xs text-slate-400">Super Admin Campaign Overview</p>
+              </p>
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#f59e0b" }}>
+                Super Admin · {activeCampaigns} Active
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <Link
               href="/create-campaign"
-              className="flex items-center gap-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold text-xs px-4 py-2 rounded-xl transition-all shadow-md shadow-teal-500/20"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all"
+              style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", boxShadow: "0 4px 12px rgba(0,191,166,0.25)" }}
             >
-              <Plus className="w-4 h-4" />
-              <span>Host New Campaign</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>Host Campaign</span>
             </Link>
 
             <button
               onClick={exportGlobalCSV}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-3.5 py-2 rounded-xl border border-slate-700 transition-all font-semibold"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all"
+              style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}
             >
-              <Download className="w-4 h-4 text-emerald-400" />
-              <span>Export All Data</span>
+              <Download className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Export All</span>
             </button>
 
             <button
               onClick={handleLogout}
-              className="p-2 text-slate-400 hover:text-red-400 transition-colors"
-              title="Logout"
+              className="p-2 rounded-xl transition-colors"
+              style={{ color: "rgba(255,255,255,0.3)" }}
+              onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "#ef4444")}
+              onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.color = "rgba(255,255,255,0.3)")}
             >
-              <LogOut className="w-5 h-5" />
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main Container */}
-      <main className="max-w-7xl mx-auto px-4 pt-8 space-y-8">
-        {/* Metric Overview Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2">
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              Total Hosted Campaigns
-            </p>
-            <h3 className="text-3xl font-bold text-amber-400 font-mono">
-              {totalCampaigns}
-            </h3>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2">
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              Global Attendees & Spins
-            </p>
-            <h3 className="text-3xl font-bold text-teal-400 font-mono">
-              {totalGlobalSpins}
-            </h3>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2">
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              Total Prize Winners
-            </p>
-            <h3 className="text-3xl font-bold text-emerald-400 font-mono">
-              {totalGlobalWinners}
-            </h3>
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-2">
-            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              Agency Win Percentage
-            </p>
-            <h3 className="text-3xl font-bold text-orange-400 font-mono">
-              {globalWinRate}%
-            </h3>
-          </div>
+      <main className="max-w-7xl mx-auto px-4 pt-8 space-y-6">
+        {/* Hero metrics */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          {[
+            { label: "Campaigns", value: totalCampaigns, color: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "rgba(245,158,11,0.15)", icon: Globe },
+            { label: "Active Now", value: activeCampaigns, color: "#00BFA6", bg: "rgba(0,191,166,0.08)", border: "rgba(0,191,166,0.15)", icon: Activity },
+            { label: "Total Spins", value: totalGlobalSpins, color: "#60a5fa", bg: "rgba(96,165,250,0.08)", border: "rgba(96,165,250,0.15)", icon: TrendingUp },
+            { label: "Winners", value: totalGlobalWinners, color: "#10b981", bg: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.15)", icon: Trophy },
+            { label: "Win Rate", value: `${globalWinRate}%`, color: "#FF6B35", bg: "rgba(255,107,53,0.08)", border: "rgba(255,107,53,0.15)", icon: Target },
+          ].map(({ label, value, color, bg, border, icon: Icon }) => (
+            <div
+              key={label}
+              className="rounded-2xl p-4 flex flex-col gap-3"
+              style={{ background: bg, border: `1px solid ${border}` }}
+            >
+              <Icon className="w-5 h-5" style={{ color }} />
+              <div>
+                <p className="text-2xl font-black leading-none font-mono" style={{ color, fontFamily: "Rubik, sans-serif" }}>
+                  {value}
+                </p>
+                <p className="text-[11px] mt-1 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  {label}
+                </p>
+              </div>
+            </div>
+          ))}
         </div>
 
-        {/* Campaigns Directory */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        {/* Campaigns Table */}
+        <div
+          className="rounded-2xl overflow-hidden"
+          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
+        >
+          {/* Table header */}
+          <div className="px-6 py-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
             <div>
-              <h2 className="text-xl font-bold text-white">Hosted Campaigns Directory</h2>
-              <p className="text-xs text-slate-400">
-                Manage, monitor, and launch activation links across all clients.
+              <h2 className="font-black text-white text-base" style={{ fontFamily: "Rubik, sans-serif" }}>
+                Campaign Directory
+              </h2>
+              <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Monitor, launch, and manage all hosted brand campaigns.
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                <input
-                  type="text"
-                  placeholder="Search campaign name or ID..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl pl-9 pr-4 py-2 text-xs text-white outline-none w-60"
-                />
-              </div>
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "rgba(255,255,255,0.25)" }} />
+              <input
+                type="text"
+                placeholder="Search campaign…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="rounded-xl pl-9 pr-4 py-2 text-xs text-white outline-none w-52"
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                onFocus={(e) => (e.target.style.borderColor = "rgba(245,158,11,0.4)")}
+                onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
+              />
             </div>
           </div>
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-300">
-              <thead className="bg-slate-950 text-slate-400 font-semibold border-b border-slate-800">
-                <tr>
-                  <th className="p-3">Campaign Name & ID</th>
-                  <th className="p-3">Sub-Brand</th>
-                  <th className="p-3">Prizes</th>
-                  <th className="p-3">Spins</th>
-                  <th className="p-3">Status</th>
-                  <th className="p-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {filteredCampaigns.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="p-6 text-center text-slate-500">
-                      No campaigns found matching your query.
-                    </td>
+            {loading ? (
+              <div className="py-20 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-8 h-8 border-2 rounded-full animate-spin" style={{ borderColor: "rgba(245,158,11,0.2)", borderTopColor: "#f59e0b" }} />
+                  <p className="text-xs" style={{ color: "rgba(255,255,255,0.25)" }}>Loading campaigns…</p>
+                </div>
+              </div>
+            ) : (
+              <table className="w-full text-left" style={{ fontSize: "12px" }}>
+                <thead>
+                  <tr style={{ background: "rgba(255,255,255,0.02)" }}>
+                    {["Campaign","Sub-Brand","Segments","Spins","Status","Launch"].map((h) => (
+                      <th key={h} className="px-5 py-3 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ) : (
-                  filteredCampaigns.map((c) => {
-                    const campaignSpins = globalParticipants.filter(
-                      (p) => p.campaignId === c.id
-                    ).length;
+                </thead>
+                <tbody>
+                  {filteredCampaigns.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-16 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>
+                        No campaigns found.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredCampaigns.map((c) => {
+                      const campaignSpins = globalParticipants.filter((p) => p.campaignId === c.id).length;
+                      const campaignWinners = globalParticipants.filter((p) => p.campaignId === c.id && p.won).length;
 
-                    return (
-                      <tr key={c.id} className="hover:bg-slate-950/50">
-                        <td className="p-3">
-                          <div className="flex items-center gap-3">
-                            {c.logoUrl ? (
-                              <img
-                                src={c.logoUrl}
-                                alt={c.name}
-                                className="w-8 h-8 object-contain rounded-lg bg-slate-950 p-1 border border-slate-800"
-                              />
-                            ) : (
-                              <div
-                                className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs"
-                                style={{ background: c.primaryColor || "#00BFA6" }}
-                              >
-                                🎯
+                      return (
+                        <tr
+                          key={c.id}
+                          className="group transition-all"
+                          style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              {c.logoUrl ? (
+                                <img src={c.logoUrl} alt={c.name} className="w-9 h-9 rounded-xl object-contain p-1" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }} />
+                              ) : (
+                                <div
+                                  className="w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black flex-shrink-0"
+                                  style={{ background: `${c.primaryColor || "#00BFA6"}25`, border: `1px solid ${c.primaryColor || "#00BFA6"}30` }}
+                                >
+                                  🎯
+                                </div>
+                              )}
+                              <div>
+                                <p className="font-black text-white leading-tight text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
+                                  {c.name}
+                                </p>
+                                <p className="font-mono text-[10px] mt-0.5" style={{ color: "#00BFA6" }}>
+                                  /{c.id}
+                                </p>
                               </div>
-                            )}
-                            <div>
-                              <p className="font-bold text-white text-sm">{c.name}</p>
-                              <p className="font-mono text-xs text-teal-400">
-                                id: {c.id}
-                              </p>
                             </div>
-                          </div>
-                        </td>
+                          </td>
 
-                        <td className="p-3 font-semibold text-slate-300">
-                          {c.subTitle || "-"}
-                        </td>
+                          <td className="px-5 py-4 font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>
+                            {c.subTitle || "—"}
+                          </td>
 
-                        <td className="p-3 font-mono font-semibold text-slate-400">
-                          {c.prizes.length} segments
-                        </td>
+                          <td className="px-5 py-4 font-mono font-bold" style={{ color: "rgba(255,255,255,0.4)" }}>
+                            {c.prizes.length}
+                          </td>
 
-                        <td className="p-3 font-mono font-bold text-amber-400">
-                          {campaignSpins} spins
-                        </td>
+                          <td className="px-5 py-4">
+                            <div>
+                              <span className="font-black font-mono" style={{ color: "#f59e0b" }}>{campaignSpins}</span>
+                              <span className="text-[10px] ml-1" style={{ color: "rgba(255,255,255,0.3)" }}>· {campaignWinners}W</span>
+                            </div>
+                          </td>
 
-                        <td className="p-3">
-                          <button
-                            onClick={() => toggleCampaignActive(c)}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer border ${
-                              c.active
-                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-                                : "bg-red-500/10 text-red-400 border-red-500/20"
-                            }`}
-                          >
-                            {c.active ? (
-                              <>
-                                <CheckCircle className="w-3 h-3" /> Active
-                              </>
-                            ) : (
-                              <>
-                                <XCircle className="w-3 h-3" /> Paused
-                              </>
-                            )}
-                          </button>
-                        </td>
-
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <Link
-                              href={`/?c=${c.id}`}
-                              target="_blank"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-teal-300 rounded-lg text-xs font-semibold flex items-center gap-1 border border-slate-700"
-                              title="Open Attendee Wheel"
+                          <td className="px-5 py-4">
+                            <button
+                              onClick={() => toggleCampaignActive(c)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold cursor-pointer transition-all"
+                              style={{
+                                background: c.active ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)",
+                                color: c.active ? "#10b981" : "#f87171",
+                                border: `1px solid ${c.active ? "rgba(16,185,129,0.25)" : "rgba(239,68,68,0.25)"}`,
+                              }}
                             >
-                              <span>Wheel</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </Link>
+                              {c.active ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                              {c.active ? "Active" : "Paused"}
+                            </button>
+                          </td>
 
-                            <Link
-                              href={`/admin?c=${c.id}`}
-                              target="_blank"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-purple-300 rounded-lg text-xs font-semibold flex items-center gap-1 border border-slate-700"
-                              title="Open Brand Admin"
-                            >
-                              <span>Admin</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </Link>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-1.5">
+                              <Link
+                                href={`/?c=${c.id}`}
+                                target="_blank"
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all"
+                                style={{ background: "rgba(0,191,166,0.1)", color: "#00BFA6", border: "1px solid rgba(0,191,166,0.15)" }}
+                              >
+                                Wheel <ExternalLink className="w-2.5 h-2.5" />
+                              </Link>
+                              <Link
+                                href={`/admin?c=${c.id}`}
+                                target="_blank"
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all"
+                                style={{ background: "rgba(167,139,250,0.1)", color: "#a78bfa", border: "1px solid rgba(167,139,250,0.15)" }}
+                              >
+                                Admin <ExternalLink className="w-2.5 h-2.5" />
+                              </Link>
+                              <Link
+                                href={`/tv?c=${c.id}`}
+                                target="_blank"
+                                className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-all"
+                                style={{ background: "rgba(255,107,53,0.1)", color: "#FF6B35", border: "1px solid rgba(255,107,53,0.15)" }}
+                              >
+                                TV <ExternalLink className="w-2.5 h-2.5" />
+                              </Link>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
 
-                            <Link
-                              href={`/tv?c=${c.id}`}
-                              target="_blank"
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-orange-300 rounded-lg text-xs font-semibold flex items-center gap-1 border border-slate-700"
-                              title="Open TV Stage View"
-                            >
-                              <span>TV</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+        {/* Global recent activity */}
+        <div
+          className="rounded-2xl p-6 space-y-4"
+          style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
+        >
+          <h3 className="font-black text-white text-base" style={{ fontFamily: "Rubik, sans-serif" }}>
+            Global Activation Feed
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-64 overflow-y-auto pr-1">
+            {globalParticipants.filter((p) => p.won).slice(0, 9).map((p, i) => (
+              <div
+                key={p.id || i}
+                className="rounded-xl p-3.5 flex items-center gap-3"
+                style={{ background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.1)" }}
+              >
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-sm"
+                  style={{ background: "rgba(16,185,129,0.15)" }}
+                >
+                  🏆
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-white truncate">{p.name}</p>
+                  <p className="text-[11px] truncate" style={{ color: "#10b981" }}>{p.prizeLabel}</p>
+                  <p className="text-[10px] font-mono" style={{ color: "rgba(255,255,255,0.25)" }}>{p.campaignId}</p>
+                </div>
+              </div>
+            ))}
+            {globalParticipants.filter((p) => p.won).length === 0 && (
+              <div className="col-span-3 py-8 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>
+                No winners recorded yet across all campaigns.
+              </div>
+            )}
           </div>
         </div>
       </main>
