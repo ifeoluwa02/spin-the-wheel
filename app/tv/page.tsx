@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import type { Campaign, Participant } from "@/types";
 import { getCampaign, getParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
+import { db } from "@/lib/firebase";
+import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { QRCodeSVG } from "qrcode.react";
 import { Sparkles, Trophy, Flame } from "lucide-react";
 
@@ -12,24 +14,54 @@ export default function TvDisplayMode() {
   const [qrUrl, setQrUrl] = useState("");
 
   useEffect(() => {
-    async function loadData() {
-      let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
-      if (typeof window !== "undefined") {
-        const params = new URLSearchParams(window.location.search);
-        const queryId = params.get("c");
-        if (queryId) targetCampaignId = queryId;
-      }
+    if (typeof window !== "undefined") {
+      setQrUrl(window.location.origin);
+    }
+  }, []);
 
-      const c = await getCampaign(targetCampaignId);
-      setCampaign(c);
+  useEffect(() => {
+    let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const queryId = params.get("c");
+      if (queryId) targetCampaignId = queryId;
+    }
+
+    // Initial load
+    getCampaign(targetCampaignId).then(setCampaign);
+    getParticipants(targetCampaignId).then(setParticipants);
+
+    // Real-time Firestore Listener
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const q = query(
+        collection(db, "participants"),
+        where("campaignId", "==", targetCampaignId),
+        orderBy("createdAt", "desc")
+      );
+      unsubscribe = onSnapshot(q, (snap) => {
+        const liveList: Participant[] = [];
+        snap.forEach((docSnap) => {
+          liveList.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+        });
+        if (liveList.length > 0) {
+          setParticipants(liveList);
+        }
+      });
+    } catch (err) {
+      console.warn("Firestore snapshot listener unavailable, fallback to polling:", err);
+    }
+
+    // Polling fallback every 3 seconds for local storage or offline modes
+    const interval = setInterval(async () => {
       const p = await getParticipants(targetCampaignId);
       setParticipants(p);
-    }
-    loadData();
+    }, 3000);
 
-    // Auto-refresh every 5 seconds for live activation feeds
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      if (unsubscribe) unsubscribe();
+      clearInterval(interval);
+    };
   }, []);
 
   const recentWinners = participants.filter((p) => p.won).slice(0, 8);
