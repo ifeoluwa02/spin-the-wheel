@@ -1,6 +1,20 @@
 @import "tailwindcss";
 @import url("https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap");
 
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  display: inline-flex;
+  animation: marquee 25s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
 :root {
   /* Brand Color Palette */
   --midnight-blue: #0D1B2A;

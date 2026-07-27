@@ -6,19 +6,17 @@ import { getCampaign, getParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { db } from "@/lib/firebase";
 import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { QRCodeSVG } from "qrcode.react";
+import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio } from "lucide-react";
 
 export default function TvDisplayMode() {
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [wheelUrl, setWheelUrl] = useState("");
   const [campaignSlug, setCampaignSlug] = useState("demo-campaign");
-  const [tick, setTick] = useState(0);
   const [latestWinner, setLatestWinner] = useState<Participant | null>(null);
   const [showWinnerFlash, setShowWinnerFlash] = useState(false);
   const prevWinnersCountRef = useRef(0);
   const [currentTime, setCurrentTime] = useState("");
-  const [qrSize, setQrSize] = useState(200);
-  const qrRef = useRef<HTMLDivElement>(null);
 
   // Resolve campaign slug from ?c= param
   useEffect(() => {
@@ -27,19 +25,6 @@ export default function TvDisplayMode() {
     const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
     setCampaignSlug(slug);
     setWheelUrl(`${window.location.origin}/?c=${slug}`);
-  }, []);
-
-  // Responsive QR code size
-  useEffect(() => {
-    function updateQrSize() {
-      if (qrRef.current) {
-        const w = qrRef.current.offsetWidth;
-        setQrSize(Math.max(120, Math.min(w - 32, 300)));
-      }
-    }
-    updateQrSize();
-    window.addEventListener("resize", updateQrSize);
-    return () => window.removeEventListener("resize", updateQrSize);
   }, []);
 
   // Load campaign + live listener
@@ -73,24 +58,18 @@ export default function TvDisplayMode() {
     if (winners.length > prevWinnersCountRef.current && winners.length > 0) {
       setLatestWinner(winners[0]);
       setShowWinnerFlash(true);
-      const t = setTimeout(() => setShowWinnerFlash(false), 5000);
+      const t = setTimeout(() => setShowWinnerFlash(false), 6000);
       prevWinnersCountRef.current = winners.length;
       return () => clearTimeout(t);
     }
     prevWinnersCountRef.current = winners.length;
   }, [participants]);
 
-  // Ticker animation
-  useEffect(() => {
-    const iv = setInterval(() => setTick((t) => t + 1), 50);
-    return () => clearInterval(iv);
-  }, []);
-
   // Live clock
   useEffect(() => {
     const update = () =>
       setCurrentTime(
-        new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       );
     update();
     const iv = setInterval(update, 1000);
@@ -102,22 +81,25 @@ export default function TvDisplayMode() {
   const totalWinners = recentWinners.length;
   const winRate = totalSpins ? Math.round((participants.filter((p) => p.won).length / totalSpins) * 100) : 0;
 
-  const gc = campaign.gradientStart || "#FF6B35";
-  const g2 = campaign.gradientEnd || "#00BFA6";
+  const gc = campaign.gradientStart || campaign.primaryColor || "#FF6B35";
+  const g2 = campaign.gradientEnd || campaign.secondaryColor || "#00BFA6";
 
   return (
     <div
-      className="relative min-h-screen w-full flex flex-col overflow-hidden"
-      style={{
-        background: `
-          radial-gradient(ellipse at 15% 20%, ${gc}40 0%, transparent 45%),
-          radial-gradient(ellipse at 85% 80%, ${g2}40 0%, transparent 45%),
-          #0A1628
-        `,
-        fontFamily: "Nunito, sans-serif",
-      }}
+      className="relative min-h-screen w-full flex flex-col justify-between overflow-hidden bg-[#070d14] text-white selection:bg-teal-500 selection:text-white"
+      style={{ fontFamily: "Nunito, sans-serif" }}
     >
-      {/* Grid texture */}
+      {/* Dynamic Ambient Color Orbs */}
+      <div
+        className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none transition-all duration-1000"
+        style={{ background: gc }}
+      />
+      <div
+        className="absolute -bottom-40 -right-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none transition-all duration-1000"
+        style={{ background: g2 }}
+      />
+
+      {/* Grid Pattern Overlay */}
       <div
         className="absolute inset-0 pointer-events-none opacity-[0.03]"
         style={{
@@ -127,67 +109,63 @@ export default function TvDisplayMode() {
         }}
       />
 
-      {/* Corner glows */}
-      <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full blur-3xl opacity-20 pointer-events-none" style={{ background: gc }} />
-      <div className="absolute -bottom-40 -right-40 w-96 h-96 rounded-full blur-3xl opacity-20 pointer-events-none" style={{ background: g2 }} />
-
-      {/* ── WINNER FLASH BANNER ── */}
+      {/* ── WINNER FLASH OVERLAY BANNER ── */}
       <div
-        className="relative z-50 w-full text-white text-center overflow-hidden transition-all duration-700 ease-out"
+        className={`relative z-50 w-full overflow-hidden transition-all duration-700 ease-out ${
+          showWinnerFlash ? "max-h-24 opacity-100 py-3" : "max-h-0 opacity-0 py-0"
+        }`}
         style={{
-          maxHeight: showWinnerFlash ? "80px" : "0px",
           background: `linear-gradient(90deg, ${gc}, ${g2}, ${gc})`,
-          backgroundSize: "200% 100%",
+          boxShadow: `0 10px 30px ${gc}40`,
         }}
       >
         {latestWinner && (
-          <div className="flex items-center justify-center gap-3 py-3 px-4">
-            <span className="text-xl">🎉</span>
-            <p
-              className="font-black text-sm sm:text-base md:text-xl truncate"
-              style={{ fontFamily: "Rubik, sans-serif" }}
-            >
-              New Winner! &nbsp;<span className="opacity-90">{latestWinner.name}</span>
-              &nbsp;—&nbsp;
-              <span className="opacity-80">{latestWinner.prizeLabel}</span>
-            </p>
-            <span className="text-xl">🎉</span>
+          <div className="flex items-center justify-center gap-3 px-6 text-center">
+            <Sparkles className="w-6 h-6 text-yellow-300 animate-bounce flex-shrink-0" />
+            <div className="flex items-center gap-2 truncate">
+              <span className="text-xs sm:text-sm font-black uppercase tracking-[0.25em] text-white/80">
+                🎉 WINNER ANNOUNCEMENT:
+              </span>
+              <span className="text-base sm:text-xl font-black text-white truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
+                {latestWinner.name}
+              </span>
+              <span className="text-xs sm:text-base font-bold text-white/90 truncate">
+                won <span className="underline decoration-yellow-300 underline-offset-4">{latestWinner.prizeLabel}</span>!
+              </span>
+            </div>
+            <Sparkles className="w-6 h-6 text-yellow-300 animate-bounce flex-shrink-0" />
           </div>
         )}
       </div>
 
-      {/* ── HEADER ── */}
-      <header
-        className="relative z-30 w-full flex flex-wrap items-center justify-between gap-4 px-4 sm:px-8 py-4"
-        style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
-      >
-        {/* Brand */}
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+      {/* ── TOP STAGE HEADER ── */}
+      <header className="relative z-30 w-full flex flex-wrap items-center justify-between gap-4 px-6 sm:px-12 py-5 border-b border-white/10 bg-black/30 backdrop-blur-2xl">
+        {/* Brand identity */}
+        <div className="flex items-center gap-4 min-w-0">
           {campaign.logoUrl ? (
             <img
               src={campaign.logoUrl}
               alt={campaign.name}
-              className="h-10 sm:h-12 md:h-14 w-auto object-contain flex-shrink-0"
-              style={{ filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.5))" }}
+              className="h-12 sm:h-16 w-auto object-contain flex-shrink-0 drop-shadow-xl"
             />
           ) : (
             <div
-              className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl sm:rounded-2xl flex items-center justify-center text-xl sm:text-2xl flex-shrink-0 shadow-xl"
+              className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center text-2xl flex-shrink-0 shadow-2xl"
               style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}
             >
-              🎯
+              🎡
             </div>
           )}
           <div className="min-w-0">
             <h1
-              className="font-black text-white leading-tight truncate text-base sm:text-xl md:text-2xl lg:text-3xl"
+              className="font-black text-white leading-tight truncate text-xl sm:text-3xl"
               style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}
             >
               {campaign.name}
             </h1>
             {campaign.subTitle && (
               <p
-                className="font-bold uppercase tracking-widest text-[10px] sm:text-xs truncate"
+                className="font-bold uppercase tracking-[0.25em] text-xs truncate mt-0.5"
                 style={{ color: g2 }}
               >
                 {campaign.subTitle}
@@ -196,247 +174,168 @@ export default function TvDisplayMode() {
           </div>
         </div>
 
-        {/* Stats + Live */}
-        <div className="flex items-center gap-2 sm:gap-4 flex-wrap justify-end">
-          {/* Stat pills */}
-          <div
-            className="flex items-stretch divide-x rounded-xl overflow-hidden"
-            style={{
-              background: "rgba(0,0,0,0.4)",
-              backdropFilter: "blur(20px)",
-              border: "1px solid rgba(255,255,255,0.1)",
-            }}
-          >
+        {/* Live Metrics & Clock */}
+        <div className="flex items-center gap-4 sm:gap-6 flex-wrap">
+          {/* Metrics Pill Grid */}
+          <div className="flex items-stretch divide-x divide-white/10 rounded-2xl bg-white/[0.04] backdrop-blur-xl border border-white/10 shadow-2xl overflow-hidden">
             {[
-              { label: "Spins", value: totalSpins, color: "#fff" },
-              { label: "Won", value: totalWinners, color: "#10b981" },
-              { label: "Rate", value: `${winRate}%`, color: gc },
-            ].map(({ label, value, color }) => (
-              <div key={label} className="px-3 sm:px-5 py-2 text-center" style={{ borderRight: "1px solid rgba(255,255,255,0.08)" }}>
-                <p
-                  className="font-black font-mono text-base sm:text-xl md:text-2xl leading-none"
-                  style={{ color, fontFamily: "Rubik, sans-serif" }}
-                >
-                  {value}
-                </p>
-                <p className="text-[9px] sm:text-[11px] font-bold uppercase tracking-wider mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+              { label: "Total Spins", value: totalSpins, color: "#ffffff", icon: Activity },
+              { label: "Prizes Claimed", value: totalWinners, color: "#10b981", icon: Trophy },
+              { label: "Win Rate", value: `${winRate}%`, color: gc, icon: Zap },
+            ].map(({ label, value, color, icon: Icon }) => (
+              <div key={label} className="px-5 sm:px-7 py-3 text-center flex flex-col justify-center">
+                <div className="flex items-center justify-center gap-1.5">
+                  <Icon className="w-4 h-4" style={{ color }} />
+                  <p className="font-black font-mono text-xl sm:text-2xl leading-none text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    {value}
+                  </p>
+                </div>
+                <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider mt-1 text-white/40">
                   {label}
                 </p>
               </div>
             ))}
           </div>
 
-          {/* Live pill */}
-          <div
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full"
-            style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)" }}
-          >
-            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-pulse" style={{ background: "#10b981" }} />
-            <span className="text-[10px] sm:text-xs font-black uppercase tracking-widest" style={{ color: "#10b981" }}>
-              Live
+          {/* Live Stream Indicator */}
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+            <Radio className="w-4 h-4 animate-pulse text-emerald-400" />
+            <span className="text-xs font-black uppercase tracking-widest">
+              STAGE LIVE
             </span>
           </div>
 
-          {/* Clock */}
-          <p className="text-xs sm:text-sm font-mono font-bold hidden sm:block" style={{ color: "rgba(255,255,255,0.3)" }}>
+          {/* Real-time Clock */}
+          <div className="hidden lg:flex items-center gap-2 text-white/40 font-mono text-sm font-bold bg-white/[0.03] px-4 py-2.5 rounded-2xl border border-white/5">
+            <Clock className="w-4 h-4 text-white/30" />
             {currentTime}
-          </p>
+          </div>
         </div>
       </header>
 
-      {/* ── MAIN CONTENT ── */}
-      <main className="relative z-10 flex-1 flex flex-col lg:flex-row items-center justify-center gap-6 sm:gap-8 lg:gap-12 px-4 sm:px-8 lg:px-12 py-6 sm:py-8">
+      {/* ── MAIN STAGE CONTENT ── */}
+      <main className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 px-6 sm:px-12 py-8 items-center max-w-7xl mx-auto w-full">
 
-        {/* ── QR CODE PANEL ── */}
-        <div className="w-full lg:w-auto flex-shrink-0 flex justify-center">
-          <div
-            ref={qrRef}
-            className="w-full max-w-xs sm:max-w-sm lg:max-w-none lg:w-72 xl:w-80 2xl:w-96 flex flex-col items-center gap-4 rounded-2xl sm:rounded-3xl p-5 sm:p-6 xl:p-8 relative"
-            style={{
-              background: "rgba(0,0,0,0.5)",
-              backdropFilter: "blur(24px)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              boxShadow: "0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08)",
-            }}
-          >
-            {/* Top badge */}
+        {/* LEFT COLUMN: QR CODE STAGE CARD */}
+        <div className="lg:col-span-5 flex flex-col items-center justify-center">
+          <div className="relative w-full max-w-sm sm:max-w-md flex flex-col items-center gap-6 rounded-3xl p-8 bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-[0_32px_80px_rgba(0,0,0,0.6)]">
+            
+            {/* Top Floating Ribbon Badge */}
             <div
-              className="absolute -top-3.5 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full text-[10px] sm:text-xs font-black uppercase tracking-widest text-white shadow-lg whitespace-nowrap"
+              className="absolute -top-4 left-1/2 -translate-x-1/2 px-6 py-1.5 rounded-full text-xs font-black uppercase tracking-[0.2em] text-white shadow-xl flex items-center gap-2 whitespace-nowrap"
               style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}
             >
-              ✦ Scan to Play ✦
+              <QrCode className="w-3.5 h-3.5" />
+              <span>Scan to Spin & Win</span>
             </div>
 
-            {/* QR code */}
-            <div
-              className="w-full rounded-xl sm:rounded-2xl overflow-hidden shadow-2xl"
-              style={{ padding: "12px", background: "#FFFFFF" }}
-            >
+            {/* Glowing QR Frame */}
+            <div className="relative w-full p-4 rounded-2xl bg-white shadow-2xl mt-2 group transition-transform hover:scale-[1.02]">
               {wheelUrl && (
                 <QRCodeSVG
                   value={wheelUrl}
-                  size={qrSize}
+                  size={280}
                   level="H"
-                  style={{ width: "100%", height: "auto", display: "block" }}
+                  className="w-full h-auto rounded-lg"
                 />
               )}
             </div>
 
-            {/* CTA text */}
-            <div className="text-center space-y-1.5 w-full">
-              <p
-                className="font-black text-white text-lg sm:text-xl xl:text-2xl"
-                style={{ fontFamily: "Rubik, sans-serif" }}
-              >
-                Spin & Win! 🎡
-              </p>
-              <p className="text-xs sm:text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.5)" }}>
-                {campaign.welcomeMessage || "Point your camera at the QR code, register, and spin for an instant prize!"}
+            {/* Call to action instructions */}
+            <div className="text-center space-y-2 w-full">
+              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                Point Your Phone Camera
+              </h2>
+              <p className="text-sm text-white/60 leading-relaxed px-2">
+                {campaign.welcomeMessage || "Scan the QR code to register on your phone, spin the wheel, and win instant prizes!"}
               </p>
             </div>
 
-            {/* URL display */}
-            <div
-              className="w-full rounded-xl px-3 py-2 text-center"
-              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
-            >
-              <p className="text-[10px] sm:text-xs font-mono break-all leading-relaxed" style={{ color: g2 }}>
+            {/* Campaign URL link badge */}
+            <div className="w-full px-4 py-2.5 rounded-xl bg-white/[0.05] border border-white/10 text-center">
+              <p className="text-xs font-mono text-teal-400 break-all leading-tight">
                 {wheelUrl}
               </p>
-            </div>
-
-            {/* Animated dots */}
-            <div className="flex gap-1.5">
-              {[0, 1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="w-1.5 h-1.5 rounded-full transition-opacity duration-300"
-                  style={{
-                    background: g2,
-                    opacity: (tick + i * 4) % 12 < 6 ? 1 : 0.2,
-                  }}
-                />
-              ))}
             </div>
           </div>
         </div>
 
-        {/* ── WINNERS FEED ── */}
-        <div className="w-full flex-1 flex flex-col gap-4 sm:gap-5 min-w-0">
-          {/* Feed title */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <div
-                className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg sm:rounded-xl flex items-center justify-center text-sm sm:text-lg flex-shrink-0"
-                style={{ background: `${gc}25`, border: `1px solid ${gc}30` }}
-              >
-                🏆
+        {/* RIGHT COLUMN: LIVE WINNER LEADERBOARD */}
+        <div className="lg:col-span-7 flex flex-col gap-5 w-full h-full justify-center">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-white/10 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-orange-500/20 border border-orange-500/30 flex items-center justify-center">
+                <Flame className="w-5 h-5 text-orange-400 animate-pulse" />
               </div>
               <div>
-                <h2
-                  className="font-black text-white text-base sm:text-xl md:text-2xl leading-tight"
-                  style={{ fontFamily: "Rubik, sans-serif" }}
-                >
-                  Lucky Winners
+                <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  Recent Lucky Winners
                 </h2>
-                <p className="text-[10px] sm:text-xs font-bold uppercase tracking-wider" style={{ color: g2 }}>
-                  Real-time · Live Feed
+                <p className="text-xs font-bold uppercase tracking-wider text-teal-400">
+                  Real-time Activation Feed
                 </p>
               </div>
             </div>
-            <div
-              className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-lg sm:rounded-xl text-[11px] sm:text-sm font-black"
-              style={{ background: "rgba(0,0,0,0.4)", color: "rgba(255,255,255,0.4)", border: "1px solid rgba(255,255,255,0.08)" }}
-            >
-              {totalWinners} winner{totalWinners !== 1 ? "s" : ""}
-            </div>
+
+            <span className="px-3 py-1 rounded-full text-xs font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              Live Updates
+            </span>
           </div>
 
-          {/* Winners grid / list */}
+          {/* Winner Cards List */}
           {recentWinners.length === 0 ? (
-            <div
-              className="flex-1 flex flex-col items-center justify-center text-center rounded-2xl sm:rounded-3xl p-8 sm:p-12 gap-4"
-              style={{ background: "rgba(0,0,0,0.3)", border: "1px solid rgba(255,255,255,0.07)" }}
-            >
-              <span className="text-4xl sm:text-6xl">🎡</span>
+            <div className="flex flex-col items-center justify-center text-center p-12 rounded-3xl bg-white/[0.03] border border-white/5 gap-4">
+              <Trophy className="w-16 h-16 text-white/20" />
               <div>
-                <p
-                  className="text-lg sm:text-2xl font-black text-white"
-                  style={{ fontFamily: "Rubik, sans-serif" }}
-                >
-                  No winners yet!
+                <p className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  Be the First Winner!
                 </p>
-                <p className="text-sm sm:text-base mt-2" style={{ color: "rgba(255,255,255,0.4)" }}>
-                  Scan the QR code to register and be the first to spin!
+                <p className="text-sm text-white/40 mt-1">
+                  Scan the QR code on the left to spin the wheel on your phone.
                 </p>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-2.5 sm:gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 max-h-[460px] overflow-y-auto pr-1">
               {recentWinners.map((winner, idx) => {
-                const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : null;
-                const isNewest = idx === 0 && showWinnerFlash;
+                const isFirst = idx === 0;
+                const medalIcon = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : null;
+
                 return (
                   <div
                     key={winner.id || idx}
-                    className="flex items-center gap-3 sm:gap-4 rounded-xl sm:rounded-2xl p-3 sm:p-4 transition-all duration-500"
-                    style={{
-                      background: isNewest
-                        ? `linear-gradient(135deg, ${gc}20, ${g2}20)`
-                        : "rgba(255,255,255,0.04)",
-                      border: isNewest
-                        ? `1px solid ${g2}50`
-                        : "1px solid rgba(255,255,255,0.07)",
-                      backdropFilter: "blur(12px)",
-                      boxShadow: isNewest ? `0 0 24px ${g2}25` : "none",
-                    }}
+                    className={`flex items-center gap-4 rounded-2xl p-4 transition-all duration-500 ${
+                      isFirst && showWinnerFlash
+                        ? "bg-gradient-to-r from-teal-500/20 to-orange-500/20 border-teal-400/50 shadow-[0_0_30px_rgba(0,191,166,0.3)]"
+                        : "bg-white/[0.04] hover:bg-white/[0.07] border-white/10"
+                    } border backdrop-blur-xl`}
                   >
-                    {/* Avatar / medal */}
+                    {/* Rank / Medal Avatar */}
                     <div
-                      className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl flex items-center justify-center text-base sm:text-xl font-black flex-shrink-0"
-                      style={{
-                        background: medal
-                          ? `linear-gradient(135deg, ${gc}40, ${g2}40)`
-                          : "rgba(255,255,255,0.06)",
-                        border: medal
-                          ? `1px solid ${g2}40`
-                          : "1px solid rgba(255,255,255,0.08)",
-                        color: "rgba(255,255,255,0.3)",
-                        fontFamily: "Rubik, sans-serif",
-                      }}
+                      className={`w-12 h-12 rounded-xl flex items-center justify-center text-lg font-black flex-shrink-0 ${
+                        isFirst
+                          ? "bg-gradient-to-br from-amber-400/30 to-orange-500/30 border border-amber-400/50 text-amber-300"
+                          : "bg-white/5 border border-white/10 text-white/40"
+                      }`}
                     >
-                      {medal || (
-                        <span className="text-xs sm:text-sm" style={{ color: "rgba(255,255,255,0.3)" }}>
-                          {idx + 1}
-                        </span>
-                      )}
+                      {medalIcon || <Award className="w-5 h-5 opacity-40" />}
                     </div>
 
-                    {/* Info */}
+                    {/* Winner Info */}
                     <div className="min-w-0 flex-1">
-                      <p
-                        className="font-black text-white truncate text-sm sm:text-base md:text-lg leading-tight"
-                        style={{ fontFamily: "Rubik, sans-serif" }}
-                      >
+                      <p className="font-black text-white truncate text-base sm:text-lg leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
                         {winner.name}
                       </p>
-                      <p
-                        className="text-xs sm:text-sm font-bold truncate mt-0.5"
-                        style={{ color: g2 }}
-                      >
-                        {winner.prizeLabel}
+                      <p className="text-xs sm:text-sm font-bold truncate text-teal-400 mt-0.5">
+                        Won: {winner.prizeLabel}
                       </p>
                     </div>
 
-                    {/* Time */}
-                    <p
-                      className="text-[10px] sm:text-xs font-mono flex-shrink-0 hidden sm:block"
-                      style={{ color: "rgba(255,255,255,0.25)" }}
-                    >
-                      {new Date(winner.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    {/* Time badge */}
+                    <p className="text-xs font-mono text-white/30 flex-shrink-0">
+                      {new Date(winner.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </p>
                   </div>
                 );
@@ -446,53 +345,30 @@ export default function TvDisplayMode() {
         </div>
       </main>
 
-      {/* ── FOOTER TICKER ── */}
-      <footer
-        className="relative z-30 w-full flex items-center overflow-hidden flex-shrink-0"
-        style={{
-          height: "44px",
-          background: "rgba(0,0,0,0.55)",
-          backdropFilter: "blur(16px)",
-          borderTop: "1px solid rgba(255,255,255,0.07)",
-        }}
-      >
-        {/* Static left badge */}
+      {/* ── BROADCAST TICKER FOOTER ── */}
+      <footer className="relative z-30 w-full flex items-center overflow-hidden bg-black/60 backdrop-blur-xl border-t border-white/10 h-12">
+        {/* Static Left Brand Tag */}
         <div
-          className="flex-shrink-0 h-full flex items-center px-4 sm:px-5 text-white text-[11px] sm:text-xs font-black uppercase tracking-widest"
+          className="flex-shrink-0 h-full flex items-center px-6 text-white text-xs font-black uppercase tracking-widest z-10 shadow-lg"
           style={{ background: `linear-gradient(90deg, ${gc}, ${g2})` }}
         >
-          ✦ LIVE
+          ✦ LIVE BROADCAST
         </div>
 
-        {/* Scrolling text */}
+        {/* Marquee Text Line */}
         <div className="flex-1 overflow-hidden relative">
-          <div
-            className="flex items-center gap-12 whitespace-nowrap absolute inset-y-0"
-            style={{
-              transform: `translateX(${-(tick * 0.5) % 700}px)`,
-              color: "rgba(255,255,255,0.55)",
-              fontSize: "12px",
-              fontWeight: 700,
-              alignItems: "center",
-            }}
-          >
-            {[...Array(6)].map((_, i) => (
-              <span key={i}>
-                🎡 Scan the QR Code to play &nbsp;·&nbsp;
-                🏆 {participants.filter(p => p.won).length} prize{participants.filter(p => p.won).length !== 1 ? "s" : ""} claimed &nbsp;·&nbsp;
-                🎲 {totalSpins} total spin{totalSpins !== 1 ? "s" : ""} &nbsp;·&nbsp;
-                {campaign.welcomeMessage || `Win amazing prizes from ${campaign.name}!`}
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-              </span>
-            ))}
+          <div className="animate-marquee whitespace-nowrap flex items-center gap-12 text-xs font-bold text-white/60">
+            <span>
+              🎡 Scan the QR Code to Play &nbsp;·&nbsp; 🏆 {totalWinners} Prize{totalWinners !== 1 ? "s" : ""} Claimed &nbsp;·&nbsp; 🎲 {totalSpins} Total Spin{totalSpins !== 1 ? "s" : ""} &nbsp;·&nbsp; {campaign.welcomeMessage || `Win exciting prizes from ${campaign.name}!`}
+            </span>
+            <span>
+              🎡 Scan the QR Code to Play &nbsp;·&nbsp; 🏆 {totalWinners} Prize{totalWinners !== 1 ? "s" : ""} Claimed &nbsp;·&nbsp; 🎲 {totalSpins} Total Spin{totalSpins !== 1 ? "s" : ""} &nbsp;·&nbsp; {campaign.welcomeMessage || `Win exciting prizes from ${campaign.name}!`}
+            </span>
           </div>
         </div>
 
-        {/* Right clock */}
-        <div
-          className="flex-shrink-0 h-full hidden sm:flex items-center px-4 font-mono text-xs font-bold"
-          style={{ color: "rgba(255,255,255,0.3)", borderLeft: "1px solid rgba(255,255,255,0.07)" }}
-        >
+        {/* Right Clock Footer */}
+        <div className="flex-shrink-0 h-full hidden sm:flex items-center px-6 font-mono text-xs font-bold text-white/40 border-l border-white/10 bg-black/40">
           {currentTime}
         </div>
       </footer>
