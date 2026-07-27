@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import type { Campaign, Participant } from "@/types";
+import type { Campaign, Participant, StoreLocation } from "@/types";
 import { getCampaign, getParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { db } from "@/lib/firebase";
 import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { QRCodeSVG } from "qrcode.react";
-import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio } from "lucide-react";
+import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X } from "lucide-react";
 
 export default function TvDisplayMode() {
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
@@ -18,19 +18,48 @@ export default function TvDisplayMode() {
   const prevWinnersCountRef = useRef(0);
   const [currentTime, setCurrentTime] = useState("");
 
-  // Resolve campaign slug from ?c= param
+  // Store / BA Location Gate state
+  const [selectedStore, setSelectedStore] = useState<StoreLocation | null>(null);
+  const [chosenStoreId, setChosenStoreId] = useState<string>("");
+  const [pinInput, setPinInput] = useState<string>("");
+  const [pinError, setPinError] = useState<boolean>(false);
+  const [isStoreAuthenticated, setIsStoreAuthenticated] = useState<boolean>(false);
+
+  // Resolve campaign slug & initial store from ?c= and ?store= params
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+    const storeParam = params.get("store") || "";
     setCampaignSlug(slug);
-    setWheelUrl(`${window.location.origin}/?c=${slug}`);
+
+    if (storeParam) {
+      setIsStoreAuthenticated(true);
+    }
   }, []);
 
   // Load campaign + live listener
   useEffect(() => {
     if (!campaignSlug) return;
-    getCampaign(campaignSlug).then(setCampaign);
+    getCampaign(campaignSlug).then((c) => {
+      setCampaign(c);
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const storeParam = params.get("store") || "";
+        if (storeParam && c.stores?.length) {
+          const matched = c.stores.find(s => s.code === storeParam || s.id === storeParam);
+          if (matched) {
+            setSelectedStore(matched);
+            setWheelUrl(`${window.location.origin}/?c=${campaignSlug}&store=${matched.code}`);
+          } else {
+            setWheelUrl(`${window.location.origin}/?c=${campaignSlug}&store=${storeParam}`);
+          }
+        } else {
+          setWheelUrl(`${window.location.origin}/?c=${campaignSlug}`);
+        }
+      }
+    });
+
     getParticipants(campaignSlug).then(setParticipants);
 
     let unsub: (() => void) | undefined;
@@ -51,6 +80,23 @@ export default function TvDisplayMode() {
     }
     return () => { if (unsub) unsub(); };
   }, [campaignSlug]);
+
+  function handleStoreLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!campaign.stores?.length || !chosenStoreId) return;
+    const targetStore = campaign.stores.find(s => s.id === chosenStoreId || s.code === chosenStoreId);
+    if (!targetStore) return;
+
+    if (targetStore.pin && pinInput !== targetStore.pin) {
+      setPinError(true);
+      return;
+    }
+
+    setPinError(false);
+    setSelectedStore(targetStore);
+    setIsStoreAuthenticated(true);
+    setWheelUrl(`${window.location.origin}/?c=${campaignSlug}&store=${targetStore.code}`);
+  }
 
   // Detect new winners → flash banner
   useEffect(() => {
@@ -83,6 +129,96 @@ export default function TvDisplayMode() {
 
   const gc = campaign.gradientStart || campaign.primaryColor || "#FF6B35";
   const g2 = campaign.gradientEnd || campaign.secondaryColor || "#00BFA6";
+
+  // ── STORE / BRAND AMBASSADOR GATE SCREEN ──
+  if (campaign.stores && campaign.stores.length > 0 && !isStoreAuthenticated) {
+    const selectedObj = campaign.stores.find(s => s.id === chosenStoreId || s.code === chosenStoreId);
+
+    return (
+      <div
+        className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#070d14] text-white selection:bg-teal-500 selection:text-white"
+        style={{ fontFamily: "Nunito, sans-serif" }}
+      >
+        {/* Dynamic Orbs */}
+        <div className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none" style={{ background: gc }} />
+        <div className="absolute -bottom-40 -right-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none" style={{ background: g2 }} />
+
+        <div className="relative z-10 w-full max-w-md space-y-6">
+          <div className="text-center space-y-2">
+            <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-3xl shadow-2xl" style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}>
+              🏪
+            </div>
+            <h1 className="text-3xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+              {campaign.name}
+            </h1>
+            <p className="text-sm text-teal-400 font-bold uppercase tracking-widest">
+              Store & Brand Ambassador Portal
+            </p>
+            <p className="text-xs text-white/50">
+              Select your store or brand ambassador account to activate the TV display.
+            </p>
+          </div>
+
+          <form onSubmit={handleStoreLogin} className="rounded-3xl p-7 space-y-5 bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-2xl">
+            <div className="space-y-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-white/50">
+                Select Store / Location / BA
+              </label>
+              <select
+                value={chosenStoreId}
+                onChange={e => {
+                  setChosenStoreId(e.target.value);
+                  setPinError(false);
+                }}
+                required
+                className="w-full rounded-xl px-4 py-3.5 bg-black/40 border border-white/10 text-white font-bold text-sm outline-none transition-all focus:border-teal-500"
+              >
+                <option value="" disabled className="bg-slate-900 text-white">-- Select Location / BA Account --</option>
+                {campaign.stores.map((s) => (
+                  <option key={s.id || s.code} value={s.id || s.code} className="bg-slate-900 text-white">
+                    📍 {s.name} {s.city ? `(${s.city})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedObj?.pin && (
+              <div className="space-y-2 animate-fadeIn">
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/50 flex items-center justify-between">
+                  <span>Store Access PIN</span>
+                  <span className="text-[10px] text-teal-400">PIN Required</span>
+                </label>
+                <input
+                  type="password"
+                  value={pinInput}
+                  onChange={e => setPinInput(e.target.value)}
+                  placeholder="• • • •"
+                  maxLength={6}
+                  required
+                  className="w-full rounded-xl px-4 py-3 text-center text-xl tracking-[0.4em] font-mono bg-black/40 border border-white/10 text-white outline-none focus:border-teal-500"
+                />
+                {pinError && (
+                  <p className="flex items-center gap-1.5 text-xs text-red-400 font-semibold justify-center">
+                    <X className="w-3.5 h-3.5" /> Incorrect PIN. Try again.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!chosenStoreId}
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 disabled:opacity-40 group shadow-lg"
+              style={{ background: `linear-gradient(135deg, ${gc}, ${g2})`, fontFamily: "Rubik, sans-serif" }}
+            >
+              <span>Launch Store Display</span>
+              <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -163,14 +299,22 @@ export default function TvDisplayMode() {
             >
               {campaign.name}
             </h1>
-            {campaign.subTitle && (
-              <p
-                className="font-bold uppercase tracking-[0.25em] text-xs truncate mt-0.5"
-                style={{ color: g2 }}
-              >
-                {campaign.subTitle}
-              </p>
-            )}
+            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+              {campaign.subTitle && (
+                <p
+                  className="font-bold uppercase tracking-[0.25em] text-xs truncate"
+                  style={{ color: g2 }}
+                >
+                  {campaign.subTitle}
+                </p>
+              )}
+              {selectedStore && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-teal-500/15 border border-teal-500/30 text-teal-300 flex items-center gap-1">
+                  <MapPin className="w-3 h-3 text-teal-400" />
+                  {selectedStore.name}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

@@ -29,19 +29,33 @@ export default function Home() {
   const [isSpinning, setIsSpinning] = useState(false);
   const [wonPrize, setWonPrize] = useState<Prize | null>(null);
   const [voucherCode, setVoucherCode] = useState<string>("");
+  const [activeStoreCode, setActiveStoreCode] = useState<string>("");
+  const [activeStoreName, setActiveStoreName] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
     let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+    let storeCodeParam = "";
+
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const queryId = params.get("c");
       if (queryId) targetCampaignId = queryId;
+      storeCodeParam = params.get("store") || "";
+      setActiveStoreCode(storeCodeParam);
     }
+
     getCampaign(targetCampaignId).then((c) => {
       if (cancelled) return;
       if (!c || !c.active || !c.prizes?.length) { setStep("not-found"); return; }
       setCampaign(c);
+
+      if (storeCodeParam && c.stores?.length) {
+        const matched = c.stores.find(s => s.code === storeCodeParam || s.id === storeCodeParam);
+        if (matched) setActiveStoreName(matched.name);
+        else setActiveStoreName(storeCodeParam);
+      }
+
       setStep("register");
     });
     return () => { cancelled = true; };
@@ -84,6 +98,8 @@ export default function Home() {
           name: participant.name, phone: participant.phone, email: participant.email,
           campaignId: campaign.id, prizeId: prize.id, prizeLabel: prize.label,
           voucherCode: code, won: !prize.isLosing, createdAt: Date.now(),
+          storeCode: activeStoreCode || undefined,
+          storeName: activeStoreName || undefined,
         });
       } catch (err) { console.error("Failed to record participant", err); }
     }

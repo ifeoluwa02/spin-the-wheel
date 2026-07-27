@@ -17,6 +17,11 @@ export const DEMO_CAMPAIGNS: Campaign[] = [
     oneSpinPerPhone: true,
     active: true,
     adminPin: "1234",
+    stores: [
+      { id: "store-1", name: "Shoprite Ikeja City Mall", code: "shoprite-ikeja", pin: "1234", city: "Lagos" },
+      { id: "store-2", name: "SPAR Mall Lekki", code: "spar-lekki", pin: "1234", city: "Lagos" },
+      { id: "store-3", name: "BA - Mary Johnson (Activation Lead)", code: "ba-mary", pin: "1234", city: "Abuja" },
+    ],
     prizes: [
       { id: "sanitizer", label: "Dettol Sanitizer Pack", color: "#00BFA6", weight: 25, quantity: 50, claimedCount: 1 },
       { id: "tshirt", label: "Branded Polo T-shirt", color: "#FF6B35", weight: 15, quantity: 15, claimedCount: 1 },
@@ -84,6 +89,8 @@ export const DEMO_PARTICIPANTS: Omit<Participant, "id">[] = [
     voucherCode: "DETTOL-AK89X1",
     won: true,
     createdAt: Date.now() - 1000 * 60 * 12,
+    storeCode: "shoprite-ikeja",
+    storeName: "Shoprite Ikeja City Mall",
   },
   {
     name: "Chioma Okeke",
@@ -95,6 +102,8 @@ export const DEMO_PARTICIPANTS: Omit<Participant, "id">[] = [
     voucherCode: "DETTOL-CH44B9",
     won: true,
     createdAt: Date.now() - 1000 * 60 * 35,
+    storeCode: "spar-lekki",
+    storeName: "SPAR Mall Lekki",
   },
   {
     name: "Emeka Nwosu",
@@ -105,6 +114,8 @@ export const DEMO_PARTICIPANTS: Omit<Participant, "id">[] = [
     prizeLabel: "Try Again",
     won: false,
     createdAt: Date.now() - 1000 * 60 * 75,
+    storeCode: "ba-mary",
+    storeName: "BA - Mary Johnson (Activation Lead)",
   },
   {
     name: "Funke Adebayo",

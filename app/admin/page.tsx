@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Campaign, Participant, Prize } from "@/types";
+import type { Campaign, Participant, Prize, StoreLocation } from "@/types";
 import {
   getCampaign,
   updateCampaign,
@@ -13,11 +13,11 @@ import {
   Settings, Trophy, Users, BarChart3, Download, QrCode, Tv,
   Plus, Trash2, Lock, LogOut, Sparkles, CheckCircle, Dices,
   ExternalLink, Palette, Save, Activity, Target, Layers,
-  ChevronRight, Shield, X, Check,
+  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
-type Tab = "analytics" | "branding" | "prizes" | "export" | "luckydraw";
+type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw";
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -35,6 +35,38 @@ export default function AdminDashboard() {
   const [luckyWinner, setLuckyWinner] = useState<Participant | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [storeFilter, setStoreFilter] = useState("all");
+
+  // Store management state
+  const [newStoreName, setNewStoreName] = useState("");
+  const [newStoreCode, setNewStoreCode] = useState("");
+  const [newStoreCity, setNewStoreCity] = useState("");
+  const [newStorePin, setNewStorePin] = useState("1234");
+  const [selectedStoreForQr, setSelectedStoreForQr] = useState<StoreLocation | null>(null);
+
+  function handleAddStore(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newStoreName.trim()) return;
+    const code = newStoreCode.trim().toLowerCase().replace(/\s+/g, "-") || `store-${Date.now().toString(36)}`;
+    const newStore: StoreLocation = {
+      id: `store-${Date.now()}`,
+      name: newStoreName.trim(),
+      code,
+      city: newStoreCity.trim() || undefined,
+      pin: newStorePin.trim() || undefined,
+    };
+    const stores = [...(campaign.stores || []), newStore];
+    setCampaign({ ...campaign, stores });
+    setNewStoreName("");
+    setNewStoreCode("");
+    setNewStoreCity("");
+    setNewStorePin("1234");
+  }
+
+  function handleDeleteStore(storeId: string) {
+    const stores = (campaign.stores || []).filter(s => s.id !== storeId && s.code !== storeId);
+    setCampaign({ ...campaign, stores });
+  }
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -101,11 +133,12 @@ export default function AdminDashboard() {
   }
 
   function exportToCSV() {
-    const headers = ["Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Date & Time"];
+    const headers = ["Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Store / Location", "Date & Time"];
     const rows = participants.map(p => [
       `"${p.name}"`, `"${p.phone}"`, `"${p.email || ""}"`,
       `"${p.prizeLabel}"`, `"${p.voucherCode || ""}"`,
       p.won ? "Winner" : "Non-Winner",
+      `"${p.storeName || p.storeCode || "General Stage"}"`,
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
     const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
@@ -230,7 +263,8 @@ export default function AdminDashboard() {
   const tabs: { id: Tab; label: string; icon: any }[] = [
     { id: "analytics", label: "Analytics", icon: Activity },
     { id: "branding", label: "Brand & Theme", icon: Palette },
-    { id: "prizes", label: "Prizes", icon: Trophy },
+    { id: "prizes", label: "Prizes & Stock", icon: Trophy },
+    { id: "stores", label: "Stores & BAs", icon: Store },
     { id: "export", label: "Participants", icon: Users },
     { id: "luckydraw", label: "Lucky Draw", icon: Sparkles },
   ];
@@ -592,16 +626,200 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {/* ── Stores & Brand Ambassadors Tab ── */}
+        {activeTab === "stores" && (
+          <div className="space-y-6">
+            {/* Create Store Account Card */}
+            <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="border-b border-white/10 pb-3">
+                <h3 className="font-black text-white text-sm flex items-center gap-2" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  <Store className="w-4 h-4 text-teal-400" />
+                  Add Store / Brand Ambassador Account
+                </h3>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  Create dedicated accounts for retail stores, activation leads, or BAs. Each account generates a distinct TV link & QR code for attendee tracking.
+                </p>
+              </div>
+
+              <form onSubmit={handleAddStore} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Store / BA Name *</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Shoprite Ikeja"
+                    value={newStoreName}
+                    onChange={e => setNewStoreName(e.target.value)}
+                    required
+                    className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Unique Code</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. shoprite-ikeja"
+                    value={newStoreCode}
+                    onChange={e => setNewStoreCode(e.target.value)}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white font-mono outline-none"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>City / Location</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Lagos"
+                    value={newStoreCity}
+                    onChange={e => setNewStoreCity(e.target.value)}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>Access PIN</label>
+                  <input
+                    type="text"
+                    placeholder="1234"
+                    value={newStorePin}
+                    onChange={e => setNewStorePin(e.target.value)}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white font-mono text-center outline-none"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={!newStoreName.trim()}
+                  className="w-full py-2.5 rounded-xl text-xs font-black text-white flex items-center justify-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-40 shadow-md"
+                  style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", fontFamily: "Rubik, sans-serif" }}
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Store Account
+                </button>
+              </form>
+            </div>
+
+            {/* Store Directory Grid */}
+            <div className="rounded-2xl p-6 space-y-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  Active Stores & Brand Ambassadors ({(campaign.stores || []).length})
+                </h3>
+                <span className="text-xs text-white/40 font-semibold">Real-time Activation Performance</span>
+              </div>
+
+              {!campaign.stores?.length ? (
+                <div className="text-center py-12 space-y-2">
+                  <p className="text-3xl">🏪</p>
+                  <p className="text-sm font-bold text-white">No store or BA accounts created yet.</p>
+                  <p className="text-xs text-white/40">Use the form above to add retail locations or Brand Ambassadors.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {campaign.stores.map((s) => {
+                    const storeSpins = participants.filter(p => p.storeCode === s.code || p.storeCode === s.id);
+                    const storeWinners = storeSpins.filter(p => p.won).length;
+                    const storeWinRate = storeSpins.length ? Math.round((storeWinners / storeSpins.length) * 100) : 0;
+                    const storeTvUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/tv?c=${campaignSlug}&store=${s.code}`;
+                    const storeWheelUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${s.code}`;
+
+                    return (
+                      <div key={s.id || s.code} className="rounded-2xl p-5 space-y-4 bg-white/[0.03] border border-white/10 relative group hover:border-teal-500/40 transition-all">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-300 flex-shrink-0">
+                              <MapPin className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
+                                {s.name}
+                              </h4>
+                              <p className="text-xs font-mono text-teal-400 mt-0.5 truncate">
+                                Code: {s.code} {s.city ? `· ${s.city}` : ""}
+                              </p>
+                            </div>
+                          </div>
+                          <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all" title="Delete Store">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Stats Row */}
+                        <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-xl bg-black/40 border border-white/5 text-center">
+                          <div>
+                            <p className="text-base font-black font-mono text-white">{storeSpins.length}</p>
+                            <p className="text-[9px] uppercase font-bold text-white/40">Spins</p>
+                          </div>
+                          <div>
+                            <p className="text-base font-black font-mono text-emerald-400">{storeWinners}</p>
+                            <p className="text-[9px] uppercase font-bold text-white/40">Winners</p>
+                          </div>
+                          <div>
+                            <p className="text-base font-black font-mono text-orange-400">{storeWinRate}%</p>
+                            <p className="text-[9px] uppercase font-bold text-white/40">Win Rate</p>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            onClick={() => {
+                              setSelectedStoreForQr(s);
+                              setShowQrModal(true);
+                            }}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-white/5 border border-white/10 hover:bg-white/10 text-white transition-all"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-teal-400" />
+                            <span>Dedicated QR</span>
+                          </button>
+
+                          <Link
+                            href={`/tv?c=${campaignSlug}&store=${s.code}`}
+                            target="_blank"
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-black text-white transition-all hover:opacity-90 shadow-sm"
+                            style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)" }}
+                          >
+                            <Tv className="w-3.5 h-3.5" />
+                            <span>Launch TV</span>
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── Participants Tab ── */}
         {activeTab === "export" && (
           <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div>
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Participant Registrations · {participants.length}</h3>
-                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Real-time activation entries — export to CSV.</p>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Real-time activation entries with store & BA attribution — export to CSV.</p>
               </div>
-              <div className="flex items-center gap-2">
-                <input type="text" placeholder="Search…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+              <div className="flex flex-wrap items-center gap-2">
+                {campaign.stores && campaign.stores.length > 0 && (
+                  <select
+                    value={storeFilter}
+                    onChange={e => setStoreFilter(e.target.value)}
+                    className="rounded-xl px-3 py-2 text-xs text-white bg-black/40 border border-white/10 outline-none font-bold"
+                  >
+                    <option value="all" className="bg-slate-900">All Locations / BAs</option>
+                    {campaign.stores.map((s) => (
+                      <option key={s.id || s.code} value={s.code} className="bg-slate-900">
+                        📍 {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input type="text" placeholder="Search name/phone…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                   className="rounded-xl px-4 py-2 text-xs text-white outline-none w-44"
                   style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }} />
                 <button onClick={exportToCSV} disabled={!participants.length}
@@ -615,15 +833,15 @@ export default function AdminDashboard() {
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
                 <thead>
                   <tr>
-                    {["Name", "Phone", "Email", "Prize", "Voucher", "Time"].map(h => (
+                    {["Name", "Phone", "Email", "Prize", "Voucher", "Store / BA", "Time"].map(h => (
                       <th key={h} className="pb-3 px-2 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={6} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
-                  ) : filtered.map((p, i) => (
+                    <tr><td colSpan={7} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
+                  ) : filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s=>s.code===storeFilter)?.id).map((p, i) => (
                     <tr key={p.id || i} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td className="py-3 px-2 font-bold text-white">{p.name}</td>
                       <td className="py-3 px-2 font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{p.phone}</td>
@@ -634,6 +852,11 @@ export default function AdminDashboard() {
                         </span>
                       </td>
                       <td className="py-3 px-2 font-mono" style={{ color: "#00BFA6" }}>{p.voucherCode || "—"}</td>
+                      <td className="py-3 px-2">
+                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-white/5 border border-white/10 text-teal-300">
+                          {p.storeName || p.storeCode || "General Stage"}
+                        </span>
+                      </td>
                       <td className="py-3 px-2" style={{ color: "rgba(255,255,255,0.3)" }}>
                         {new Date(p.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </td>
@@ -678,14 +901,39 @@ export default function AdminDashboard() {
 
       {/* ── QR Modal ── */}
       {showQrModal && (
-        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(12px)" }} onClick={() => setShowQrModal(false)}>
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(0,0,0,0.8)", backdropFilter: "blur(12px)" }} onClick={() => { setShowQrModal(false); setSelectedStoreForQr(null); }}>
           <div className="rounded-3xl p-8 max-w-sm w-full text-center space-y-5" style={{ background: "#0f1823", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 32px 80px rgba(0,0,0,0.6)" }} onClick={e => e.stopPropagation()}>
-            <h3 className="text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Scan to Spin</h3>
-            <div className="bg-white p-5 rounded-2xl mx-auto w-fit shadow-inner">
-              <QRCodeSVG value={qrUrl} size={200} />
+            <div>
+              <h3 className="text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                {selectedStoreForQr ? selectedStoreForQr.name : "Scan to Spin"}
+              </h3>
+              {selectedStoreForQr && (
+                <p className="text-xs font-mono text-teal-400 mt-1">
+                  Store Tracking Code: {selectedStoreForQr.code}
+                </p>
+              )}
             </div>
-            <p className="text-xs font-mono break-all" style={{ color: "rgba(255,255,255,0.3)" }}>{qrUrl}</p>
-            <button onClick={() => setShowQrModal(false)} className="w-full py-3 rounded-xl text-sm font-bold transition-all" style={{ background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.08)" }}>Close</button>
+            <div className="bg-white p-5 rounded-2xl mx-auto w-fit shadow-inner">
+              <QRCodeSVG
+                value={
+                  selectedStoreForQr
+                    ? `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${selectedStoreForQr.code}`
+                    : qrUrl
+                }
+                size={200}
+              />
+            </div>
+            <p className="text-xs font-mono break-all text-white/30">
+              {selectedStoreForQr
+                ? `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${selectedStoreForQr.code}`
+                : qrUrl}
+            </p>
+            <button
+              onClick={() => { setShowQrModal(false); setSelectedStoreForQr(null); }}
+              className="w-full py-3 rounded-xl text-xs font-bold text-white/60 hover:text-white bg-white/5 border border-white/10"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}

@@ -14,6 +14,14 @@ export interface Prize {
   claimedCount?: number;
 }
 
+export interface StoreLocation {
+  id: string;
+  name: string; // e.g. "Shoprite Ikeja" or "BA - Mary Johnson"
+  code: string; // e.g. "shoprite-ikeja" or "ba-mary"
+  pin?: string; // Optional access PIN for this store/BA
+  city?: string;
+}
+
 export interface Campaign {
   id: string;
   name: string;
@@ -29,6 +37,7 @@ export interface Campaign {
   oneSpinPerPhone: boolean;
   active: boolean;
   adminPin?: string; // Default secret pin, e.g. "1234" or "8888"
+  stores?: StoreLocation[]; // Field activation locations / Brand Ambassador accounts
 }
 
 export interface Participant {
@@ -42,5 +51,7 @@ export interface Participant {
   voucherCode?: string;
   won: boolean;
   createdAt: number;
+  storeCode?: string; // Track which Store or BA generated the spin
+  storeName?: string; // Display name of the Store or BA
 }
 
