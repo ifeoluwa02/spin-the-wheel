@@ -19,6 +19,10 @@ import {
   Trophy,
   Zap,
   Check,
+  Lock,
+  ShieldAlert,
+  ChevronRight,
+  X,
 } from "lucide-react";
 
 const STEPS = [
@@ -58,10 +62,29 @@ export default function CreateCampaignWizard() {
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") setBaseUrl(window.location.origin);
+    if (typeof window !== "undefined") {
+      setBaseUrl(window.location.origin);
+      if (sessionStorage.getItem("super_admin_authed") === "true") {
+        setAuthenticated(true);
+      }
+    }
   }, []);
+
+  function handleAuthLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (pinInput === "9999") {
+      setAuthenticated(true);
+      sessionStorage.setItem("super_admin_authed", "true");
+      setPinError(false);
+    } else {
+      setPinError(true);
+    }
+  }
 
   useEffect(() => {
     if (campaignTitle && !slugEdited) {
@@ -69,6 +92,66 @@ export default function CreateCampaignWizard() {
       setCampaignSlug(generated);
     }
   }, [campaignTitle, slugEdited]);
+
+  // ── SUPER ADMIN LOGIN GATE ──
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-[#070d14] text-white" style={{ fontFamily: "Nunito, sans-serif" }}>
+        {/* Dynamic Blobs */}
+        <div className="absolute top-1/4 left-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#FF6B35" }} />
+        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#00BFA6" }} />
+
+        <form onSubmit={handleAuthLogin} className="relative w-full max-w-md">
+          <div className="rounded-3xl p-8 space-y-7 bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-2xl">
+            {/* Header */}
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl" style={{ background: "linear-gradient(135deg, #F59E0B, #D97706)" }}>
+                <ShieldAlert className="w-8 h-8 text-white" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Super Admin Access</h2>
+                <p className="text-xs text-amber-400 font-bold uppercase tracking-wider mt-1">Master Portal Authorization Required</p>
+                <p className="text-xs text-white/50 mt-1">Only authorized Master Agency Admins can create new campaigns.</p>
+              </div>
+            </div>
+
+            {/* PIN Input */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-white/50">Master Super Admin PIN</label>
+              <input
+                type="password"
+                value={pinInput}
+                onChange={e => { setPinInput(e.target.value); setPinError(false); }}
+                placeholder="• • • •"
+                maxLength={6}
+                required
+                className="w-full rounded-2xl px-4 py-3.5 text-center text-2xl font-mono tracking-[0.4em] bg-black/40 border border-white/10 text-white outline-none focus:border-amber-500 transition-all"
+              />
+              {pinError && (
+                <p className="flex items-center gap-1 text-xs font-bold text-red-400 justify-center">
+                  <X className="w-3.5 h-3.5" /> Incorrect Master PIN (Default: 9999).
+                </p>
+              )}
+            </div>
+
+            {/* Buttons */}
+            <button
+              type="submit"
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] shadow-lg"
+              style={{ background: "linear-gradient(135deg, #F59E0B, #D97706)", fontFamily: "Rubik, sans-serif" }}
+            >
+              <span>Unlock Campaign Creator</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center justify-center gap-4 text-xs font-semibold text-white/40">
+              <Link href="/super-admin" className="hover:text-white transition-colors">Master Admin Portal →</Link>
+            </div>
+          </div>
+        </form>
+      </div>
+    );
+  }
 
   function handleUpdatePrize(index: number, field: keyof Prize, value: any) {
     const updated = [...prizes];
