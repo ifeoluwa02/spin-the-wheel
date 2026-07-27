@@ -8,6 +8,7 @@
     "prebuild": "rm -rf .next",
     "build": "./node_modules/.bin/next build",
     "start": "./node_modules/.bin/next start",
+    "presentation": "rm -rf .next && ./node_modules/.bin/next build && ./node_modules/.bin/next start",
     "lint": "./node_modules/.bin/next lint",
     "clean": "rm -rf .next"
   },
