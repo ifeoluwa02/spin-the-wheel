@@ -524,16 +524,37 @@ export default function CreateCampaignWizard() {
                           min="0"
                           value={prize.weight}
                           onChange={(e) => handleUpdatePrize(idx, "weight", Math.max(0, parseInt(e.target.value) || 0))}
-                          className="w-16 rounded-xl px-2 py-2 text-sm text-center font-mono outline-none"
+                          className="w-14 rounded-xl px-2 py-2 text-xs text-center font-mono outline-none"
                           style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)", color: "white" }}
                         />
                         <div
-                          className="w-12 text-center rounded-lg py-1.5 text-xs font-black font-mono"
+                          className="px-2 py-1 text-center rounded-lg text-xs font-black font-mono"
                           style={{ background: `${prize.color}20`, color: prize.color, border: `1px solid ${prize.color}30` }}
                         >
                           {pct}%
                         </div>
                       </div>
+
+                      {/* Stock Quantity Pool Input */}
+                      {!prize.isLosing ? (
+                        <div className="flex items-center gap-1.5 bg-white/[0.04] px-2.5 py-1.5 rounded-xl border border-white/5" title="Total Gift Quantity Pool (leave empty for unlimited)">
+                          <span className="text-[11px] font-bold uppercase" style={{ color: "rgba(255,255,255,0.35)" }}>Qty</span>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="∞"
+                            value={prize.quantity !== undefined && prize.quantity !== null ? prize.quantity : ""}
+                            onChange={(e) => {
+                              const val = e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0);
+                              handleUpdatePrize(idx, "quantity", val);
+                            }}
+                            className="w-16 rounded-lg px-2 py-1 text-xs text-white text-center font-mono outline-none"
+                            style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.1)" }}
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-xs font-bold text-white/30 px-2">No Limit</span>
+                      )}
 
                       <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-2 rounded-xl" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
                         <input

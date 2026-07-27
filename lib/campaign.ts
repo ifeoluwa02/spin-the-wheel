@@ -126,8 +126,34 @@ export async function hasAlreadySpun(campaignId: string, phone: string): Promise
   return false;
 }
 
-/** Records a participant's spin result. */
+/** Increments claimedCount for a prize when won */
+export async function incrementPrizeClaimed(campaignId: string, prizeId: string): Promise<void> {
+  try {
+    const campaign = await getCampaign(campaignId);
+    if (!campaign || !campaign.prizes) return;
+    let updated = false;
+    const prizes = campaign.prizes.map((p) => {
+      if (p.id === prizeId) {
+        updated = true;
+        return { ...p, claimedCount: (p.claimedCount || 0) + 1 };
+      }
+      return p;
+    });
+    if (updated) {
+      await updateCampaign({ ...campaign, prizes });
+    }
+  } catch (err) {
+    console.warn("Failed to increment prize claimed count:", err);
+  }
+}
+
+/** Records a participant's spin result and updates inventory pool. */
 export async function recordParticipant(participant: Participant): Promise<string> {
+  // If the participant won a prize, deduct 1 from available stock pool
+  if (participant.won && participant.prizeId) {
+    incrementPrizeClaimed(participant.campaignId, participant.prizeId).catch(() => {});
+  }
+
   // Always save to local storage as backup
   if (typeof window !== "undefined") {
     const key = `${LOCAL_STORAGE_KEY_PARTICIPANTS}_${participant.campaignId}`;

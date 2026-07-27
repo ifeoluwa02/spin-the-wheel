@@ -343,22 +343,32 @@ export default function AdminDashboard() {
         {activeTab === "analytics" && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Prize Distribution</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Prize Distribution & Inventory</h3>
+                <span className="text-xs font-bold text-white/40">Claimed / Stock</span>
+              </div>
               <div className="space-y-4">
                 {campaign.prizes.map(prize => {
-                  const count = participants.filter(p => p.prizeId === prize.id).length;
+                  const count = participants.filter(p => p.prizeId === prize.id).length || prize.claimedCount || 0;
                   const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
+                  const hasLimit = prize.quantity !== undefined && prize.quantity !== null && prize.quantity >= 0;
+                  const remaining = hasLimit ? Math.max(0, prize.quantity! - count) : Infinity;
+                  const isOut = !prize.isLosing && hasLimit && remaining <= 0;
+
                   return (
                     <div key={prize.id} className="space-y-1.5">
-                      <div className="flex justify-between text-xs font-bold">
-                        <span className="flex items-center gap-2" style={{ color: "rgba(255,255,255,0.75)" }}>
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="flex items-center gap-2 truncate" style={{ color: "rgba(255,255,255,0.8)" }}>
                           <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
-                          {prize.label}
+                          <span className="truncate">{prize.label}</span>
+                          {isOut && <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded border border-red-500/30 font-mono uppercase">OUT</span>}
                         </span>
-                        <span style={{ color: "rgba(255,255,255,0.4)" }}>{count} · {pct}%</span>
+                        <span className="font-mono text-xs flex-shrink-0" style={{ color: "rgba(255,255,255,0.4)" }}>
+                          {count} {hasLimit ? `/ ${prize.quantity}` : ""} {hasLimit ? `(${remaining} left)` : "claimed"}
+                        </span>
                       </div>
                       <div className="w-full h-2 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)" }}>
-                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.max(pct, 2)}%`, background: prize.color, boxShadow: `0 0 6px ${prize.color}60` }} />
+                        <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.max(pct, 2)}%`, background: isOut ? "#ef4444" : prize.color, boxShadow: `0 0 6px ${isOut ? "#ef4444" : prize.color}60` }} />
                       </div>
                     </div>
                   );
@@ -485,39 +495,92 @@ export default function AdminDashboard() {
           <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div>
-                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Wheel Segments · {campaign.prizes.length}</h3>
-                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Weights determine the relative win probability.</p>
+                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Wheel Segments & Gift Inventory Pool · {campaign.prizes.length}</h3>
+                <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Set probability weights and initial gift stock limits. Items automatically stop winning when out of stock.</p>
               </div>
               <button onClick={handleAddPrize} className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black text-white transition-all hover:opacity-90" style={{ background: "linear-gradient(135deg, #FF6B35, #e0531f)", boxShadow: "0 4px 12px rgba(255,107,53,0.3)" }}>
                 <Plus className="w-3.5 h-3.5" /> Add Segment
               </button>
             </div>
-            <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
+            <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
               {campaign.prizes.map((prize, idx) => {
                 const prob = totalWeight > 0 ? Math.round((Math.max(prize.weight, 0) / totalWeight) * 100) : 0;
+                const wonCount = participants.filter(p => p.prizeId === prize.id).length || prize.claimedCount || 0;
+                const hasLimit = prize.quantity !== undefined && prize.quantity !== null && prize.quantity >= 0;
+                const remaining = hasLimit ? Math.max(0, prize.quantity! - wonCount) : Infinity;
+                const isOutOfStock = !prize.isLosing && hasLimit && remaining <= 0;
+
                 return (
-                  <div key={prize.id || idx} className="rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                    <div className="flex items-center gap-3 w-full md:w-auto">
+                  <div key={prize.id || idx} className={`rounded-xl p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 transition-all ${isOutOfStock ? "opacity-75 bg-red-950/20 border-red-500/30" : "bg-white/[0.03] border-white/5"}`} style={{ border: isOutOfStock ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(255,255,255,0.06)" }}>
+                    {/* Left: Color + Label */}
+                    <div className="flex items-center gap-3 w-full xl:w-auto">
                       <span className="text-xs font-mono w-5 text-center" style={{ color: "rgba(255,255,255,0.2)" }}>{idx + 1}</span>
                       <input type="color" value={prize.color} onChange={e => handleUpdatePrize(idx, "color", e.target.value)} className="w-8 h-8 rounded-lg cursor-pointer border-0 flex-shrink-0" style={{ background: "transparent" }} />
                       <input type="text" value={prize.label} onChange={e => handleUpdatePrize(idx, "label", e.target.value)} placeholder="Prize label"
-                        className="flex-1 md:w-48 rounded-lg px-3 py-2 text-sm font-bold text-white outline-none"
+                        className="flex-1 xl:w-44 rounded-lg px-3 py-2 text-sm font-bold text-white outline-none"
                         style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)" }} />
                     </div>
-                    <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-                      <div className="flex items-center gap-2">
+
+                    {/* Middle: Weight + Probability */}
+                    <div className="flex items-center gap-3 flex-wrap w-full xl:w-auto justify-between xl:justify-end">
+                      <div className="flex items-center gap-1.5" title="Relative Probability Weight">
                         <span className="text-xs font-bold" style={{ color: "rgba(255,255,255,0.3)" }}>Wt.</span>
                         <input type="number" min="0" value={prize.weight} onChange={e => handleUpdatePrize(idx, "weight", Math.max(0, parseInt(e.target.value) || 0))}
-                          className="w-16 rounded-lg px-2 py-2 text-sm text-white text-center font-mono outline-none"
+                          className="w-14 rounded-lg px-2 py-1.5 text-xs text-white text-center font-mono outline-none"
                           style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.06)" }} />
-                        <div className="w-12 text-center rounded-lg py-1.5 text-xs font-black font-mono" style={{ background: `${prize.color}20`, color: prize.color, border: `1px solid ${prize.color}30` }}>
+                        <div className="px-2 py-1 rounded-lg text-xs font-black font-mono" style={{ background: `${prize.color}20`, color: prize.color, border: `1px solid ${prize.color}30` }}>
                           {prob}%
                         </div>
                       </div>
-                      <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-2 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+
+                      {/* Gift Stock Pool Controls */}
+                      {!prize.isLosing ? (
+                        <div className="flex items-center gap-2 bg-white/[0.04] p-1.5 rounded-lg border border-white/5">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[11px] font-bold uppercase" style={{ color: "rgba(255,255,255,0.35)" }}>Stock Limit</span>
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="∞"
+                              value={prize.quantity !== undefined && prize.quantity !== null ? prize.quantity : ""}
+                              onChange={e => {
+                                const val = e.target.value === "" ? undefined : Math.max(0, parseInt(e.target.value) || 0);
+                                handleUpdatePrize(idx, "quantity", val);
+                              }}
+                              className="w-16 rounded-md px-2 py-1 text-xs text-white text-center font-mono outline-none"
+                              style={{ background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.1)" }}
+                              title="Leave empty for unlimited stock"
+                            />
+                          </div>
+
+                          <div className="h-4 w-px bg-white/10" />
+
+                          {/* Inventory Badges */}
+                          <div className="flex items-center gap-1.5 text-xs font-bold font-mono">
+                            <span className="text-emerald-400">{wonCount} won</span>
+                            <span className="text-white/20">/</span>
+                            {isOutOfStock ? (
+                              <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] uppercase tracking-wider animate-pulse">
+                                Out of Stock
+                              </span>
+                            ) : (
+                              <span className="text-teal-300">
+                                {hasLimit ? `${remaining} left` : "∞ stock"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-xs font-bold text-white/30 px-3">No stock limit (Loss)</span>
+                      )}
+
+                      {/* Loss Checkbox */}
+                      <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
                         <input type="checkbox" checked={!!prize.isLosing} onChange={e => handleUpdatePrize(idx, "isLosing", e.target.checked)} className="w-3.5 h-3.5 accent-red-500 cursor-pointer" />
                         <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>Loss</span>
                       </label>
+
+                      {/* Delete */}
                       <button onClick={() => handleDeletePrize(idx)} className="p-2 rounded-lg transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.2)" }}>
                         <Trash2 className="w-4 h-4" />
                       </button>

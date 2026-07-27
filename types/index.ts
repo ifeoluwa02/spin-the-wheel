@@ -8,6 +8,10 @@ export interface Prize {
   isLosing?: boolean;
   /** Custom voucher prefix or custom message (optional) */
   voucherPrefix?: string;
+  /** Total gift inventory pool allocated for this item (undefined/null = unlimited) */
+  quantity?: number;
+  /** Number of times this prize item has been won and claimed so far */
+  claimedCount?: number;
 }
 
 export interface Campaign {

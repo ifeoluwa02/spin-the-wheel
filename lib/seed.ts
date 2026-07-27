@@ -18,12 +18,12 @@ export const DEMO_CAMPAIGNS: Campaign[] = [
     active: true,
     adminPin: "1234",
     prizes: [
-      { id: "sanitizer", label: "Dettol Sanitizer Pack", color: "#00BFA6", weight: 25 },
-      { id: "tshirt", label: "Branded Polo T-shirt", color: "#FF6B35", weight: 15 },
-      { id: "soap-pack", label: "6-in-1 Soap Bundle", color: "#00BFA6", weight: 20 },
-      { id: "towel", label: "Luxury Microfiber Towel", color: "#FF6B35", weight: 10 },
+      { id: "sanitizer", label: "Dettol Sanitizer Pack", color: "#00BFA6", weight: 25, quantity: 50, claimedCount: 1 },
+      { id: "tshirt", label: "Branded Polo T-shirt", color: "#FF6B35", weight: 15, quantity: 15, claimedCount: 1 },
+      { id: "soap-pack", label: "6-in-1 Soap Bundle", color: "#00BFA6", weight: 20, quantity: 30, claimedCount: 1 },
+      { id: "towel", label: "Luxury Microfiber Towel", color: "#FF6B35", weight: 10, quantity: 10, claimedCount: 0 },
       { id: "try-again", label: "Try Again", color: "#1E293B", weight: 25, isLosing: true },
-      { id: "grand-hamper", label: "Grand Hygiene Hamper", color: "#F59E0B", weight: 5 },
+      { id: "grand-hamper", label: "Grand Hygiene Hamper", color: "#F59E0B", weight: 5, quantity: 2, claimedCount: 0 },
     ],
   },
   {
@@ -41,11 +41,11 @@ export const DEMO_CAMPAIGNS: Campaign[] = [
     active: true,
     adminPin: "1234",
     prizes: [
-      { id: "cereal-pack", label: "1kg Golden Morn Pack", color: "#FF6B35", weight: 30 },
-      { id: "cereal-bowl", label: "Custom Breakfast Bowl", color: "#F59E0B", weight: 20 },
-      { id: "milk-voucher", label: "N2,000 Milk Voucher", color: "#00BFA6", weight: 15 },
+      { id: "cereal-pack", label: "1kg Golden Morn Pack", color: "#FF6B35", weight: 30, quantity: 40, claimedCount: 1 },
+      { id: "cereal-bowl", label: "Custom Breakfast Bowl", color: "#F59E0B", weight: 20, quantity: 20, claimedCount: 1 },
+      { id: "milk-voucher", label: "N2,000 Milk Voucher", color: "#00BFA6", weight: 15, quantity: 15, claimedCount: 0 },
       { id: "try-again", label: "Better Luck Next Time", color: "#1E293B", weight: 25, isLosing: true },
-      { id: "backpack", label: "School Backpack", color: "#FF6B35", weight: 10 },
+      { id: "backpack", label: "School Backpack", color: "#FF6B35", weight: 10, quantity: 5, claimedCount: 0 },
     ],
   },
   {
