@@ -78,12 +78,19 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  // Fetch campaign configuration immediately so adminPin is ready
   useEffect(() => {
-    if (!authenticated) return;
+    if (!campaignSlug) return;
+    getCampaign(campaignSlug).then((c) => {
+      setCampaign(c);
+    });
+  }, [campaignSlug]);
+
+  // Load participants once authenticated
+  useEffect(() => {
+    if (!authenticated || !campaignSlug) return;
     async function load() {
       setLoading(true);
-      const c = await getCampaign(campaignSlug);
-      setCampaign(c);
       const p = await getParticipants(campaignSlug);
       setParticipants(p);
       setLoading(false);
@@ -93,7 +100,8 @@ export default function AdminDashboard() {
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (pinInput === (campaign.adminPin || "1234") || pinInput === "1234" || pinInput === "8888") {
+    const expectedPin = campaign.adminPin || "1234";
+    if (pinInput === expectedPin || pinInput === "8888") {
       setAuthenticated(true);
       sessionStorage.setItem("admin_authed", "true");
       setPinError(false);
