@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, FormEvent } from "react";
+import { User, Phone, Mail, ArrowRight, AlertCircle, Loader2 } from "lucide-react";
 
 export interface RegistrationValues {
   name: string;
@@ -16,8 +17,7 @@ interface RegistrationFormProps {
 }
 
 function isValidPhone(phone: string): boolean {
-  const digits = phone.replace(/\D/g, "");
-  return digits.length >= 7;
+  return phone.replace(/\D/g, "").length >= 7;
 }
 
 export default function RegistrationForm({
@@ -39,67 +39,117 @@ export default function RegistrationForm({
     e.preventDefault();
     setTouched(true);
     if (!canSubmit) return;
-    onSubmit({
-      name: name.trim(),
-      phone: phone.trim(),
-      email: email.trim() || undefined,
-    });
+    onSubmit({ name: name.trim(), phone: phone.trim(), email: email.trim() || undefined });
   }
 
+  const fields = [
+    {
+      id: "name",
+      label: "Full Name",
+      type: "text",
+      value: name,
+      onChange: setName,
+      placeholder: "e.g. Akin Omisakin",
+      autoComplete: "name",
+      icon: User,
+      error: touched && !nameValid ? "Please enter your full name." : null,
+      required: true,
+    },
+    {
+      id: "phone",
+      label: "Phone Number",
+      type: "tel",
+      value: phone,
+      onChange: setPhone,
+      placeholder: "080 1234 5678",
+      autoComplete: "tel",
+      icon: Phone,
+      error: touched && !phoneValid ? "Please enter a valid phone number." : null,
+      required: true,
+    },
+    {
+      id: "email",
+      label: "Email Address",
+      sublabel: "optional",
+      type: "email",
+      value: email,
+      onChange: setEmail,
+      placeholder: "you@example.com",
+      autoComplete: "email",
+      icon: Mail,
+      error: null,
+      required: false,
+    },
+  ];
+
   return (
-    <form className="reg-form" onSubmit={handleSubmit} noValidate>
-      <label className="field">
-        <span>Full Name</span>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g. Akin Omisakin"
-          autoComplete="name"
-          required
-        />
-        {touched && !nameValid && (
-          <small className="field-error">Please enter your full name.</small>
-        )}
-      </label>
+    <form onSubmit={handleSubmit} noValidate className="w-full space-y-4">
+      {fields.map(({ id, label, sublabel, type, value, onChange, placeholder, autoComplete, icon: Icon, error: fieldError, required }) => (
+        <div key={id} className="space-y-1.5">
+          <label htmlFor={id} className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.45)" }}>
+            {label}
+            {sublabel && <span className="text-[10px] font-medium normal-case tracking-normal lowercase" style={{ color: "rgba(255,255,255,0.25)" }}>({sublabel})</span>}
+          </label>
+          <div className="relative">
+            <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: fieldError ? "rgba(248,113,113,0.7)" : "rgba(255,255,255,0.25)" }}>
+              <Icon className="w-4 h-4" />
+            </div>
+            <input
+              id={id}
+              type={type}
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              placeholder={placeholder}
+              autoComplete={autoComplete}
+              required={required}
+              className="w-full pl-10 pr-4 py-3.5 rounded-xl text-sm text-white placeholder:text-white/20 outline-none transition-all"
+              style={{
+                background: "rgba(255,255,255,0.06)",
+                border: fieldError
+                  ? "1.5px solid rgba(248,113,113,0.5)"
+                  : "1.5px solid rgba(255,255,255,0.08)",
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = `${accentColor}80`; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
+              onBlur={e => { e.currentTarget.style.borderColor = fieldError ? "rgba(248,113,113,0.5)" : "rgba(255,255,255,0.08)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+            />
+          </div>
+          {fieldError && (
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              {fieldError}
+            </p>
+          )}
+        </div>
+      ))}
 
-      <label className="field">
-        <span>Phone Number</span>
-        <input
-          type="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="080 1234 5678"
-          autoComplete="tel"
-          required
-        />
-        {touched && !phoneValid && (
-          <small className="field-error">Please enter a valid phone number.</small>
-        )}
-      </label>
-
-      <label className="field">
-        <span>
-          Email Address <em>(optional)</em>
-        </span>
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@example.com"
-          autoComplete="email"
-        />
-      </label>
-
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold text-red-400" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
 
       <button
         type="submit"
-        className="btn-primary"
-        style={{ background: accentColor || "#0E7C7B" }}
         disabled={!canSubmit}
+        className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl font-black text-white text-base transition-all disabled:opacity-40 hover:opacity-90 active:scale-[0.98] group"
+        style={{
+          background: `linear-gradient(135deg, ${accentColor}, ${accentColor}bb)`,
+          boxShadow: `0 8px 24px ${accentColor}40`,
+          fontFamily: "Rubik, sans-serif",
+        }}
       >
-        {submitting ? "Checking eligibility…" : "Continue to Spin"}
+        {submitting ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            Checking eligibility…
+          </>
+        ) : (
+          <>
+            Continue to Spin
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </>
+        )}
       </button>
     </form>
   );
