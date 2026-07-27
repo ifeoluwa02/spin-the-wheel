@@ -3,10 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "predev": "rm -rf .next",
     "dev": "./node_modules/.bin/next dev",
+    "prebuild": "rm -rf .next",
     "build": "./node_modules/.bin/next build",
     "start": "./node_modules/.bin/next start",
-    "lint": "./node_modules/.bin/next lint"
+    "lint": "./node_modules/.bin/next lint",
+    "clean": "rm -rf .next"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
