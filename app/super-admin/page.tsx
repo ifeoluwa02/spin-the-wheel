@@ -59,12 +59,16 @@ export default function SuperAdminDashboard() {
       const res = await seedFirebaseData();
       setSeedStatus(`Successfully seeded ${res.campaignsSeeded} campaigns & ${res.participantsSeeded} participants!`);
       await loadData();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setSeedStatus("Seeding error. Check console.");
+      if (err?.code === "permission-denied" || err?.message?.includes("PERMISSION_DENIED")) {
+        setSeedStatus("🚫 Firestore Rules Blocked Write. Update rules in Firebase Console!");
+      } else {
+        setSeedStatus("Seeding error. Check Firebase credentials in .env.local.");
+      }
     } finally {
       setSeeding(false);
-      setTimeout(() => setSeedStatus(null), 5000);
+      setTimeout(() => setSeedStatus(null), 8000);
     }
   }
 

@@ -187,6 +187,7 @@ export async function seedFirebaseData(): Promise<{ campaignsSeeded: number; par
       campaignsSeeded++;
     } catch (err) {
       console.error(`Failed to seed campaign ${campaign.id}:`, err);
+      throw err;
     }
   }
 
