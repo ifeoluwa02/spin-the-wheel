@@ -24,8 +24,11 @@ type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydra
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState(false);
+  const [emailInput, setEmailInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,11 +86,11 @@ export default function AdminDashboard() {
 
   const [clearing, setClearing] = useState(false);
 
-  // Fetch campaign configuration immediately so adminPin is ready
+  // Fetch campaign configuration immediately — used only before auth to display name
   useEffect(() => {
     if (!campaignSlug) return;
     getCampaign(campaignSlug).then((c) => {
-      setCampaign(c);
+      if (c) setCampaign(c);
     });
   }, [campaignSlug]);
 
@@ -122,15 +125,29 @@ export default function AdminDashboard() {
     }
   }
 
-  function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    const expectedPin = campaign.adminPin || "1234";
-    if (pinInput === expectedPin || pinInput === "8888") {
-      setAuthenticated(true);
-      sessionStorage.setItem("admin_authed", "true");
-      setPinError(false);
-    } else {
-      setPinError(true);
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const c = await getCampaign(campaignSlug);
+      if (!c) {
+        setLoginError("Campaign not found. Check the URL ?c= parameter.");
+        return;
+      }
+      const emailOk = emailInput.trim().toLowerCase() === (c.adminEmail || "").toLowerCase();
+      const passOk = passwordInput === c.adminPassword;
+      if (emailOk && passOk) {
+        setCampaign(c);
+        setAuthenticated(true);
+        sessionStorage.setItem("admin_authed", "true");
+      } else {
+        setLoginError("Incorrect email or password.");
+      }
+    } catch (err) {
+      setLoginError("Login failed. Check your Firebase connection.");
+    } finally {
+      setLoginLoading(false);
     }
   }
 
@@ -210,18 +227,16 @@ export default function AdminDashboard() {
         background: "radial-gradient(ellipse at 30% 20%, rgba(255,107,53,0.18) 0%, transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(0,191,166,0.18) 0%, transparent 50%), #0A1628",
         fontFamily: "Nunito, sans-serif",
       }}>
-        {/* Ambient blobs */}
         <div className="absolute top-1/4 left-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#FF6B35" }} />
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#00BFA6" }} />
 
         <form onSubmit={handleLogin} className="relative w-full max-w-md">
-          <div className="rounded-3xl p-8 space-y-8" style={{
+          <div className="rounded-3xl p-8 space-y-6" style={{
             background: "rgba(255,255,255,0.04)",
             backdropFilter: "blur(24px)",
             border: "1px solid rgba(255,255,255,0.1)",
             boxShadow: "0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08)",
           }}>
-            {/* Icon */}
             <div className="flex flex-col items-center gap-4 text-center">
               <div className="relative">
                 <div className="w-20 h-20 rounded-2xl flex items-center justify-center shadow-2xl" style={{ background: "linear-gradient(135deg, #FF6B35, #00BFA6)" }}>
@@ -232,53 +247,75 @@ export default function AdminDashboard() {
                 </div>
               </div>
               <div>
-                <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>
-                  Admin Portal
-                </h1>
-                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>
-                  Campaign management · Default PIN: 1234
-                </p>
+                <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>Admin Portal</h1>
+                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.4)" }}>Sign in with your campaign admin credentials.</p>
               </div>
             </div>
 
-            {/* PIN input */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>
-                Enter Admin PIN
-              </label>
-              <input
-                type="password"
-                value={pinInput}
-                onChange={e => setPinInput(e.target.value)}
-                placeholder="• • • •"
-                maxLength={8}
-                autoFocus
-                className="w-full rounded-xl px-5 py-4 text-center text-2xl tracking-[0.4em] text-white outline-none transition-all font-mono placeholder:opacity-20"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: pinError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)",
-                  boxShadow: pinError ? "0 0 0 3px rgba(239,68,68,0.15)" : "inset 0 2px 4px rgba(0,0,0,0.3)",
-                }}
-              />
-              {pinError && (
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400 justify-center">
-                  <X className="w-3.5 h-3.5" /> Incorrect PIN — please try again.
+            {!campaignSlug && (
+              <div className="rounded-xl px-4 py-3 text-xs font-semibold text-amber-400" style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)" }}>
+                ⚠️ No campaign selected. Add <code className="font-mono">?c=your-campaign-id</code> to the URL.
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>Admin Email</label>
+                <input
+                  type="email"
+                  value={emailInput}
+                  onChange={e => { setEmailInput(e.target.value); setLoginError(""); }}
+                  placeholder="admin@brand.com"
+                  required
+                  autoComplete="email"
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
+                  style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: loginError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)",
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={passwordInput}
+                    onChange={e => { setPasswordInput(e.target.value); setLoginError(""); }}
+                    placeholder="••••••••"
+                    required
+                    autoComplete="current-password"
+                    className="w-full rounded-xl px-4 py-3 pr-12 text-sm text-white outline-none transition-all"
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      border: loginError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)",
+                    }}
+                  />
+                  <button type="button" onClick={() => setShowPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold transition-colors"
+                    style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {showPassword ? "HIDE" : "SHOW"}
+                  </button>
+                </div>
+              </div>
+              {loginError && (
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400">
+                  <X className="w-3.5 h-3.5" /> {loginError}
                 </p>
               )}
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
-              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 group transition-all hover:opacity-90 active:scale-[0.98]"
+              disabled={loginLoading || !campaignSlug}
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 group transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
               style={{
                 background: "linear-gradient(135deg, #00BFA6, #0D9488)",
                 boxShadow: "0 8px 24px rgba(0,191,166,0.35)",
                 fontFamily: "Rubik, sans-serif",
               }}
             >
-              Unlock Dashboard
-              <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              {loginLoading ? "Verifying..." : <>Unlock Dashboard <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
             </button>
 
             <div className="flex items-center justify-center gap-4 text-xs font-semibold" style={{ color: "rgba(255,255,255,0.3)" }}>

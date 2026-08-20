@@ -36,8 +36,16 @@ export interface Campaign {
   prizes: Prize[];
   oneSpinPerPhone: boolean;
   active: boolean;
-  adminPin?: string; // Default secret pin, e.g. "1234" or "8888"
+  adminPin?: string;        // Legacy fallback — superseded by adminEmail + adminPassword
+  adminEmail?: string;     // Login email assigned to the brand admin by Super Admin
+  adminPassword?: string;  // Login password assigned to the brand admin by Super Admin
   stores?: StoreLocation[]; // Field activation locations / Brand Ambassador accounts
+}
+
+/** Stored in Firestore config/superAdmin — set once during first-run setup */
+export interface SuperAdminConfig {
+  email: string;
+  password: string;
 }
 
 export interface Participant {

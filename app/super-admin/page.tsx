@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Campaign, Participant } from "@/types";
-import { getAllCampaigns, getParticipants, updateCampaign, clearCampaignData } from "@/lib/campaign";
+import type { Campaign, Participant, SuperAdminConfig } from "@/types";
+import { getAllCampaigns, getParticipants, updateCampaign, clearCampaignData, getSuperAdminConfig, setSuperAdminConfig } from "@/lib/campaign";
 import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
@@ -12,17 +12,35 @@ import {
 
 export default function SuperAdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState(false);
+  // Login form state
+  const [emailInput, setEmailInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginLoading, setLoginLoading] = useState(false);
+  // First-run setup state
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [hasConfig, setHasConfig] = useState<boolean | null>(null);
+  const [setupEmail, setSetupEmail] = useState("");
+  const [setupPassword, setSetupPassword] = useState("");
+  const [setupConfirm, setSetupConfirm] = useState("");
+  const [setupError, setSetupError] = useState("");
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
+    // Check if already authenticated in session
     if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
       setAuthenticated(true);
     }
+    // Always check if a Super Admin account has been configured
+    getSuperAdminConfig().then(cfg => {
+      setHasConfig(!!cfg);
+      setConfigLoaded(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -63,14 +81,39 @@ export default function SuperAdminDashboard() {
     }
   }
 
-  function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (pinInput === "9999") {
-      setAuthenticated(true);
-      sessionStorage.setItem("super_admin_authed", "true");
-      setPinError(false);
-    } else {
-      setPinError(true);
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const cfg = await getSuperAdminConfig();
+      if (cfg && emailInput.trim().toLowerCase() === cfg.email.toLowerCase() && passwordInput === cfg.password) {
+        setAuthenticated(true);
+        sessionStorage.setItem("super_admin_authed", "true");
+      } else {
+        setLoginError("Incorrect email or password.");
+      }
+    } catch (err) {
+      setLoginError("Login failed. Check your Firebase connection.");
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleFirstRunSetup(e: React.FormEvent) {
+    e.preventDefault();
+    if (setupPassword !== setupConfirm) { setSetupError("Passwords do not match."); return; }
+    if (setupPassword.length < 8) { setSetupError("Password must be at least 8 characters."); return; }
+    setSetupLoading(true);
+    setSetupError("");
+    try {
+      await setSuperAdminConfig({ email: setupEmail.trim().toLowerCase(), password: setupPassword });
+      setHasConfig(true);
+      setLoginError("");
+    } catch (err) {
+      setSetupError("Failed to create account. Check Firestore permissions.");
+    } finally {
+      setSetupLoading(false);
     }
   }
 
@@ -107,7 +150,8 @@ export default function SuperAdminDashboard() {
   const globalWinRate = totalSpins ? Math.round((totalWinners / totalSpins) * 100) : 0;
   const recentWinners = allParticipants.filter(p => p.won).slice(0, 8);
 
-  if (loading && authenticated) {
+  // Show spinner while checking Firestore config
+  if (!configLoaded || (loading && authenticated)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#070d14]">
         <div className="w-8 h-8 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
@@ -115,7 +159,61 @@ export default function SuperAdminDashboard() {
     );
   }
 
-  // ─── LOGIN SCREEN ───
+  // ─── FIRST-RUN SETUP ────────────────────────────────────────────────────────
+  if (!hasConfig) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{
+        background: "radial-gradient(ellipse at 50% 30%, rgba(245,158,11,0.18) 0%, transparent 60%), #070d14",
+        fontFamily: "Nunito, sans-serif",
+      }}>
+        <form onSubmit={handleFirstRunSetup} className="w-full max-w-md">
+          <div className="rounded-3xl p-8 space-y-6" style={{
+            background: "rgba(255,255,255,0.03)", backdropFilter: "blur(24px)",
+            border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
+          }}>
+            <div className="text-center space-y-3">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto" style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}>
+                <Shield className="w-8 h-8 text-white" />
+              </div>
+              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Create Master Account</h2>
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>First-time setup — create your Super Admin credentials. Store these safely.</p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Master Email</label>
+                <input type="email" value={setupEmail} onChange={e => setSetupEmail(e.target.value)} placeholder="master@agency.com" required
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Master Password</label>
+                <input type="password" value={setupPassword} onChange={e => setSetupPassword(e.target.value)} placeholder="Min. 8 characters" required minLength={8}
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Confirm Password</label>
+                <input type="password" value={setupConfirm} onChange={e => setSetupConfirm(e.target.value)} placeholder="Repeat password" required
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
+              </div>
+              {setupError && <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400"><X className="w-3.5 h-3.5" /> {setupError}</p>}
+            </div>
+
+            <button type="submit" disabled={setupLoading}
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", boxShadow: "0 8px 24px rgba(245,158,11,0.35)", fontFamily: "Rubik, sans-serif" }}>
+              {setupLoading ? "Creating Account..." : "Create Master Account"}
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  // ─── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (!authenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4" style={{
@@ -123,7 +221,7 @@ export default function SuperAdminDashboard() {
         fontFamily: "Nunito, sans-serif",
       }}>
         <form onSubmit={handleLogin} className="w-full max-w-md">
-          <div className="rounded-3xl p-8 space-y-7" style={{
+          <div className="rounded-3xl p-8 space-y-6" style={{
             background: "rgba(255,255,255,0.03)", backdropFilter: "blur(24px)",
             border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
           }}>
@@ -132,23 +230,36 @@ export default function SuperAdminDashboard() {
                 <Shield className="w-8 h-8 text-white" />
               </div>
               <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Super Admin Portal</h2>
-              <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>Master agency access — view all campaigns & global logs.</p>
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>Master agency access — view all campaigns &amp; global logs.</p>
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-wider text-center" style={{ color: "rgba(255,255,255,0.4)" }}>Master PIN</label>
-              <input type="password" value={pinInput} onChange={e => { setPinInput(e.target.value); setPinError(false); }} placeholder="• • • •" maxLength={6} required
-                className="w-full rounded-xl px-5 py-4 text-center text-2xl tracking-[0.4em] text-white outline-none transition-all font-mono placeholder:opacity-20"
-                style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: pinError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)",
-                }} />
-              {pinError && <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400 justify-center"><X className="w-3.5 h-3.5" /> Incorrect PIN.</p>}
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Email</label>
+                <input type="email" value={emailInput} onChange={e => { setEmailInput(e.target.value); setLoginError(""); }} placeholder="master@agency.com" required autoComplete="email"
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", border: loginError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)" }} />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Password</label>
+                <div className="relative">
+                  <input type={showPassword ? "text" : "password"} value={passwordInput} onChange={e => { setPasswordInput(e.target.value); setLoginError(""); }} placeholder="••••••••" required autoComplete="current-password"
+                    className="w-full rounded-xl px-4 py-3 pr-12 text-sm text-white outline-none transition-all"
+                    style={{ background: "rgba(255,255,255,0.06)", border: loginError ? "1.5px solid rgba(239,68,68,0.7)" : "1.5px solid rgba(255,255,255,0.1)" }} />
+                  <button type="button" onClick={() => setShowPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold transition-colors"
+                    style={{ color: "rgba(255,255,255,0.35)" }}>
+                    {showPassword ? "HIDE" : "SHOW"}
+                  </button>
+                </div>
+              </div>
+              {loginError && <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400"><X className="w-3.5 h-3.5" /> {loginError}</p>}
             </div>
 
-            <button type="submit" className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 group transition-all hover:opacity-90 active:scale-[0.98]"
+            <button type="submit" disabled={loginLoading}
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 group transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
               style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", boxShadow: "0 8px 24px rgba(245,158,11,0.35)", fontFamily: "Rubik, sans-serif" }}>
-              Access Master Portal <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              {loginLoading ? "Verifying..." : <>Access Master Portal <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
             </button>
 
             <div className="text-center">

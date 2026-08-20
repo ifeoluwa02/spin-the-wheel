@@ -42,6 +42,7 @@ export default function TvDisplayMode() {
   useEffect(() => {
     if (!campaignSlug) return;
     getCampaign(campaignSlug).then((c) => {
+      if (!c) return;
       setCampaign(c);
       if (typeof window !== "undefined") {
         const params = new URLSearchParams(window.location.search);

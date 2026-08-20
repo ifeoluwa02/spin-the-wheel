@@ -13,13 +13,11 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Campaign, Participant } from "@/types";
+import type { Campaign, Participant, SuperAdminConfig } from "@/types";
 
 export const DEFAULT_CAMPAIGN: Campaign = {
-  id: "demo-campaign",
-  name: "Dettol Hygiene Challenge",
-  subTitle: "DETTOL NIGERIA",
-  logoUrl: "",
+  id: "",
+  name: "",
   primaryColor: "#00BFA6",
   secondaryColor: "#FF6B35",
   backgroundColor: "#0D1B2A",
@@ -28,15 +26,7 @@ export const DEFAULT_CAMPAIGN: Campaign = {
   welcomeMessage: "Spin the wheel for a chance to win instant prizes!",
   oneSpinPerPhone: true,
   active: true,
-  adminPin: "1234",
-  prizes: [
-    { id: "umbrella", label: "Umbrella", color: "#00BFA6", weight: 2, quantity: 20, claimedCount: 0 },
-    { id: "tshirt", label: "T-shirt", color: "#FF6B35", weight: 5, quantity: 15, claimedCount: 0 },
-    { id: "sanitizer", label: "Hand Sanitizer", color: "#00BFA6", weight: 20, quantity: 50, claimedCount: 0 },
-    { id: "cap", label: "Face Cap", color: "#FF6B35", weight: 10, quantity: 25, claimedCount: 0 },
-    { id: "try-again", label: "Try Again", color: "#0D1B2A", weight: 60, isLosing: true },
-    { id: "bottle", label: "Water Bottle", color: "#00BFA6", weight: 3, quantity: 10, claimedCount: 0 },
-  ],
+  prizes: [],
 };
 
 /** Generates a voucher code like SPIN-HW87EIDP */
@@ -46,7 +36,8 @@ export function generateVoucherCode(prefix = "SPIN"): string {
 }
 
 /** Loads campaign configuration strictly from Firestore */
-export async function getCampaign(campaignId = "demo-campaign"): Promise<Campaign> {
+export async function getCampaign(campaignId: string): Promise<Campaign | null> {
+  if (!campaignId) return null;
   try {
     const ref = doc(db, "campaigns", campaignId);
     const snap = await getDoc(ref);
@@ -56,8 +47,7 @@ export async function getCampaign(campaignId = "demo-campaign"): Promise<Campaig
   } catch (err) {
     console.warn("Firestore campaign fetch failed:", err);
   }
-
-  return DEFAULT_CAMPAIGN;
+  return null;
 }
 
 /** Subscribes to real-time changes of a campaign document in Firestore */
@@ -148,8 +138,9 @@ export async function recordParticipant(participant: Participant): Promise<strin
 }
 
 /** Fetches participants for admin analytics, exports, and TV display */
-export async function getParticipants(campaignId = "demo-campaign"): Promise<Participant[]> {
+export async function getParticipants(campaignId: string): Promise<Participant[]> {
   const list: Participant[] = [];
+  if (!campaignId) return list;
   try {
     const q = query(
       collection(db, "participants"),
@@ -197,11 +188,6 @@ export async function getAllCampaigns(): Promise<Campaign[]> {
   } catch (err) {
     console.warn("Firestore getAllCampaigns failed:", err);
   }
-
-  if (!campaigns.some((c) => c.id === DEFAULT_CAMPAIGN.id)) {
-    campaigns.unshift(DEFAULT_CAMPAIGN);
-  }
-
   return campaigns;
 }
 
@@ -260,5 +246,18 @@ export async function clearCampaignData(campaignId?: string): Promise<{ deletedC
 
   return { deletedCount };
 }
+/** Reads the Super Admin master credentials from Firestore config/superAdmin */
+export async function getSuperAdminConfig(): Promise<SuperAdminConfig | null> {
+  try {
+    const snap = await getDoc(doc(db, "config", "superAdmin"));
+    if (snap.exists()) return snap.data() as SuperAdminConfig;
+  } catch (err) {
+    console.warn("getSuperAdminConfig failed:", err);
+  }
+  return null;
+}
 
-
+/** Writes the Super Admin master credentials to Firestore config/superAdmin */
+export async function setSuperAdminConfig(config: SuperAdminConfig): Promise<void> {
+  await setDoc(doc(db, "config", "superAdmin"), config);
+}

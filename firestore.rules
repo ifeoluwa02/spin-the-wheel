@@ -13,5 +13,12 @@ service cloud.firestore {
       allow create, read: if true;
       allow update, delete: if false;
     }
+
+    // Super Admin config — readable for client-side credential verification,
+    // writable for first-run setup flow.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

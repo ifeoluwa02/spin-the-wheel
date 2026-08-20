@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { Campaign, Prize } from "@/types";
-import { updateCampaign } from "@/lib/campaign";
+import { updateCampaign, getSuperAdminConfig } from "@/lib/campaign";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -41,7 +41,9 @@ export default function CreateCampaignWizard() {
   const [logoUrl, setLogoUrl] = useState("");
   const [campaignSlug, setCampaignSlug] = useState("");
   const [welcomeMessage, setWelcomeMessage] = useState("Spin the wheel for a chance to win instant rewards!");
-  const [adminPin, setAdminPin] = useState("1234");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [oneSpinPerPhone, setOneSpinPerPhone] = useState(true);
 
   const [primaryColor, setPrimaryColor] = useState("#00BFA6");
@@ -62,27 +64,50 @@ export default function CreateCampaignWizard() {
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
+
+  // Super Admin gate state
   const [authenticated, setAuthenticated] = useState(false);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState(false);
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       setBaseUrl(window.location.origin);
       if (sessionStorage.getItem("super_admin_authed") === "true") {
         setAuthenticated(true);
+        setConfigLoaded(true);
+        return;
       }
+      getSuperAdminConfig().then(cfg => {
+        setConfigLoaded(true);
+        if (!cfg) {
+          // No config yet — redirect to super-admin for first-run setup
+          window.location.href = "/super-admin";
+        }
+      });
     }
   }, []);
 
-  function handleAuthLogin(e: React.FormEvent) {
+  async function handleAuthLogin(e: React.FormEvent) {
     e.preventDefault();
-    if (pinInput === "9999") {
-      setAuthenticated(true);
-      sessionStorage.setItem("super_admin_authed", "true");
-      setPinError(false);
-    } else {
-      setPinError(true);
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const cfg = await getSuperAdminConfig();
+      if (cfg && authEmail.trim().toLowerCase() === cfg.email.toLowerCase() && authPassword === cfg.password) {
+        setAuthenticated(true);
+        sessionStorage.setItem("super_admin_authed", "true");
+      } else {
+        setAuthError("Incorrect email or password.");
+      }
+    } catch (err) {
+      setAuthError("Login failed. Check your Firebase connection.");
+    } finally {
+      setAuthLoading(false);
     }
   }
 
@@ -94,16 +119,22 @@ export default function CreateCampaignWizard() {
   }, [campaignTitle, slugEdited]);
 
   // ── SUPER ADMIN LOGIN GATE ──
+  if (!configLoaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#070d14]">
+        <div className="w-8 h-8 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
   if (!authenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-[#070d14] text-white" style={{ fontFamily: "Nunito, sans-serif" }}>
-        {/* Dynamic Blobs */}
         <div className="absolute top-1/4 left-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#FF6B35" }} />
         <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#00BFA6" }} />
 
         <form onSubmit={handleAuthLogin} className="relative w-full max-w-md">
-          <div className="rounded-3xl p-8 space-y-7 bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-2xl">
-            {/* Header */}
+          <div className="rounded-3xl p-8 space-y-6 bg-white/[0.04] backdrop-blur-2xl border border-white/10 shadow-2xl">
             <div className="flex flex-col items-center gap-3 text-center">
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl" style={{ background: "linear-gradient(135deg, #F59E0B, #D97706)" }}>
                 <ShieldAlert className="w-8 h-8 text-white" />
@@ -111,37 +142,34 @@ export default function CreateCampaignWizard() {
               <div>
                 <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Super Admin Access</h2>
                 <p className="text-xs text-amber-400 font-bold uppercase tracking-wider mt-1">Master Portal Authorization Required</p>
-                <p className="text-xs text-white/50 mt-1">Only authorized Master Agency Admins can create new campaigns.</p>
+                <p className="text-xs text-white/50 mt-1">Only authorized Super Admins can create new campaigns.</p>
               </div>
             </div>
 
-            {/* PIN Input */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-wider text-white/50">Master Super Admin PIN</label>
-              <input
-                type="password"
-                value={pinInput}
-                onChange={e => { setPinInput(e.target.value); setPinError(false); }}
-                placeholder="• • • •"
-                maxLength={6}
-                required
-                className="w-full rounded-2xl px-4 py-3.5 text-center text-2xl font-mono tracking-[0.4em] bg-black/40 border border-white/10 text-white outline-none focus:border-amber-500 transition-all"
-              />
-              {pinError && (
-                <p className="flex items-center gap-1 text-xs font-bold text-red-400 justify-center">
-                  <X className="w-3.5 h-3.5" /> Incorrect Master PIN (Default: 9999).
-                </p>
-              )}
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/50">Email</label>
+                <input type="email" value={authEmail} onChange={e => { setAuthEmail(e.target.value); setAuthError(""); }} placeholder="master@agency.com" required autoComplete="email"
+                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none bg-black/40 border border-white/10 focus:border-amber-500 transition-all" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/50">Password</label>
+                <div className="relative">
+                  <input type={showAuthPassword ? "text" : "password"} value={authPassword} onChange={e => { setAuthPassword(e.target.value); setAuthError(""); }} placeholder="••••••••" required autoComplete="current-password"
+                    className="w-full rounded-xl px-4 py-3 pr-12 text-sm text-white outline-none bg-black/40 border border-white/10 focus:border-amber-500 transition-all" />
+                  <button type="button" onClick={() => setShowAuthPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-white/40 hover:text-white/70">
+                    {showAuthPassword ? "HIDE" : "SHOW"}
+                  </button>
+                </div>
+              </div>
+              {authError && <p className="flex items-center gap-1 text-xs font-bold text-red-400"><X className="w-3.5 h-3.5" /> {authError}</p>}
             </div>
 
-            {/* Buttons */}
-            <button
-              type="submit"
-              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] shadow-lg"
-              style={{ background: "linear-gradient(135deg, #F59E0B, #D97706)", fontFamily: "Rubik, sans-serif" }}
-            >
-              <span>Unlock Campaign Creator</span>
-              <ChevronRight className="w-4 h-4" />
+            <button type="submit" disabled={authLoading}
+              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] shadow-lg disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg, #F59E0B, #D97706)", fontFamily: "Rubik, sans-serif" }}>
+              {authLoading ? "Verifying..." : <><span>Unlock Campaign Creator</span><ChevronRight className="w-4 h-4" /></>}
             </button>
 
             <div className="flex items-center justify-center gap-4 text-xs font-semibold text-white/40">
@@ -168,6 +196,10 @@ export default function CreateCampaignWizard() {
   }
 
   async function handleLaunchCampaign() {
+    if (!adminEmail.trim() || !adminPassword.trim()) {
+      alert("Please set an Admin Email and Password before launching.");
+      return;
+    }
     setSaving(true);
     const finalSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `campaign-${Date.now()}`;
     const newCampaign: Campaign = {
@@ -183,7 +215,8 @@ export default function CreateCampaignWizard() {
       welcomeMessage,
       oneSpinPerPhone,
       active: true,
-      adminPin: adminPin || "1234",
+      adminEmail: adminEmail.trim().toLowerCase(),
+      adminPassword: adminPassword.trim(),
       prizes,
     };
     await updateCampaign(newCampaign);
@@ -356,20 +389,50 @@ export default function CreateCampaignWizard() {
 
               <div>
                 <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
-                  Admin PIN
+                  Admin Email *
                 </label>
                 <input
-                  type="text"
-                  value={adminPin}
-                  onChange={(e) => setAdminPin(e.target.value)}
-                  placeholder="1234"
-                  className="w-full rounded-xl px-4 py-3 text-sm font-mono"
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                  placeholder="admin@brand.com"
+                  className="w-full rounded-xl px-4 py-3 text-sm"
                   style={inputStyle}
                   onFocus={(e) => (e.target.style.borderColor = "rgba(255,107,53,0.4)")}
                   onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
                 />
+                <p className="text-[11px] mt-1.5" style={{ color: "rgba(255,255,255,0.2)" }}>
+                  Login email for the brand admin
+                </p>
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                Admin Password *
+              </label>
+              <div className="relative">
+                <input
+                  type={showAdminPassword ? "text" : "password"}
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  placeholder="Min. 6 characters"
+                  className="w-full rounded-xl px-4 py-3 pr-16 text-sm"
+                  style={inputStyle}
+                  onFocus={(e) => (e.target.style.borderColor = "rgba(255,107,53,0.4)")}
+                  onBlur={(e) => (e.target.style.borderColor = "rgba(255,255,255,0.08)")}
+                />
+                <button type="button" onClick={() => setShowAdminPassword(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold transition-colors"
+                  style={{ color: "rgba(255,255,255,0.35)" }}>
+                  {showAdminPassword ? "HIDE" : "SHOW"}
+                </button>
+              </div>
+              <p className="text-[11px] mt-1.5" style={{ color: "rgba(255,255,255,0.2)" }}>
+                Secure password for the brand admin login
+              </p>
+            </div>
+
 
             <div>
               <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
