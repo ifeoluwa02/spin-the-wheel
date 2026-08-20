@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Campaign, Participant, SuperAdminConfig } from "@/types";
+import { normalizeNigerianPhone } from "./phone";
 
 export const DEFAULT_CAMPAIGN: Campaign = {
   id: "",
@@ -77,7 +78,7 @@ export async function updateCampaign(campaign: Campaign): Promise<void> {
 
 /** Checks whether a phone number has already spun for a given campaign. */
 export async function hasAlreadySpun(campaignId: string, phone: string): Promise<boolean> {
-  const cleanPhone = phone.trim().replace(/\D/g, "");
+  const cleanPhone = normalizeNigerianPhone(phone) || phone.trim().replace(/\D/g, "");
   if (!cleanPhone || !campaignId) return false;
 
   try {
@@ -119,10 +120,12 @@ export async function incrementPrizeClaimed(campaignId: string, prizeId: string)
 
 /** Records a participant's spin result strictly into Firestore and updates inventory pool. */
 export async function recordParticipant(participant: Participant): Promise<string> {
+  const normalizedPhone = normalizeNigerianPhone(participant.phone) || (participant.phone ? participant.phone.trim().replace(/\D/g, "") : "");
+
   // Build a clean, serializable object with zero undefined fields (Firestore strictly rejects undefined)
   const cleanParticipant: Record<string, any> = {
     name: participant.name || "Anonymous",
-    phone: participant.phone ? participant.phone.trim().replace(/\D/g, "") : "",
+    phone: normalizedPhone,
     email: participant.email || "",
     campaignId: participant.campaignId || "",
     prizeId: participant.prizeId || "",

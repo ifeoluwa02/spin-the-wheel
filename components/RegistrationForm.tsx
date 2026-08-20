@@ -2,6 +2,7 @@
 
 import { useState, FormEvent } from "react";
 import { User, Phone, Mail, ArrowRight, AlertCircle, Loader2 } from "lucide-react";
+import { isValidNigerianPhone, normalizeNigerianPhone } from "@/lib/phone";
 
 export interface RegistrationValues {
   name: string;
@@ -16,10 +17,6 @@ interface RegistrationFormProps {
   accentColor: string;
 }
 
-function isValidPhone(phone: string): boolean {
-  return phone.replace(/\D/g, "").length >= 7;
-}
-
 export default function RegistrationForm({
   onSubmit,
   submitting,
@@ -32,14 +29,15 @@ export default function RegistrationForm({
   const [touched, setTouched] = useState(false);
 
   const nameValid = name.trim().length >= 2;
-  const phoneValid = isValidPhone(phone);
+  const phoneValid = isValidNigerianPhone(phone);
   const canSubmit = nameValid && phoneValid && !submitting;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (!canSubmit) return;
-    onSubmit({ name: name.trim(), phone: phone.trim(), email: email.trim() || undefined });
+    const normalizedPhone = normalizeNigerianPhone(phone);
+    if (!canSubmit || !normalizedPhone) return;
+    onSubmit({ name: name.trim(), phone: normalizedPhone, email: email.trim() || undefined });
   }
 
   const fields = [
@@ -58,13 +56,14 @@ export default function RegistrationForm({
     {
       id: "phone",
       label: "Phone Number",
+      sublabel: "Nigerian 11-digit mobile",
       type: "tel",
       value: phone,
       onChange: setPhone,
-      placeholder: "080 1234 5678",
+      placeholder: "e.g. 0803 123 4567",
       autoComplete: "tel",
       icon: Phone,
-      error: touched && !phoneValid ? "Please enter a valid phone number." : null,
+      error: touched && !phoneValid ? "Enter a valid 11-digit Nigerian number (e.g. 080..., 090..., 081..., 070..., 091... or +234)" : null,
       required: true,
     },
     {
