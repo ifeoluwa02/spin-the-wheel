@@ -3,12 +3,11 @@
 import { useEffect, useState } from "react";
 import type { Campaign, Participant } from "@/types";
 import { getAllCampaigns, getParticipants, updateCampaign, clearCampaignData } from "@/lib/campaign";
-import { seedFirebaseData } from "@/lib/seed";
 import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
   Tv, ExternalLink, Settings, Activity, Trophy, Users,
-  Power, ChevronRight, X, Check, Layers, RefreshCw, Lock, Database, Sparkles
+  Power, ChevronRight, X, Check, Layers, RefreshCw, Database
 } from "lucide-react";
 
 export default function SuperAdminDashboard() {
@@ -19,8 +18,6 @@ export default function SuperAdminDashboard() {
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  const [seedStatus, setSeedStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
@@ -50,26 +47,6 @@ export default function SuperAdminDashboard() {
     setRefreshing(true);
     await loadData();
     setRefreshing(false);
-  }
-
-  async function handleSeed() {
-    setSeeding(true);
-    setSeedStatus("Seeding Firebase...");
-    try {
-      const res = await seedFirebaseData();
-      setSeedStatus(`Successfully seeded ${res.campaignsSeeded} campaigns & ${res.participantsSeeded} participants!`);
-      await loadData();
-    } catch (err: any) {
-      console.error(err);
-      if (err?.code === "permission-denied" || err?.message?.includes("PERMISSION_DENIED")) {
-        setSeedStatus("🚫 Firestore Rules Blocked Write. Update rules in Firebase Console!");
-      } else {
-        setSeedStatus("Seeding error. Check Firebase credentials in .env.local.");
-      }
-    } finally {
-      setSeeding(false);
-      setTimeout(() => setSeedStatus(null), 8000);
-    }
   }
 
   async function handleWipeAllDatabase() {
@@ -205,11 +182,7 @@ export default function SuperAdminDashboard() {
               <Database className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Wipe DB</span>
             </button>
-            <button onClick={handleSeed} disabled={seeding} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-white transition-all hover:opacity-90 disabled:opacity-50 shadow-md"
-              style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", boxShadow: "0 4px 12px rgba(0,191,166,0.3)" }}>
-              <Sparkles className={`w-3.5 h-3.5 ${seeding ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">{seeding ? "Seeding..." : "Seed Firebase"}</span>
-            </button>
+
             <Link href="/create-campaign" className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-white transition-all hover:opacity-90"
               style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", boxShadow: "0 4px 12px rgba(245,158,11,0.3)" }}>
               <Plus className="w-3.5 h-3.5" />
@@ -230,13 +203,7 @@ export default function SuperAdminDashboard() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
-        {seedStatus && (
-          <div className="px-4 py-3 rounded-xl text-xs font-bold text-emerald-300 flex items-center justify-between animate-pulse"
-            style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.3)" }}>
-            <span>✨ {seedStatus}</span>
-            <button onClick={() => setSeedStatus(null)} className="opacity-60 hover:opacity-100">✕</button>
-          </div>
-        )}
+
 
         {/* Global Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">

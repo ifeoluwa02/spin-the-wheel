@@ -34,7 +34,7 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<Tab>("analytics");
   const [showQrModal, setShowQrModal] = useState(false);
   const [qrUrl, setQrUrl] = useState("");
-  const [campaignSlug, setCampaignSlug] = useState("demo-campaign");
+  const [campaignSlug, setCampaignSlug] = useState("");
   const [luckyWinner, setLuckyWinner] = useState<Participant | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -74,7 +74,7 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
-      const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+      const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
       setCampaignSlug(slug);
       setQrUrl(`${window.location.origin}/?c=${slug}`);
       if (sessionStorage.getItem("admin_authed") === "true") setAuthenticated(true);

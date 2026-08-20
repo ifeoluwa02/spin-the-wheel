@@ -197,7 +197,7 @@ export default function CreateCampaignWizard() {
     setTimeout(() => setCopiedLink(null), 2000);
   }
 
-  const activeSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "demo-campaign";
+  const activeSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const wheelUrl = `${baseUrl}/?c=${activeSlug}`;
   const adminUrl = `${baseUrl}/admin?c=${activeSlug}`;
   const tvUrl = `${baseUrl}/tv?c=${activeSlug}`;

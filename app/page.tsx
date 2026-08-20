@@ -34,7 +34,7 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+    let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
     let storeCodeParam = "";
 
     if (typeof window !== "undefined") {

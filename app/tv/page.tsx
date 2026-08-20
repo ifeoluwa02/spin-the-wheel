@@ -12,7 +12,7 @@ export default function TvDisplayMode() {
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [wheelUrl, setWheelUrl] = useState("");
-  const [campaignSlug, setCampaignSlug] = useState("demo-campaign");
+  const [campaignSlug, setCampaignSlug] = useState("");
   const [latestWinner, setLatestWinner] = useState<Participant | null>(null);
   const [showWinnerFlash, setShowWinnerFlash] = useState(false);
   const prevWinnersCountRef = useRef(0);
@@ -29,7 +29,7 @@ export default function TvDisplayMode() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
-    const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "demo-campaign";
+    const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
     const storeParam = params.get("store") || "";
     setCampaignSlug(slug);
 
