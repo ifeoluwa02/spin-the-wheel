@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Campaign, Participant, SuperAdminConfig } from "@/types";
-import { getAllCampaigns, getParticipants, updateCampaign, clearCampaignData, getSuperAdminConfig, setSuperAdminConfig } from "@/lib/campaign";
+import { getAllCampaigns, getAllGlobalParticipants, updateCampaign, clearCampaignData, getSuperAdminConfig, setSuperAdminConfig } from "@/lib/campaign";
 import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
@@ -50,13 +50,11 @@ export default function SuperAdminDashboard() {
 
   async function loadData() {
     setLoading(true);
-    const cList = await getAllCampaigns();
+    const [cList, all] = await Promise.all([
+      getAllCampaigns(),
+      getAllGlobalParticipants(),
+    ]);
     setCampaigns(cList);
-    const all: Participant[] = [];
-    await Promise.all(cList.map(async c => {
-      const p = await getParticipants(c.id || "");
-      all.push(...p);
-    }));
     setAllParticipants(all);
     setLoading(false);
   }
