@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Campaign, Participant } from "@/types";
-import { getAllCampaigns, getParticipants, updateCampaign } from "@/lib/campaign";
+import { getAllCampaigns, getParticipants, updateCampaign, clearCampaignData } from "@/lib/campaign";
 import { seedFirebaseData } from "@/lib/seed";
 import Link from "next/link";
 import {
@@ -72,6 +72,20 @@ export default function SuperAdminDashboard() {
     }
   }
 
+  async function handleWipeAllDatabase() {
+    if (!window.confirm("⚠️ DANGER: Are you sure you want to wipe ALL participant records and reset ALL campaign prize stocks in Firestore across the entire system?")) return;
+    setRefreshing(true);
+    try {
+      const res = await clearCampaignData();
+      await loadData();
+      alert(`✅ System database wiped! Cleared ${res.deletedCount} participant record(s) from Firestore.`);
+    } catch (err) {
+      alert("❌ Failed to wipe database. Check Firestore permissions.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     if (pinInput === "9999") {
@@ -98,13 +112,13 @@ export default function SuperAdminDashboard() {
     const headers = ["Campaign", "Name", "Phone", "Email", "Prize", "Status", "Time"];
     const rows = allParticipants.map(p => [
       `"${p.campaignId}"`, `"${p.name}"`, `"${p.phone}"`, `"${p.email || ""}"`,
-      `"${p.prizeLabel}"`, p.won ? "Winner" : "No Win",
+      `"${p.prizeLabel}"`, p.won ? "Winner" : "Non-Winner",
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
     const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", "all_campaigns_report.csv");
+    link.setAttribute("download", "global_spin_participants.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -116,42 +130,37 @@ export default function SuperAdminDashboard() {
   const globalWinRate = totalSpins ? Math.round((totalWinners / totalSpins) * 100) : 0;
   const recentWinners = allParticipants.filter(p => p.won).slice(0, 8);
 
-  // ─── LOGIN ───────────────────────────────────────────────────────────────────
+  if (loading && authenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#070d14]">
+        <div className="w-8 h-8 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  // ─── LOGIN SCREEN ───
   if (!authenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4" style={{
-        background: "radial-gradient(ellipse at 30% 20%, rgba(245,158,11,0.18) 0%, transparent 50%), radial-gradient(ellipse at 70% 80%, rgba(0,191,166,0.12) 0%, transparent 50%), #0A1628",
+        background: "radial-gradient(ellipse at 50% 30%, rgba(245,158,11,0.15) 0%, transparent 60%), #070d14",
         fontFamily: "Nunito, sans-serif",
       }}>
-        <div className="absolute top-1/4 left-1/4 w-80 h-80 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#f59e0b" }} />
-
-        <form onSubmit={handleLogin} className="relative w-full max-w-md">
-          <div className="rounded-3xl p-8 space-y-8" style={{
-            background: "rgba(255,255,255,0.04)",
-            backdropFilter: "blur(24px)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            boxShadow: "0 32px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08)",
+        <form onSubmit={handleLogin} className="w-full max-w-md">
+          <div className="rounded-3xl p-8 space-y-7" style={{
+            background: "rgba(255,255,255,0.03)", backdropFilter: "blur(24px)",
+            border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
           }}>
-            <div className="flex flex-col items-center gap-4 text-center">
-              <div className="relative">
-                <div className="w-20 h-20 rounded-2xl flex items-center justify-center shadow-2xl" style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}>
-                  <Shield className="w-10 h-10 text-white" />
-                </div>
-                <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full border-2 flex items-center justify-center" style={{ background: "#f59e0b", borderColor: "#0A1628" }}>
-                  <Lock className="w-3 h-3 text-white" />
-                </div>
+            <div className="text-center space-y-3">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto shadow-xl" style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}>
+                <Shield className="w-8 h-8 text-white" />
               </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.3em] mb-1" style={{ color: "#f59e0b" }}>Agency Master</p>
-                <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif", letterSpacing: "-0.02em" }}>Super Admin Portal</h1>
-                <p className="text-sm mt-1" style={{ color: "rgba(255,255,255,0.35)" }}>Global campaign oversight · PIN: 9999</p>
-              </div>
+              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Super Admin Portal</h2>
+              <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>Master agency access — view all campaigns & global logs.</p>
             </div>
 
             <div className="space-y-2">
-              <label className="block text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>Master PIN</label>
-              <input type="password" value={pinInput} onChange={e => setPinInput(e.target.value)}
-                placeholder="• • • •" maxLength={8} autoFocus
+              <label className="block text-xs font-bold uppercase tracking-wider text-center" style={{ color: "rgba(255,255,255,0.4)" }}>Master PIN</label>
+              <input type="password" value={pinInput} onChange={e => { setPinInput(e.target.value); setPinError(false); }} placeholder="• • • •" maxLength={6} required
                 className="w-full rounded-xl px-5 py-4 text-center text-2xl tracking-[0.4em] text-white outline-none transition-all font-mono placeholder:opacity-20"
                 style={{
                   background: "rgba(255,255,255,0.06)",
@@ -192,6 +201,10 @@ export default function SuperAdminDashboard() {
           </div>
 
           <div className="flex items-center gap-2">
+            <button onClick={handleWipeAllDatabase} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 transition-all">
+              <Database className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Wipe DB</span>
+            </button>
             <button onClick={handleSeed} disabled={seeding} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black text-white transition-all hover:opacity-90 disabled:opacity-50 shadow-md"
               style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", boxShadow: "0 4px 12px rgba(0,191,166,0.3)" }}>
               <Sparkles className={`w-3.5 h-3.5 ${seeding ? "animate-spin" : ""}`} />

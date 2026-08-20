@@ -6,6 +6,9 @@ import {
   getCampaign,
   updateCampaign,
   getParticipants,
+  clearCampaignData,
+  subscribeCampaign,
+  subscribeParticipants,
   DEFAULT_CAMPAIGN,
 } from "@/lib/campaign";
 import Link from "next/link";
@@ -78,6 +81,8 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  const [clearing, setClearing] = useState(false);
+
   // Fetch campaign configuration immediately so adminPin is ready
   useEffect(() => {
     if (!campaignSlug) return;
@@ -86,17 +91,36 @@ export default function AdminDashboard() {
     });
   }, [campaignSlug]);
 
-  // Load participants once authenticated
+  // Live real-time campaign & participant listener once authenticated
   useEffect(() => {
     if (!authenticated || !campaignSlug) return;
-    async function load() {
-      setLoading(true);
-      const p = await getParticipants(campaignSlug);
+
+    setLoading(true);
+    const unsubCampaign = subscribeCampaign(campaignSlug, (c) => setCampaign(c));
+    const unsubParticipants = subscribeParticipants(campaignSlug, (p) => {
       setParticipants(p);
       setLoading(false);
-    }
-    load();
+    });
+
+    return () => {
+      unsubCampaign();
+      unsubParticipants();
+    };
   }, [authenticated, campaignSlug]);
+
+  async function handleClearDatabase() {
+    if (!window.confirm("⚠️ Are you sure you want to clear all participant records and reset gift claimed counts for this campaign in Firestore? This cannot be undone!")) return;
+    setClearing(true);
+    try {
+      const res = await clearCampaignData(campaignSlug);
+      setParticipants([]);
+      alert(`✅ Database cleared! Deleted ${res.deletedCount} participant record(s) and reset prize stock counts in Firestore.`);
+    } catch (err) {
+      alert("❌ Failed to clear database. Check Firestore permissions.");
+    } finally {
+      setClearing(false);
+    }
+  }
 
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -311,10 +335,15 @@ export default function AdminDashboard() {
               <Tv className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">TV</span>
             </Link>
-            <Link href={`/?c=${campaignSlug}`} target="_blank" className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-white transition-all hover:opacity-90" style={{ background: "linear-gradient(135deg, #FF6B35, #e0531f)", boxShadow: "0 4px 12px rgba(255,107,53,0.3)" }}>
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Live</span>
-            </Link>
+            <button
+              onClick={handleClearDatabase}
+              disabled={clearing}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40"
+              title="Clear all spin participants and reset prize stock counts for this campaign in Firestore"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">{clearing ? "Clearing..." : "Clear DB"}</span>
+            </button>
             <button onClick={handleLogout} className="p-2 rounded-xl text-xs transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.3)" }}>
               <LogOut className="w-4 h-4" />
             </button>

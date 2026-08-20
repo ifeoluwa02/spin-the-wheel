@@ -7,8 +7,10 @@ import {
   where,
   getDocs,
   addDoc,
+  deleteDoc,
   limit,
   orderBy,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Campaign, Participant } from "@/types";
@@ -16,7 +18,7 @@ import type { Campaign, Participant } from "@/types";
 export const DEFAULT_CAMPAIGN: Campaign = {
   id: "demo-campaign",
   name: "Dettol Hygiene Challenge",
-  subTitle: "GOLDEN MORN",
+  subTitle: "DETTOL NIGERIA",
   logoUrl: "",
   primaryColor: "#00BFA6",
   secondaryColor: "#FF6B35",
@@ -28,17 +30,14 @@ export const DEFAULT_CAMPAIGN: Campaign = {
   active: true,
   adminPin: "1234",
   prizes: [
-    { id: "umbrella", label: "Umbrella", color: "#00BFA6", weight: 2 },
-    { id: "tshirt", label: "T-shirt", color: "#FF6B35", weight: 5 },
-    { id: "sanitizer", label: "Hand Sanitizer", color: "#00BFA6", weight: 20 },
-    { id: "cap", label: "Face Cap", color: "#FF6B35", weight: 10 },
+    { id: "umbrella", label: "Umbrella", color: "#00BFA6", weight: 2, quantity: 20, claimedCount: 0 },
+    { id: "tshirt", label: "T-shirt", color: "#FF6B35", weight: 5, quantity: 15, claimedCount: 0 },
+    { id: "sanitizer", label: "Hand Sanitizer", color: "#00BFA6", weight: 20, quantity: 50, claimedCount: 0 },
+    { id: "cap", label: "Face Cap", color: "#FF6B35", weight: 10, quantity: 25, claimedCount: 0 },
     { id: "try-again", label: "Try Again", color: "#0D1B2A", weight: 60, isLosing: true },
-    { id: "bottle", label: "Water Bottle", color: "#00BFA6", weight: 3 },
+    { id: "bottle", label: "Water Bottle", color: "#00BFA6", weight: 3, quantity: 10, claimedCount: 0 },
   ],
 };
-
-const LOCAL_STORAGE_KEY_CAMPAIGN = "spin_wheel_campaign_config_v1";
-const LOCAL_STORAGE_KEY_PARTICIPANTS = "spin_wheel_participants_v1";
 
 /** Generates a voucher code like SPIN-HW87EIDP */
 export function generateVoucherCode(prefix = "SPIN"): string {
@@ -46,7 +45,7 @@ export function generateVoucherCode(prefix = "SPIN"): string {
   return `${prefix}-${randomChars}`;
 }
 
-/** Loads campaign configuration with fallback to local storage / defaults */
+/** Loads campaign configuration strictly from Firestore */
 export async function getCampaign(campaignId = "demo-campaign"): Promise<Campaign> {
   try {
     const ref = doc(db, "campaigns", campaignId);
@@ -55,39 +54,33 @@ export async function getCampaign(campaignId = "demo-campaign"): Promise<Campaig
       return { ...DEFAULT_CAMPAIGN, ...(snap.data() as Partial<Campaign>), id: snap.id };
     }
   } catch (err) {
-    console.warn("Firestore campaign fetch failed, checking local storage:", err);
-  }
-
-  // Fallback to local storage if present
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY_CAMPAIGN}_${campaignId}`);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // Ignore parse error
-      }
-    }
+    console.warn("Firestore campaign fetch failed:", err);
   }
 
   return DEFAULT_CAMPAIGN;
 }
 
-/** Saves updated campaign configuration (Admin action) */
-export async function updateCampaign(campaign: Campaign): Promise<void> {
-  // Always update local storage first so changes take immediate local effect
-  if (typeof window !== "undefined") {
-    localStorage.setItem(
-      `${LOCAL_STORAGE_KEY_CAMPAIGN}_${campaign.id}`,
-      JSON.stringify(campaign)
-    );
-  }
+/** Subscribes to real-time changes of a campaign document in Firestore */
+export function subscribeCampaign(
+  campaignId: string,
+  callback: (campaign: Campaign) => void
+): () => void {
+  const ref = doc(db, "campaigns", campaignId);
+  return onSnapshot(ref, (snap) => {
+    if (snap.exists()) {
+      callback({ ...DEFAULT_CAMPAIGN, ...(snap.data() as Partial<Campaign>), id: snap.id });
+    }
+  });
+}
 
+/** Saves updated campaign configuration strictly to Firestore (Admin action) */
+export async function updateCampaign(campaign: Campaign): Promise<void> {
   try {
     const ref = doc(db, "campaigns", campaign.id);
     await setDoc(ref, campaign, { merge: true });
   } catch (err) {
-    console.warn("Firestore campaign update failed (saved to local storage instead):", err);
+    console.error("Firestore campaign update failed:", err);
+    throw err;
   }
 }
 
@@ -99,28 +92,13 @@ export async function hasAlreadySpun(campaignId: string, phone: string): Promise
     const q = query(
       collection(db, "participants"),
       where("campaignId", "==", campaignId),
-      where("phone", "==", phone),
+      where("phone", "==", cleanPhone),
       limit(1)
     );
     const snap = await getDocs(q);
     if (!snap.empty) return true;
   } catch (err) {
-    console.warn("Firestore check already spun failed, checking local storage:", err);
-  }
-
-  // Local storage check
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY_PARTICIPANTS}_${campaignId}`);
-    if (saved) {
-      try {
-        const list: Participant[] = JSON.parse(saved);
-        return list.some(
-          (p) => p.phone.trim().replace(/\D/g, "") === cleanPhone
-        );
-      } catch (e) {
-        // Ignore parse error
-      }
-    }
+    console.warn("Firestore check already spun failed:", err);
   }
 
   return false;
@@ -147,90 +125,31 @@ export async function incrementPrizeClaimed(campaignId: string, prizeId: string)
   }
 }
 
-/** Records a participant's spin result and updates inventory pool. */
+/** Records a participant's spin result strictly into Firestore and updates inventory pool. */
 export async function recordParticipant(participant: Participant): Promise<string> {
-  // If the participant won a prize, deduct 1 from available stock pool
-  if (participant.won && participant.prizeId) {
-    incrementPrizeClaimed(participant.campaignId, participant.prizeId).catch(() => {});
-  }
+  // Clean phone number format
+  const cleanParticipant = {
+    ...participant,
+    phone: participant.phone.trim().replace(/\D/g, ""),
+  };
 
-  // Always save to local storage as backup
-  if (typeof window !== "undefined") {
-    const key = `${LOCAL_STORAGE_KEY_PARTICIPANTS}_${participant.campaignId}`;
-    const existing = localStorage.getItem(key);
-    let list: Participant[] = [];
-    if (existing) {
-      try {
-        list = JSON.parse(existing);
-      } catch (e) {}
-    }
-    list.unshift(participant);
-    localStorage.setItem(key, JSON.stringify(list));
+  // If the participant won a prize, deduct 1 from available stock pool
+  if (cleanParticipant.won && cleanParticipant.prizeId) {
+    incrementPrizeClaimed(cleanParticipant.campaignId, cleanParticipant.prizeId).catch(() => {});
   }
 
   try {
-    const ref = await addDoc(collection(db, "participants"), participant);
+    const ref = await addDoc(collection(db, "participants"), cleanParticipant);
     return ref.id;
   } catch (err) {
-    console.warn("Firestore record participant failed (saved to local storage):", err);
-    return `local-${Date.now()}`;
+    console.error("Firestore record participant failed:", err);
+    throw err;
   }
 }
 
-export const SAMPLE_PARTICIPANTS: Participant[] = [
-  {
-    id: "sample-1",
-    name: "Akin Omisakin",
-    phone: "080 1234 5678",
-    email: "akin@example.com",
-    campaignId: "demo-campaign",
-    prizeId: "pen",
-    prizeLabel: "Pen",
-    voucherCode: "SPIN-HW87EIDP",
-    won: true,
-    createdAt: Date.now() - 1000 * 60 * 15,
-  },
-  {
-    id: "sample-2",
-    name: "Chioma Okeke",
-    phone: "080 2345 6789",
-    email: "chioma@example.com",
-    campaignId: "demo-campaign",
-    prizeId: "sanitizer",
-    prizeLabel: "Hand Sanitizer",
-    voucherCode: "SPIN-98A1B2C3",
-    won: true,
-    createdAt: Date.now() - 1000 * 60 * 45,
-  },
-  {
-    id: "sample-3",
-    name: "Chukwudi Eze",
-    phone: "081 3456 7890",
-    email: "",
-    campaignId: "demo-campaign",
-    prizeId: "tshirt",
-    prizeLabel: "T-shirt",
-    voucherCode: "SPIN-45D6E7F8",
-    won: true,
-    createdAt: Date.now() - 1000 * 60 * 120,
-  },
-  {
-    id: "sample-4",
-    name: "Funke Adebayo",
-    phone: "070 4567 8901",
-    email: "funke@example.com",
-    campaignId: "demo-campaign",
-    prizeId: "try-again",
-    prizeLabel: "Try Again",
-    won: false,
-    createdAt: Date.now() - 1000 * 60 * 180,
-  },
-];
-
 /** Fetches participants for admin analytics, exports, and TV display */
 export async function getParticipants(campaignId = "demo-campaign"): Promise<Participant[]> {
-  let firestoreList: Participant[] = [];
-
+  const list: Participant[] = [];
   try {
     const q = query(
       collection(db, "participants"),
@@ -239,54 +158,44 @@ export async function getParticipants(campaignId = "demo-campaign"): Promise<Par
     );
     const snap = await getDocs(q);
     snap.forEach((docSnap) => {
-      firestoreList.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+      list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
     });
   } catch (err) {
-    console.warn("Firestore getParticipants failed, using local storage:", err);
+    console.warn("Firestore getParticipants failed:", err);
   }
 
-  if (firestoreList.length > 0) return firestoreList;
+  return list;
+}
 
-  // Fallback / merge local storage items
-  if (typeof window !== "undefined") {
-    const saved = localStorage.getItem(`${LOCAL_STORAGE_KEY_PARTICIPANTS}_${campaignId}`);
-    if (saved) {
-      try {
-        const parsed: Participant[] = JSON.parse(saved);
-        if (parsed.length > 0) return parsed;
-      } catch (e) {}
-    }
-  }
-
-  return SAMPLE_PARTICIPANTS;
+/** Subscribes to real-time participant entries for a campaign */
+export function subscribeParticipants(
+  campaignId: string,
+  callback: (participants: Participant[]) => void
+): () => void {
+  const q = query(
+    collection(db, "participants"),
+    where("campaignId", "==", campaignId),
+    orderBy("createdAt", "desc")
+  );
+  return onSnapshot(q, (snap) => {
+    const list: Participant[] = [];
+    snap.forEach((docSnap) => {
+      list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+    });
+    callback(list);
+  });
 }
 
 /** Fetches all active & past campaigns for Super Admin Master Portal */
 export async function getAllCampaigns(): Promise<Campaign[]> {
-  let campaigns: Campaign[] = [];
-
+  const campaigns: Campaign[] = [];
   try {
     const snap = await getDocs(collection(db, "campaigns"));
     snap.forEach((docSnap) => {
       campaigns.push({ ...DEFAULT_CAMPAIGN, ...(docSnap.data() as Partial<Campaign>), id: docSnap.id });
     });
   } catch (err) {
-    console.warn("Firestore getAllCampaigns failed, scanning local storage:", err);
-  }
-
-  // Scan local storage for saved campaigns
-  if (typeof window !== "undefined") {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(LOCAL_STORAGE_KEY_CAMPAIGN)) {
-        try {
-          const item: Campaign = JSON.parse(localStorage.getItem(key) || "");
-          if (item && item.id && !campaigns.some((c) => c.id === item.id)) {
-            campaigns.push(item);
-          }
-        } catch (e) {}
-      }
-    }
+    console.warn("Firestore getAllCampaigns failed:", err);
   }
 
   if (!campaigns.some((c) => c.id === DEFAULT_CAMPAIGN.id)) {
@@ -298,35 +207,58 @@ export async function getAllCampaigns(): Promise<Campaign[]> {
 
 /** Fetches all participant spin records across all campaigns for Super Admin global export */
 export async function getAllGlobalParticipants(): Promise<Participant[]> {
-  let allParticipants: Participant[] = [];
-
+  const allParticipants: Participant[] = [];
   try {
     const snap = await getDocs(collection(db, "participants"));
     snap.forEach((docSnap) => {
       allParticipants.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
     });
   } catch (err) {
-    console.warn("Firestore getAllGlobalParticipants failed, scanning local storage:", err);
+    console.warn("Firestore getAllGlobalParticipants failed:", err);
   }
 
-  if (typeof window !== "undefined") {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(LOCAL_STORAGE_KEY_PARTICIPANTS)) {
-        try {
-          const items: Participant[] = JSON.parse(localStorage.getItem(key) || "[]");
-          items.forEach((item) => {
-            if (!allParticipants.some((p) => p.phone === item.phone && p.createdAt === item.createdAt)) {
-              allParticipants.push(item);
-            }
-          });
-        } catch (e) {}
+  return allParticipants;
+}
+
+/** Wipes participant records and resets prize claimed counts in Firestore */
+export async function clearCampaignData(campaignId?: string): Promise<{ deletedCount: number }> {
+  let deletedCount = 0;
+
+  // 1. Delete participant documents from Firestore
+  try {
+    const q = campaignId
+      ? query(collection(db, "participants"), where("campaignId", "==", campaignId))
+      : query(collection(db, "participants"));
+    const snap = await getDocs(q);
+    const deletePromises = snap.docs.map((docSnap) => {
+      deletedCount++;
+      return deleteDoc(doc(db, "participants", docSnap.id));
+    });
+    await Promise.all(deletePromises);
+  } catch (err) {
+    console.error("Error clearing participants from Firestore:", err);
+    throw err;
+  }
+
+  // 2. Reset claimedCount on campaign prizes in Firestore
+  if (campaignId) {
+    try {
+      const campaign = await getCampaign(campaignId);
+      if (campaign && campaign.prizes) {
+        const resetPrizes = campaign.prizes.map((p) => ({ ...p, claimedCount: 0 }));
+        await updateCampaign({ ...campaign, prizes: resetPrizes });
       }
+    } catch (err) {
+      console.error("Error resetting prize claimed counts:", err);
     }
   }
 
-  if (allParticipants.length === 0) return SAMPLE_PARTICIPANTS;
-  return allParticipants;
+  // 3. Clear any legacy browser local storage
+  if (typeof window !== "undefined") {
+    localStorage.clear();
+  }
+
+  return { deletedCount };
 }
 
 
