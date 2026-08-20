@@ -10,8 +10,7 @@ service cloud.firestore {
 
     // Participants (attendees submit spins; admin dashboard & TV mode read results)
     match /participants/{participantId} {
-      allow create, read: if true;
-      allow update, delete: if false;
+      allow read, write: if true;
     }
 
     // Super Admin config — readable for client-side credential verification,

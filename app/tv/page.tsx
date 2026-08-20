@@ -2,9 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import type { Campaign, Participant, StoreLocation } from "@/types";
-import { getCampaign, getParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
-import { db } from "@/lib/firebase";
-import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
+import { getCampaign, getParticipants, subscribeParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { QRCodeSVG } from "qrcode.react";
 import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X } from "lucide-react";
 
@@ -61,25 +59,13 @@ export default function TvDisplayMode() {
       }
     });
 
-    getParticipants(campaignSlug).then(setParticipants);
+    const unsub = subscribeParticipants(campaignSlug, (list) => {
+      setParticipants(list);
+    });
 
-    let unsub: (() => void) | undefined;
-    try {
-      const q = query(
-        collection(db, "participants"),
-        where("campaignId", "==", campaignSlug),
-        orderBy("createdAt", "desc")
-      );
-      unsub = onSnapshot(q, (snap) => {
-        const list: Participant[] = [];
-        snap.forEach((d) => list.push({ id: d.id, ...(d.data() as Participant) }));
-        if (list.length > 0) setParticipants(list);
-      });
-    } catch {
-      const iv = setInterval(() => getParticipants(campaignSlug).then(setParticipants), 3000);
-      return () => clearInterval(iv);
-    }
-    return () => { if (unsub) unsub(); };
+    return () => {
+      if (unsub) unsub();
+    };
   }, [campaignSlug]);
 
   function handleStoreLogin(e: React.FormEvent) {

@@ -67,7 +67,8 @@ export function subscribeCampaign(
 export async function updateCampaign(campaign: Campaign): Promise<void> {
   try {
     const ref = doc(db, "campaigns", campaign.id);
-    await setDoc(ref, campaign, { merge: true });
+    const cleanCampaign = JSON.parse(JSON.stringify(campaign));
+    await setDoc(ref, cleanCampaign, { merge: true });
   } catch (err) {
     console.error("Firestore campaign update failed:", err);
     throw err;
@@ -77,6 +78,7 @@ export async function updateCampaign(campaign: Campaign): Promise<void> {
 /** Checks whether a phone number has already spun for a given campaign. */
 export async function hasAlreadySpun(campaignId: string, phone: string): Promise<boolean> {
   const cleanPhone = phone.trim().replace(/\D/g, "");
+  if (!cleanPhone || !campaignId) return false;
 
   try {
     const q = query(
@@ -117,14 +119,23 @@ export async function incrementPrizeClaimed(campaignId: string, prizeId: string)
 
 /** Records a participant's spin result strictly into Firestore and updates inventory pool. */
 export async function recordParticipant(participant: Participant): Promise<string> {
-  // Clean phone number format
-  const cleanParticipant = {
-    ...participant,
-    phone: participant.phone.trim().replace(/\D/g, ""),
+  // Build a clean, serializable object with zero undefined fields (Firestore strictly rejects undefined)
+  const cleanParticipant: Record<string, any> = {
+    name: participant.name || "Anonymous",
+    phone: participant.phone ? participant.phone.trim().replace(/\D/g, "") : "",
+    email: participant.email || "",
+    campaignId: participant.campaignId || "",
+    prizeId: participant.prizeId || "",
+    prizeLabel: participant.prizeLabel || "Unknown",
+    voucherCode: participant.voucherCode || "",
+    won: Boolean(participant.won),
+    createdAt: participant.createdAt || Date.now(),
+    storeCode: participant.storeCode || "",
+    storeName: participant.storeName || "",
   };
 
   // If the participant won a prize, deduct 1 from available stock pool
-  if (cleanParticipant.won && cleanParticipant.prizeId) {
+  if (cleanParticipant.won && cleanParticipant.prizeId && cleanParticipant.campaignId) {
     incrementPrizeClaimed(cleanParticipant.campaignId, cleanParticipant.prizeId).catch(() => {});
   }
 
@@ -142,10 +153,10 @@ export async function getParticipants(campaignId: string): Promise<Participant[]
   const list: Participant[] = [];
   if (!campaignId) return list;
   try {
+    // Query by campaignId without orderBy to prevent Firestore index errors; sort in memory
     const q = query(
       collection(db, "participants"),
-      where("campaignId", "==", campaignId),
-      orderBy("createdAt", "desc")
+      where("campaignId", "==", campaignId)
     );
     const snap = await getDocs(q);
     snap.forEach((docSnap) => {
@@ -155,7 +166,7 @@ export async function getParticipants(campaignId: string): Promise<Participant[]
     console.warn("Firestore getParticipants failed:", err);
   }
 
-  return list;
+  return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 }
 
 /** Subscribes to real-time participant entries for a campaign */
@@ -163,18 +174,25 @@ export function subscribeParticipants(
   campaignId: string,
   callback: (participants: Participant[]) => void
 ): () => void {
+  // Query by campaignId without orderBy to avoid index requirements; sort in memory on update
   const q = query(
     collection(db, "participants"),
-    where("campaignId", "==", campaignId),
-    orderBy("createdAt", "desc")
+    where("campaignId", "==", campaignId)
   );
-  return onSnapshot(q, (snap) => {
-    const list: Participant[] = [];
-    snap.forEach((docSnap) => {
-      list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
-    });
-    callback(list);
-  });
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list: Participant[] = [];
+      snap.forEach((docSnap) => {
+        list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+      });
+      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      callback(list);
+    },
+    (err) => {
+      console.warn("subscribeParticipants snapshot error:", err);
+    }
+  );
 }
 
 /** Fetches all active & past campaigns for Super Admin Master Portal */

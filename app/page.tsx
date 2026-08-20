@@ -94,14 +94,23 @@ export default function Home() {
     setWonPrize(prize);
     if (campaign && participant) {
       try {
-        await recordParticipant({
-          name: participant.name, phone: participant.phone, email: participant.email,
-          campaignId: campaign.id, prizeId: prize.id, prizeLabel: prize.label,
-          voucherCode: code, won: !prize.isLosing, createdAt: Date.now(),
-          storeCode: activeStoreCode || undefined,
-          storeName: activeStoreName || undefined,
+        const participantId = await recordParticipant({
+          name: participant.name,
+          phone: participant.phone,
+          email: participant.email || "",
+          campaignId: campaign.id,
+          prizeId: prize.id,
+          prizeLabel: prize.label,
+          voucherCode: code,
+          won: !prize.isLosing,
+          createdAt: Date.now(),
+          storeCode: activeStoreCode || "",
+          storeName: activeStoreName || "",
         });
-      } catch (err) { console.error("Failed to record participant", err); }
+        console.log("Successfully recorded participant spin:", participantId);
+      } catch (err) {
+        console.error("Failed to record participant in Firestore:", err);
+      }
     }
   }
 

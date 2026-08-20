@@ -182,12 +182,13 @@ export default function AdminDashboard() {
   }
 
   function exportToCSV() {
-    const headers = ["Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Store / Location", "Date & Time"];
+    const headers = ["Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
     const rows = participants.map(p => [
       `"${p.name}"`, `"${p.phone}"`, `"${p.email || ""}"`,
       `"${p.prizeLabel}"`, `"${p.voucherCode || ""}"`,
       p.won ? "Winner" : "Non-Winner",
-      `"${p.storeName || p.storeCode || "General Stage"}"`,
+      `"${p.storeName || "General Stage"}"`,
+      `"${p.storeCode || ""}"`,
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
     const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
@@ -217,7 +218,11 @@ export default function AdminDashboard() {
   const filtered = participants.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.phone.includes(searchQuery) ||
-    p.prizeLabel.toLowerCase().includes(searchQuery.toLowerCase())
+    p.prizeLabel.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (p.email && p.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (p.storeName && p.storeName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (p.storeCode && p.storeCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (p.voucherCode && p.voucherCode.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   // ─── LOGIN SCREEN ───────────────────────────────────────────────────────────
