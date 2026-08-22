@@ -50,6 +50,7 @@ export default function CreateCampaignWizard() {
   const [secondaryColor, setSecondaryColor] = useState("#FF6B35");
   const [gradientStart, setGradientStart] = useState("#FF6B35");
   const [gradientEnd, setGradientEnd] = useState("#00BFA6");
+  const [backgroundColor, setBackgroundColor] = useState("#070d14");
 
   const [prizes, setPrizes] = useState<Prize[]>([
     { id: "1", label: "Umbrella", color: "#00BFA6", weight: 2 },
@@ -209,7 +210,7 @@ export default function CreateCampaignWizard() {
       logoUrl: logoUrl || undefined,
       primaryColor,
       secondaryColor,
-      backgroundColor: "#0D1B2A",
+      backgroundColor: backgroundColor || "#070d14",
       gradientStart,
       gradientEnd,
       welcomeMessage,
@@ -503,10 +504,11 @@ export default function CreateCampaignWizard() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               {[
-                { label: "Primary Color", value: primaryColor, set: setPrimaryColor },
-                { label: "Secondary Color", value: secondaryColor, set: setSecondaryColor },
+                { label: "Primary Accent", value: primaryColor, set: setPrimaryColor },
+                { label: "Secondary Accent", value: secondaryColor, set: setSecondaryColor },
+                { label: "Base Background", value: backgroundColor, set: setBackgroundColor },
               ].map(({ label, value, set }) => (
                 <div key={label}>
                   <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
@@ -536,36 +538,44 @@ export default function CreateCampaignWizard() {
 
             <div>
               <label className="block text-xs font-bold mb-3 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
-                Background Gradient Presets
+                Background Ambient Gradient & Theme Presets
               </label>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {[
-                  { name: "Brand Default", desc: "Orange → Turquoise", start: "#FF6B35", end: "#00BFA6" },
-                  { name: "Deep Ocean", desc: "Midnight → Turquoise", start: "#0D1B2A", end: "#00BFA6" },
-                  { name: "Sunset Blaze", desc: "Orange → Midnight", start: "#FF6B35", end: "#0D1B2A" },
-                  { name: "Arctic Glow", desc: "Turquoise → Light", start: "#00BFA6", end: "#F3F4F6" },
+                  { name: "Brand Default", desc: "Orange → Turquoise", start: "#FF6B35", end: "#00BFA6", bg: "#070d14", pri: "#00BFA6", sec: "#FF6B35" },
+                  { name: "Deep Ocean", desc: "Midnight → Turquoise", start: "#0D1B2A", end: "#00BFA6", bg: "#06101c", pri: "#00BFA6", sec: "#38bdf8" },
+                  { name: "Sunset Blaze", desc: "Orange → Deep Ruby", start: "#FF6B35", end: "#e11d48", bg: "#140608", pri: "#FF6B35", sec: "#fbbf24" },
+                  { name: "Neon Violet", desc: "Purple → Fuchsia", start: "#8b5cf6", end: "#ec4899", bg: "#0d0618", pri: "#8b5cf6", sec: "#ec4899" },
+                  { name: "Emerald Gold", desc: "Emerald → Amber", start: "#10b981", end: "#f59e0b", bg: "#04140d", pri: "#10b981", sec: "#f59e0b" },
+                  { name: "Arctic Glow", desc: "Cyan → Crisp White", start: "#06b6d4", end: "#e0e7ff", bg: "#07121b", pri: "#06b6d4", sec: "#a5f3fc" },
                 ].map((preset) => {
-                  const active = gradientStart === preset.start && gradientEnd === preset.end;
+                  const active = gradientStart === preset.start && gradientEnd === preset.end && backgroundColor === preset.bg;
                   return (
                     <button
                       key={preset.name}
-                      onClick={() => { setGradientStart(preset.start); setGradientEnd(preset.end); }}
-                      className="p-4 rounded-2xl flex items-center gap-3 text-left transition-all hover:scale-[1.02]"
+                      onClick={() => {
+                        setGradientStart(preset.start);
+                        setGradientEnd(preset.end);
+                        setBackgroundColor(preset.bg);
+                        setPrimaryColor(preset.pri);
+                        setSecondaryColor(preset.sec);
+                      }}
+                      className="p-3.5 rounded-2xl flex items-center gap-3 text-left transition-all hover:scale-[1.02] cursor-pointer"
                       style={{
-                        background: active ? "rgba(0,191,166,0.1)" : "rgba(255,255,255,0.03)",
-                        border: active ? "1px solid rgba(0,191,166,0.35)" : "1px solid rgba(255,255,255,0.06)",
-                        boxShadow: active ? "0 0 16px rgba(0,191,166,0.15)" : "none",
+                        background: active ? "rgba(0,191,166,0.12)" : "rgba(255,255,255,0.03)",
+                        border: active ? "1.5px solid #00BFA6" : "1px solid rgba(255,255,255,0.06)",
+                        boxShadow: active ? "0 0 20px rgba(0,191,166,0.2)" : "none",
                       }}
                     >
                       <div
-                        className="w-10 h-10 rounded-xl flex-shrink-0 shadow-lg"
+                        className="w-9 h-9 rounded-xl flex-shrink-0 shadow-lg border border-white/20"
                         style={{ background: `linear-gradient(135deg, ${preset.start}, ${preset.end})` }}
                       />
-                      <div>
-                        <p className="text-sm font-bold text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{preset.name}</p>
-                        <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.35)" }}>{preset.desc}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-bold text-white truncate" style={{ fontFamily: "Rubik, sans-serif" }}>{preset.name}</p>
+                        <p className="text-[10px] truncate" style={{ color: "rgba(255,255,255,0.4)" }}>{preset.desc}</p>
                       </div>
-                      {active && <Check className="w-4 h-4 ml-auto flex-shrink-0" style={{ color: "#00BFA6" }} />}
+                      {active && <Check className="w-3.5 h-3.5 flex-shrink-0 text-teal-400" />}
                     </button>
                   );
                 })}
@@ -575,16 +585,26 @@ export default function CreateCampaignWizard() {
             {/* Live preview */}
             <div>
               <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
-                Live Preview
+                Live Full-Page Aura Preview
               </label>
               <div
-                className="w-full h-32 rounded-2xl flex flex-col items-center justify-center text-white shadow-inner overflow-hidden relative"
+                className="w-full h-40 rounded-3xl flex flex-col items-center justify-center text-white shadow-2xl overflow-hidden relative border border-white/10 p-4"
                 style={{
-                  background: `radial-gradient(circle at 25% 25%, ${gradientStart}, transparent 60%), radial-gradient(circle at 75% 75%, ${gradientEnd}, transparent 60%), #0D1B2A`,
+                  background: `radial-gradient(circle at 20% 20%, ${gradientStart}50 0%, transparent 60%), radial-gradient(circle at 80% 80%, ${gradientEnd}45 0%, transparent 60%), ${backgroundColor || "#070d14"}`,
                 }}
               >
-                <p className="font-black text-lg" style={{ fontFamily: "Rubik, sans-serif" }}>{campaignTitle || "Your Campaign"}</p>
-                {subTitle && <p className="text-xs mt-1 font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.7)" }}>{subTitle}</p>}
+                <div className="absolute top-3 left-3 w-8 h-8 rounded-lg flex items-center justify-center text-xs shadow" style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}>
+                  🎯
+                </div>
+                <p className="font-black text-xl text-center" style={{ fontFamily: "Rubik, sans-serif" }}>{campaignTitle || "Your Campaign"}</p>
+                {subTitle && (
+                  <span className="text-[10px] mt-1.5 font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full" style={{ background: `${secondaryColor}25`, color: secondaryColor, border: `1px solid ${secondaryColor}40` }}>
+                    {subTitle}
+                  </span>
+                )}
+                <div className="mt-3 px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow" style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}>
+                  🎡 Spin & Win Preview
+                </div>
               </div>
             </div>
 

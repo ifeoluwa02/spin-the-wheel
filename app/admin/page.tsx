@@ -555,18 +555,19 @@ export default function AdminDashboard() {
             </div>
 
             <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Theme Colors</h3>
+              <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Theme & Full-Page Visual Identity</h3>
               <div className="grid grid-cols-2 gap-4">
                 {[
-                  { label: "Primary", key: "primaryColor" },
-                  { label: "Secondary", key: "secondaryColor" },
+                  { label: "Primary Accent", key: "primaryColor" },
+                  { label: "Secondary Accent", key: "secondaryColor" },
                   { label: "Gradient Start", key: "gradientStart" },
                   { label: "Gradient End", key: "gradientEnd" },
+                  { label: "Base Background", key: "backgroundColor" },
                 ].map(({ label, key }) => (
-                  <div key={key}>
+                  <div key={key} className={key === "backgroundColor" ? "col-span-2" : ""}>
                     <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</label>
                     <div className="flex items-center gap-2">
-                      <input type="color" value={(campaign as any)[key] || "#00BFA6"} onChange={e => setCampaign({ ...campaign, [key]: e.target.value })}
+                      <input type="color" value={(campaign as any)[key] || (key === "backgroundColor" ? "#070d14" : "#00BFA6")} onChange={e => setCampaign({ ...campaign, [key]: e.target.value })}
                         className="w-11 h-11 rounded-xl cursor-pointer border-0 p-1" style={{ background: "rgba(255,255,255,0.05)" }} />
                       <input type="text" value={(campaign as any)[key] || ""} onChange={e => setCampaign({ ...campaign, [key]: e.target.value })}
                         className="w-full rounded-lg px-3 py-2 text-xs text-white font-mono outline-none"
@@ -576,28 +577,35 @@ export default function AdminDashboard() {
                 ))}
               </div>
               <div>
-                <label className="block text-xs font-bold mb-3 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>Presets</label>
+                <label className="block text-xs font-bold mb-3 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>Preset Color Schemes</label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { name: "Brand Default", start: "#FF6B35", end: "#00BFA6" },
-                    { name: "Deep Ocean", start: "#0D1B2A", end: "#00BFA6" },
-                    { name: "Sunset Blaze", start: "#FF6B35", end: "#0D1B2A" },
-                    { name: "Arctic Glow", start: "#00BFA6", end: "#F3F4F6" },
+                    { name: "Brand Default", start: "#FF6B35", end: "#00BFA6", bg: "#070d14", pri: "#00BFA6", sec: "#FF6B35" },
+                    { name: "Deep Ocean", start: "#0D1B2A", end: "#00BFA6", bg: "#06101c", pri: "#00BFA6", sec: "#38bdf8" },
+                    { name: "Sunset Blaze", start: "#FF6B35", end: "#e11d48", bg: "#140608", pri: "#FF6B35", sec: "#fbbf24" },
+                    { name: "Neon Violet", start: "#8b5cf6", end: "#ec4899", bg: "#0d0618", pri: "#8b5cf6", sec: "#ec4899" },
+                    { name: "Emerald Gold", start: "#10b981", end: "#f59e0b", bg: "#04140d", pri: "#10b981", sec: "#f59e0b" },
+                    { name: "Arctic Glow", start: "#06b6d4", end: "#e0e7ff", bg: "#07121b", pri: "#06b6d4", sec: "#a5f3fc" },
                   ].map(p => (
-                    <button key={p.name} onClick={() => setCampaign({ ...campaign, gradientStart: p.start, gradientEnd: p.end })}
-                      className="p-3 rounded-xl flex items-center gap-3 text-left transition-all hover:scale-[1.02]"
+                    <button key={p.name} onClick={() => setCampaign({ ...campaign, gradientStart: p.start, gradientEnd: p.end, backgroundColor: p.bg, primaryColor: p.pri, secondaryColor: p.sec })}
+                      className="p-3 rounded-xl flex items-center gap-3 text-left transition-all hover:scale-[1.02] cursor-pointer"
                       style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                      <div className="w-8 h-8 rounded-lg flex-shrink-0 shadow" style={{ background: `linear-gradient(135deg, ${p.start}, ${p.end})` }} />
-                      <span className="text-xs font-bold text-white">{p.name}</span>
+                      <div className="w-8 h-8 rounded-lg flex-shrink-0 shadow border border-white/20" style={{ background: `linear-gradient(135deg, ${p.start}, ${p.end})` }} />
+                      <span className="text-xs font-bold text-white truncate">{p.name}</span>
                     </button>
                   ))}
                 </div>
               </div>
-              <div className="w-full h-20 rounded-xl flex items-center justify-center font-black text-sm text-white" style={{
-                background: `radial-gradient(circle at 30% 30%, ${campaign.gradientStart || "#FF6B35"}, transparent 60%), radial-gradient(circle at 70% 70%, ${campaign.gradientEnd || "#00BFA6"}, transparent 60%), #0D1B2A`,
+              <div className="w-full h-24 rounded-2xl flex flex-col items-center justify-center font-black text-sm text-white border border-white/10 p-3 relative overflow-hidden" style={{
+                background: `radial-gradient(circle at 20% 20%, ${campaign.gradientStart || "#FF6B35"}60 0%, transparent 60%), radial-gradient(circle at 80% 80%, ${campaign.gradientEnd || "#00BFA6"}50 0%, transparent 60%), ${campaign.backgroundColor || "#070d14"}`,
                 fontFamily: "Rubik, sans-serif",
               }}>
-                {campaign.name || "Preview"}
+                <span className="text-base">{campaign.name || "Live Aura Preview"}</span>
+                {campaign.subTitle && (
+                  <span className="text-[10px] uppercase font-bold mt-1 px-2 py-0.5 rounded-full" style={{ color: campaign.secondaryColor || "#FF6B35", background: `${campaign.secondaryColor || "#FF6B35"}20` }}>
+                    {campaign.subTitle}
+                  </span>
+                )}
               </div>
             </div>
           </div>

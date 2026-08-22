@@ -13,6 +13,8 @@ interface WinnerModalProps {
   campaignName: string;
   subTitle?: string;
   accentColor?: string;
+  secondaryColor?: string;
+  backgroundColor?: string;
   onClose: () => void;
 }
 
@@ -23,6 +25,8 @@ export default function WinnerModal({
   campaignName,
   subTitle,
   accentColor = "#00BFA6",
+  secondaryColor = "#FF6B35",
+  backgroundColor = "#070d14",
   onClose,
 }: WinnerModalProps) {
   const won = !prize.isLosing;
@@ -36,15 +40,15 @@ export default function WinnerModal({
     if (won) {
       playWinSound();
       try {
-        confetti({ particleCount: 100, spread: 80, origin: { y: 0.55 }, colors: ["#ffffff", accentColor, "#FF6B35", "#eab308"] });
+        confetti({ particleCount: 100, spread: 80, origin: { y: 0.55 }, colors: ["#ffffff", accentColor, secondaryColor, "#eab308"] });
         setTimeout(() => confetti({ particleCount: 50, spread: 50, origin: { y: 0.3, x: 0.2 }, colors: ["#ffffff", accentColor] }), 400);
-        setTimeout(() => confetti({ particleCount: 50, spread: 50, origin: { y: 0.3, x: 0.8 }, colors: ["#FF6B35", "#eab308"] }), 600);
+        setTimeout(() => confetti({ particleCount: 50, spread: 50, origin: { y: 0.3, x: 0.8 }, colors: [secondaryColor, "#eab308"] }), 600);
       } catch {}
     } else {
       playLossSound();
     }
     return () => clearTimeout(t);
-  }, [won, accentColor]);
+  }, [won, accentColor, secondaryColor]);
 
   function handleCopy() {
     if (!voucherCode) return;
@@ -58,8 +62,8 @@ export default function WinnerModal({
       className="fixed inset-0 z-50 flex flex-col items-center justify-center p-4 overflow-y-auto transition-all duration-500"
       style={{
         background: won
-          ? `radial-gradient(ellipse at 50% 0%, ${accentColor}35 0%, transparent 55%), radial-gradient(ellipse at 80% 100%, #FF6B3530 0%, transparent 55%), #070d14`
-          : "radial-gradient(ellipse at 50% 0%, rgba(100,100,120,0.3) 0%, transparent 55%), #070d14",
+          ? `radial-gradient(ellipse at 50% 0%, ${accentColor}40 0%, transparent 60%), radial-gradient(ellipse at 80% 100%, ${secondaryColor}35 0%, transparent 60%), ${backgroundColor || "#070d14"}`
+          : `radial-gradient(ellipse at 50% 0%, ${accentColor}20 0%, transparent 60%), ${backgroundColor || "#070d14"}`,
         fontFamily: "Nunito, sans-serif",
         opacity: visible ? 1 : 0,
         transform: visible ? "scale(1)" : "scale(0.96)",

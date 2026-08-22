@@ -209,8 +209,11 @@ export default function TvDisplayMode() {
 
   return (
     <div
-      className="relative min-h-screen w-full flex flex-col justify-between overflow-hidden bg-[#070d14] text-white selection:bg-teal-500 selection:text-white"
-      style={{ fontFamily: "Nunito, sans-serif" }}
+      className="relative min-h-screen w-full flex flex-col justify-between overflow-hidden text-white selection:bg-teal-500 selection:text-white transition-colors duration-700"
+      style={{
+        background: `radial-gradient(circle at 10% 10%, ${gc}30 0%, transparent 50%), radial-gradient(circle at 90% 90%, ${g2}25 0%, transparent 50%), ${campaign.backgroundColor || "#070d14"}`,
+        fontFamily: "Nunito, sans-serif",
+      }}
     >
       {/* Dynamic Ambient Color Orbs */}
       <div

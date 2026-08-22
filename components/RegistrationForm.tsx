@@ -15,6 +15,7 @@ interface RegistrationFormProps {
   submitting: boolean;
   error?: string | null;
   accentColor: string;
+  secondaryColor?: string;
 }
 
 export default function RegistrationForm({
@@ -22,6 +23,7 @@ export default function RegistrationForm({
   submitting,
   error,
   accentColor,
+  secondaryColor,
 }: RegistrationFormProps) {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -131,9 +133,9 @@ export default function RegistrationForm({
       <button
         type="submit"
         disabled={!canSubmit}
-        className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl font-black text-white text-base transition-all disabled:opacity-40 hover:opacity-90 active:scale-[0.98] group"
+        className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl font-black text-white text-base transition-all disabled:opacity-40 hover:opacity-90 active:scale-[0.98] group cursor-pointer"
         style={{
-          background: `linear-gradient(135deg, ${accentColor}, ${accentColor}bb)`,
+          background: `linear-gradient(135deg, ${accentColor}, ${secondaryColor || accentColor})`,
           boxShadow: `0 8px 24px ${accentColor}40`,
           fontFamily: "Rubik, sans-serif",
         }}
