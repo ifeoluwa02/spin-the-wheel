@@ -7,7 +7,8 @@ import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
   Tv, ExternalLink, Settings, Activity, Trophy, Users,
-  Power, ChevronRight, X, Check, Layers, RefreshCw, Database
+  Power, ChevronRight, X, Check, Layers, RefreshCw, Database,
+  AlertTriangle, Trash2,
 } from "lucide-react";
 
 export default function SuperAdminDashboard() {
@@ -31,6 +32,11 @@ export default function SuperAdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [showWipeModal, setShowWipeModal] = useState(false);
+  const [wipePasswordInput, setWipePasswordInput] = useState("");
+  const [wipeError, setWipeError] = useState("");
+  const [wiping, setWiping] = useState(false);
+
   useEffect(() => {
     // Check if already authenticated in session
     if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
@@ -44,19 +50,25 @@ export default function SuperAdminDashboard() {
   }, []);
 
   useEffect(() => {
-    if (!authenticated) return;
-    loadData();
+    if (authenticated) {
+      loadData();
+    }
   }, [authenticated]);
 
   async function loadData() {
     setLoading(true);
-    const [cList, all] = await Promise.all([
-      getAllCampaigns(),
-      getAllGlobalParticipants(),
-    ]);
-    setCampaigns(cList);
-    setAllParticipants(all);
-    setLoading(false);
+    try {
+      const [allC, allP] = await Promise.all([
+        getAllCampaigns(),
+        getAllGlobalParticipants(),
+      ]);
+      setCampaigns(allC);
+      setAllParticipants(allP);
+    } catch (err) {
+      console.error("Failed to load super admin data:", err);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleRefresh() {
@@ -65,17 +77,33 @@ export default function SuperAdminDashboard() {
     setRefreshing(false);
   }
 
-  async function handleWipeAllDatabase() {
-    if (!window.confirm("⚠️ DANGER: Are you sure you want to wipe ALL participant records and reset ALL campaign prize stocks in Firestore across the entire system?")) return;
-    setRefreshing(true);
+  function handleOpenWipeModal() {
+    setWipePasswordInput("");
+    setWipeError("");
+    setShowWipeModal(true);
+  }
+
+  async function handleConfirmWipeAllDatabase(e: React.FormEvent) {
+    e.preventDefault();
+    setWipeError("");
+    setWiping(true);
     try {
+      const cfg = await getSuperAdminConfig();
+      if (!cfg || wipePasswordInput !== cfg.password) {
+        setWipeError("Incorrect Super Admin password. Global wipe denied.");
+        setWiping(false);
+        return;
+      }
+
       const res = await clearCampaignData();
       await loadData();
+      setShowWipeModal(false);
+      setWipePasswordInput("");
       alert(`✅ System database wiped! Cleared ${res.deletedCount} participant record(s) from Firestore.`);
     } catch (err) {
-      alert("❌ Failed to wipe database. Check Firestore permissions.");
+      setWipeError("Failed to wipe database. Check Firestore permissions.");
     } finally {
-      setRefreshing(false);
+      setWiping(false);
     }
   }
 
@@ -287,7 +315,12 @@ export default function SuperAdminDashboard() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={handleWipeAllDatabase} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 transition-all">
+            <button
+              onClick={handleOpenWipeModal}
+              disabled={wiping}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 transition-all cursor-pointer"
+              title="Wipe all system participants from Firestore (Super Admin Password Required)"
+            >
               <Database className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Wipe DB</span>
             </button>
@@ -454,6 +487,78 @@ export default function SuperAdminDashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Super Admin Wipe DB Security Modal ── */}
+      {showWipeModal && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={() => { setShowWipeModal(false); setWipeError(""); }}
+        >
+          <div
+            className="rounded-3xl p-7 max-w-md w-full text-center space-y-5 bg-[#0f1823] border border-red-500/30 shadow-2xl animate-fadeIn"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center text-red-400 bg-red-950/40 border border-red-500/40 text-2xl shadow-inner">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                Global Database Wipe
+              </h3>
+              <p className="text-xs text-white/50 mt-1.5 leading-relaxed">
+                ⚠️ DANGER: This will permanently delete <span className="text-red-400 font-bold">ALL participant registration records</span> and reset claimed prize stock across <span className="font-bold text-white">ALL campaigns</span> in the entire system.
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmWipeAllDatabase} className="space-y-4 text-left">
+              <div>
+                <label className="block text-xs font-bold text-white/60 mb-1.5 uppercase tracking-wider">
+                  Enter Super Admin Password to Authorize *
+                </label>
+                <input
+                  type="password"
+                  value={wipePasswordInput}
+                  onChange={e => {
+                    setWipePasswordInput(e.target.value);
+                    setWipeError("");
+                  }}
+                  placeholder="Super Admin master password"
+                  required
+                  autoFocus
+                  className="w-full rounded-xl px-4 py-3 bg-black/50 border border-white/15 text-white text-sm outline-none focus:border-red-500 transition-all font-mono"
+                />
+                {wipeError && (
+                  <p className="text-xs text-red-400 font-bold mt-2 flex items-center gap-1.5">
+                    <X className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>{wipeError}</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowWipeModal(false); setWipeError(""); }}
+                  className="flex-1 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-white bg-white/5 border border-white/10 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={wiping || !wipePasswordInput}
+                  className="flex-1 py-3 rounded-xl text-xs font-black text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 transition-all shadow-lg shadow-red-950 cursor-pointer flex items-center justify-center gap-1.5"
+                  style={{ fontFamily: "Rubik, sans-serif" }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{wiping ? "Wiping System…" : "Wipe All System Data"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

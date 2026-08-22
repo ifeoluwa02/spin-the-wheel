@@ -9,6 +9,7 @@ import {
   clearCampaignData,
   subscribeCampaign,
   subscribeParticipants,
+  getSuperAdminConfig,
   DEFAULT_CAMPAIGN,
 } from "@/lib/campaign";
 import Link from "next/link";
@@ -16,7 +17,7 @@ import {
   Settings, Trophy, Users, BarChart3, Download, QrCode, Tv,
   Plus, Trash2, Lock, LogOut, Sparkles, CheckCircle, Dices,
   ExternalLink, Palette, Save, Activity, Target, Layers,
-  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy,
+  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -36,6 +37,9 @@ export default function AdminDashboard() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("analytics");
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearPasswordInput, setClearPasswordInput] = useState("");
+  const [clearError, setClearError] = useState("");
   const [qrUrl, setQrUrl] = useState("");
   const [campaignSlug, setCampaignSlug] = useState("");
   const [luckyWinner, setLuckyWinner] = useState<Participant | null>(null);
@@ -137,15 +141,34 @@ export default function AdminDashboard() {
     };
   }, [authenticated, campaignSlug]);
 
-  async function handleClearDatabase() {
-    if (!window.confirm("⚠️ Are you sure you want to clear all participant records and reset gift claimed counts for this campaign in Firestore? This cannot be undone!")) return;
+  function handleOpenClearModal() {
+    setClearPasswordInput("");
+    setClearError("");
+    setShowClearModal(true);
+  }
+
+  async function handleConfirmClearDatabase(e: React.FormEvent) {
+    e.preventDefault();
+    setClearError("");
     setClearing(true);
     try {
+      const superCfg = await getSuperAdminConfig();
+      const isSuperAdmin = superCfg && clearPasswordInput === superCfg.password;
+      const isCampaignAdmin = campaign.adminPassword && clearPasswordInput === campaign.adminPassword;
+
+      if (!isSuperAdmin && !isCampaignAdmin) {
+        setClearError("Incorrect admin password. Database reset denied.");
+        setClearing(false);
+        return;
+      }
+
       const res = await clearCampaignData(campaignSlug);
       setParticipants([]);
-      alert(`✅ Database cleared! Deleted ${res.deletedCount} participant record(s) and reset prize stock counts in Firestore.`);
+      setShowClearModal(false);
+      setClearPasswordInput("");
+      alert(`✅ Database cleared! Deleted ${res.deletedCount} participant record(s) and reset prize claimed stock counts in Firestore.`);
     } catch (err) {
-      alert("❌ Failed to clear database. Check Firestore permissions.");
+      setClearError("Failed to clear database. Check Firestore permissions.");
     } finally {
       setClearing(false);
     }
@@ -404,13 +427,13 @@ export default function AdminDashboard() {
               <span className="hidden sm:inline">TV</span>
             </Link>
             <button
-              onClick={handleClearDatabase}
+              onClick={handleOpenClearModal}
               disabled={clearing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40"
-              title="Clear all spin participants and reset prize stock counts for this campaign in Firestore"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 cursor-pointer"
+              title="Clear all spin participants and reset prize stock counts for this campaign in Firestore (Admin Password Required)"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">{clearing ? "Clearing..." : "Clear DB"}</span>
+              <span className="hidden md:inline">Clear DB</span>
             </button>
             <button onClick={handleLogout} className="p-2 rounded-xl text-xs transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.3)" }}>
               <LogOut className="w-4 h-4" />
@@ -1082,6 +1105,78 @@ export default function AdminDashboard() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Clear Database Security Modal ── */}
+      {showClearModal && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={() => { setShowClearModal(false); setClearError(""); }}
+        >
+          <div
+            className="rounded-3xl p-7 max-w-md w-full text-center space-y-5 bg-[#0f1823] border border-red-500/30 shadow-2xl animate-fadeIn"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center text-red-400 bg-red-950/40 border border-red-500/40 text-2xl shadow-inner">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                Confirm Database Reset
+              </h3>
+              <p className="text-xs text-white/50 mt-1.5 leading-relaxed">
+                This will permanently delete all participant registration & spin records and reset claimed stock counts in Firestore for <span className="font-bold text-white">"{campaign.name}"</span>.
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmClearDatabase} className="space-y-4 text-left">
+              <div>
+                <label className="block text-xs font-bold text-white/60 mb-1.5 uppercase tracking-wider">
+                  Enter Admin Password to Authorize *
+                </label>
+                <input
+                  type="password"
+                  value={clearPasswordInput}
+                  onChange={e => {
+                    setClearPasswordInput(e.target.value);
+                    setClearError("");
+                  }}
+                  placeholder="Admin password"
+                  required
+                  autoFocus
+                  className="w-full rounded-xl px-4 py-3 bg-black/50 border border-white/15 text-white text-sm outline-none focus:border-red-500 transition-all font-mono"
+                />
+                {clearError && (
+                  <p className="text-xs text-red-400 font-bold mt-2 flex items-center gap-1.5">
+                    <X className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>{clearError}</span>
+                  </p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowClearModal(false); setClearError(""); }}
+                  className="flex-1 py-3 rounded-xl text-xs font-bold text-white/60 hover:text-white bg-white/5 border border-white/10 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={clearing || !clearPasswordInput}
+                  className="flex-1 py-3 rounded-xl text-xs font-black text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 transition-all shadow-lg shadow-red-950 cursor-pointer flex items-center justify-center gap-1.5"
+                  style={{ fontFamily: "Rubik, sans-serif" }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{clearing ? "Wiping Data…" : "Wipe Campaign Data"}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
