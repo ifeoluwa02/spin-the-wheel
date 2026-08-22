@@ -16,7 +16,7 @@ import {
   Settings, Trophy, Users, BarChart3, Download, QrCode, Tv,
   Plus, Trash2, Lock, LogOut, Sparkles, CheckCircle, Dices,
   ExternalLink, Palette, Save, Activity, Target, Layers,
-  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck,
+  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -49,11 +49,14 @@ export default function AdminDashboard() {
   const [newStoreCity, setNewStoreCity] = useState("");
   const [newStorePin, setNewStorePin] = useState("1234");
   const [selectedStoreForQr, setSelectedStoreForQr] = useState<StoreLocation | null>(null);
+  const [storeSaving, setStoreSaving] = useState(false);
+  const [storeToast, setStoreToast] = useState<string | null>(null);
 
-  function handleAddStore(e: React.FormEvent) {
+  async function handleAddStore(e: React.FormEvent) {
     e.preventDefault();
     if (!newStoreName.trim()) return;
-    const code = newStoreCode.trim().toLowerCase().replace(/\s+/g, "-") || `store-${Date.now().toString(36)}`;
+    setStoreSaving(true);
+    const code = newStoreCode.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `store-${Date.now().toString(36)}`;
     const newStore: StoreLocation = {
       id: `store-${Date.now()}`,
       name: newStoreName.trim(),
@@ -61,17 +64,40 @@ export default function AdminDashboard() {
       city: newStoreCity.trim() || undefined,
       pin: newStorePin.trim() || undefined,
     };
-    const stores = [...(campaign.stores || []), newStore];
-    setCampaign({ ...campaign, stores });
+    const updatedStores = [...(campaign.stores || []), newStore];
+    const updatedCampaign = { ...campaign, stores: updatedStores };
+    setCampaign(updatedCampaign);
     setNewStoreName("");
     setNewStoreCode("");
     setNewStoreCity("");
     setNewStorePin("1234");
+
+    try {
+      await updateCampaign(updatedCampaign);
+      setStoreToast(`✅ "${newStore.name}" added and saved live!`);
+      setTimeout(() => setStoreToast(null), 3000);
+    } catch (err) {
+      console.error("Failed to persist store to Firestore:", err);
+      alert("❌ Could not save store to database. Please check connection.");
+    } finally {
+      setStoreSaving(false);
+    }
   }
 
-  function handleDeleteStore(storeId: string) {
-    const stores = (campaign.stores || []).filter(s => s.id !== storeId && s.code !== storeId);
-    setCampaign({ ...campaign, stores });
+  async function handleDeleteStore(storeId: string) {
+    const target = (campaign.stores || []).find(s => s.id === storeId || s.code === storeId);
+    if (!window.confirm(`Delete store / BA account "${target?.name || storeId}"?`)) return;
+    const updatedStores = (campaign.stores || []).filter(s => s.id !== storeId && s.code !== storeId);
+    const updatedCampaign = { ...campaign, stores: updatedStores };
+    setCampaign(updatedCampaign);
+
+    try {
+      await updateCampaign(updatedCampaign);
+      setStoreToast("🗑️ Store account removed.");
+      setTimeout(() => setStoreToast(null), 3000);
+    } catch (err) {
+      console.error("Failed to delete store from Firestore:", err);
+    }
   }
 
   useEffect(() => {
@@ -716,6 +742,14 @@ export default function AdminDashboard() {
         {/* ── Stores & Brand Ambassadors Tab ── */}
         {activeTab === "stores" && (
           <div className="space-y-6">
+            {/* Live feedback toast */}
+            {storeToast && (
+              <div className="p-3.5 rounded-xl bg-teal-500/15 border border-teal-500/40 text-teal-300 text-xs font-bold flex items-center justify-between animate-fadeIn">
+                <span>{storeToast}</span>
+                <button onClick={() => setStoreToast(null)} className="text-white/40 hover:text-white">✕</button>
+              </div>
+            )}
+
             {/* Create Store Account Card */}
             <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <div className="border-b border-white/10 pb-3">
@@ -780,12 +814,12 @@ export default function AdminDashboard() {
 
                 <button
                   type="submit"
-                  disabled={!newStoreName.trim()}
-                  className="w-full py-2.5 rounded-xl text-xs font-black text-white flex items-center justify-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-40 shadow-md"
+                  disabled={!newStoreName.trim() || storeSaving}
+                  className="w-full py-2.5 rounded-xl text-xs font-black text-white flex items-center justify-center gap-1.5 transition-all hover:opacity-90 disabled:opacity-40 shadow-md cursor-pointer"
                   style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)", fontFamily: "Rubik, sans-serif" }}
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  Add Store Account
+                  {storeSaving ? "Saving Live…" : "Add Store Account"}
                 </button>
               </form>
             </div>
@@ -808,7 +842,11 @@ export default function AdminDashboard() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {campaign.stores.map((s) => {
-                    const storeSpins = participants.filter(p => p.storeCode === s.code || p.storeCode === s.id);
+                    const storeSpins = participants.filter(p =>
+                      (p.storeCode && s.code && p.storeCode.toLowerCase() === s.code.toLowerCase()) ||
+                      p.storeCode === s.id ||
+                      (p.storeName && s.name && p.storeName.toLowerCase() === s.name.toLowerCase())
+                    );
                     const storeWinners = storeSpins.filter(p => p.won).length;
                     const storeWinRate = storeSpins.length ? Math.round((storeWinners / storeSpins.length) * 100) : 0;
                     const storeTvUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/tv?c=${campaignSlug}&store=${s.code}`;
@@ -817,20 +855,30 @@ export default function AdminDashboard() {
                     return (
                       <div key={s.id || s.code} className="rounded-2xl p-5 space-y-4 bg-white/[0.03] border border-white/10 relative group hover:border-teal-500/40 transition-all">
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
                             <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-300 flex-shrink-0">
                               <MapPin className="w-5 h-5" />
                             </div>
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
                                 {s.name}
                               </h4>
-                              <p className="text-xs font-mono text-teal-400 mt-0.5 truncate">
-                                Code: {s.code} {s.city ? `· ${s.city}` : ""}
-                              </p>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                                <span className="text-[11px] font-mono text-teal-400">
+                                  {s.code}
+                                </span>
+                                {s.city && (
+                                  <span className="text-[10px] text-white/50">· {s.city}</span>
+                                )}
+                                {s.pin && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
+                                    PIN: {s.pin}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all" title="Delete Store">
+                          <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all cursor-pointer flex-shrink-0" title="Delete Store">
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
@@ -855,23 +903,36 @@ export default function AdminDashboard() {
                         <div className="flex items-center gap-2 pt-1">
                           <button
                             onClick={() => {
+                              navigator.clipboard.writeText(storeWheelUrl);
+                              setStoreToast(`📋 Copied attendee link for ${s.name}!`);
+                              setTimeout(() => setStoreToast(null), 2500);
+                            }}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl text-xs font-bold bg-white/5 border border-white/10 hover:bg-white/10 text-white transition-all cursor-pointer"
+                            title="Copy Attendee Link"
+                          >
+                            <Copy className="w-3.5 h-3.5 text-white/60" />
+                            <span className="truncate">Copy Link</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
                               setSelectedStoreForQr(s);
                               setShowQrModal(true);
                             }}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold bg-white/5 border border-white/10 hover:bg-white/10 text-white transition-all"
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl text-xs font-bold bg-white/5 border border-white/10 hover:bg-white/10 text-white transition-all cursor-pointer"
                           >
                             <QrCode className="w-3.5 h-3.5 text-teal-400" />
-                            <span>Dedicated QR</span>
+                            <span className="truncate">QR Code</span>
                           </button>
 
                           <Link
                             href={`/tv?c=${campaignSlug}&store=${s.code}`}
                             target="_blank"
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-black text-white transition-all hover:opacity-90 shadow-sm"
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-xl text-xs font-black text-white transition-all hover:opacity-90 shadow-sm"
                             style={{ background: "linear-gradient(135deg, #00BFA6, #0D9488)" }}
                           >
                             <Tv className="w-3.5 h-3.5" />
-                            <span>Launch TV</span>
+                            <span className="truncate">Launch TV</span>
                           </Link>
                         </div>
                       </div>

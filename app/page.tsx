@@ -51,7 +51,7 @@ export default function Home() {
       setCampaign(c);
 
       if (storeCodeParam && c.stores?.length) {
-        const matched = c.stores.find(s => s.code === storeCodeParam || s.id === storeCodeParam);
+        const matched = c.stores.find(s => s.code?.toLowerCase() === storeCodeParam.toLowerCase() || s.id === storeCodeParam);
         if (matched) setActiveStoreName(matched.name);
         else setActiveStoreName(storeCodeParam);
       }
@@ -94,6 +94,9 @@ export default function Home() {
     setWonPrize(prize);
     if (campaign && participant) {
       try {
+        const resolvedStore = campaign.stores?.find(s => s.code?.toLowerCase() === (activeStoreCode || "").toLowerCase() || s.id === activeStoreCode);
+        const finalStoreName = activeStoreName || resolvedStore?.name || (activeStoreCode ? activeStoreCode : "General Stage");
+
         const participantId = await recordParticipant({
           name: participant.name,
           phone: participant.phone,
@@ -105,7 +108,7 @@ export default function Home() {
           won: !prize.isLosing,
           createdAt: Date.now(),
           storeCode: activeStoreCode || "",
-          storeName: activeStoreName || "",
+          storeName: finalStoreName,
         });
         console.log("Successfully recorded participant spin:", participantId);
       } catch (err) {

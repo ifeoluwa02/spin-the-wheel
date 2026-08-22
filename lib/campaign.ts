@@ -28,6 +28,7 @@ export const DEFAULT_CAMPAIGN: Campaign = {
   oneSpinPerPhone: true,
   active: true,
   prizes: [],
+  stores: [],
 };
 
 /** Generates a voucher code like SPIN-HW87EIDP */

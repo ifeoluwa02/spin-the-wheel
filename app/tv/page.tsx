@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import type { Campaign, Participant, StoreLocation } from "@/types";
-import { getCampaign, getParticipants, subscribeParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
+import { getCampaign, subscribeCampaign, getParticipants, subscribeParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { QRCodeSVG } from "qrcode.react";
 import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X } from "lucide-react";
 
@@ -23,7 +23,7 @@ export default function TvDisplayMode() {
   const [pinError, setPinError] = useState<boolean>(false);
   const [isStoreAuthenticated, setIsStoreAuthenticated] = useState<boolean>(false);
 
-  // Resolve campaign slug & initial store from ?c= and ?store= params
+  // Initialize campaign slug & URL store param
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -39,14 +39,14 @@ export default function TvDisplayMode() {
   // Load campaign + live listener
   useEffect(() => {
     if (!campaignSlug) return;
-    getCampaign(campaignSlug).then((c) => {
-      if (!c) return;
+    
+    function applyCampaign(c: Campaign) {
       setCampaign(c);
       if (typeof window !== "undefined") {
         const params = new URLSearchParams(window.location.search);
         const storeParam = params.get("store") || "";
         if (storeParam && c.stores?.length) {
-          const matched = c.stores.find(s => s.code === storeParam || s.id === storeParam);
+          const matched = c.stores.find(s => s.code?.toLowerCase() === storeParam.toLowerCase() || s.id === storeParam);
           if (matched) {
             setSelectedStore(matched);
             setWheelUrl(`${window.location.origin}/?c=${campaignSlug}&store=${matched.code}`);
@@ -57,14 +57,23 @@ export default function TvDisplayMode() {
           setWheelUrl(`${window.location.origin}/?c=${campaignSlug}`);
         }
       }
+    }
+
+    getCampaign(campaignSlug).then((c) => {
+      if (c) applyCampaign(c);
     });
 
-    const unsub = subscribeParticipants(campaignSlug, (list) => {
+    const unsubCampaign = subscribeCampaign(campaignSlug, (c) => {
+      applyCampaign(c);
+    });
+
+    const unsubParticipants = subscribeParticipants(campaignSlug, (list) => {
       setParticipants(list);
     });
 
     return () => {
-      if (unsub) unsub();
+      if (unsubCampaign) unsubCampaign();
+      if (unsubParticipants) unsubParticipants();
     };
   }, [campaignSlug]);
 
