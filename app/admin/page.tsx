@@ -1004,7 +1004,7 @@ export default function AdminDashboard() {
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
                 <thead>
                   <tr>
-                    {["Name", "Phone", "Email", "Prize", "Voucher", "Store / BA", "Time"].map(h => (
+                    {["Name", "Phone", "Email", "Prize", "Voucher", "Store / BA", "Date & Time"].map(h => (
                       <th key={h} className="pb-3 px-2 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>{h}</th>
                     ))}
                   </tr>
@@ -1028,8 +1028,13 @@ export default function AdminDashboard() {
                           {p.storeName || p.storeCode || "General Stage"}
                         </span>
                       </td>
-                      <td className="py-3 px-2" style={{ color: "rgba(255,255,255,0.3)" }}>
-                        {new Date(p.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      <td className="py-3 px-2">
+                        <div className="text-white text-xs font-semibold whitespace-nowrap">
+                          {new Date(p.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                        </div>
+                        <div className="text-[10px] font-mono whitespace-nowrap" style={{ color: "rgba(255,255,255,0.4)" }}>
+                          {new Date(p.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </div>
                       </td>
                     </tr>
                   ))}
