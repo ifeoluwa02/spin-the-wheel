@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import type { Campaign, Prize } from "@/types";
 import { updateCampaign, getSuperAdminConfig } from "@/lib/campaign";
+import { getGradientContrastColor, isLightColor } from "@/lib/colors";
 import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import {
@@ -584,11 +585,19 @@ export default function CreateCampaignWizard() {
 
             {/* Live preview */}
             <div>
-              <label className="block text-xs font-bold mb-2 uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
-                Live Full-Page Aura Preview
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                  Live Full-Page Aura Preview
+                </label>
+                {(isLightColor(primaryColor) || isLightColor(secondaryColor)) && (
+                  <span className="text-[10px] text-teal-300 font-bold bg-teal-950/50 border border-teal-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Check className="w-3 h-3 text-teal-400" />
+                    Auto High-Contrast Mode Active
+                  </span>
+                )}
+              </div>
               <div
-                className="w-full h-40 rounded-3xl flex flex-col items-center justify-center text-white shadow-2xl overflow-hidden relative border border-white/10 p-4"
+                className="w-full h-44 rounded-3xl flex flex-col items-center justify-center text-white shadow-2xl overflow-hidden relative border border-white/10 p-4"
                 style={{
                   background: `radial-gradient(circle at 20% 20%, ${gradientStart}50 0%, transparent 60%), radial-gradient(circle at 80% 80%, ${gradientEnd}45 0%, transparent 60%), ${backgroundColor || "#070d14"}`,
                 }}
@@ -598,11 +607,25 @@ export default function CreateCampaignWizard() {
                 </div>
                 <p className="font-black text-xl text-center" style={{ fontFamily: "Rubik, sans-serif" }}>{campaignTitle || "Your Campaign"}</p>
                 {subTitle && (
-                  <span className="text-[10px] mt-1.5 font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full" style={{ background: `${secondaryColor}25`, color: secondaryColor, border: `1px solid ${secondaryColor}40` }}>
+                  <span
+                    className="text-[10px] mt-1.5 font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full"
+                    style={{
+                      background: isLightColor(secondaryColor) ? "rgba(255,255,255,0.18)" : `${secondaryColor}25`,
+                      color: isLightColor(secondaryColor) ? "#ffffff" : secondaryColor,
+                      border: `1px solid ${isLightColor(secondaryColor) ? "rgba(255,255,255,0.3)" : `${secondaryColor}40`}`,
+                    }}
+                  >
                     {subTitle}
                   </span>
                 )}
-                <div className="mt-3 px-4 py-1.5 rounded-xl text-xs font-bold text-white shadow" style={{ background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})` }}>
+                <div
+                  className="mt-3 px-4 py-2 rounded-xl text-xs font-black shadow-lg"
+                  style={{
+                    background: `linear-gradient(135deg, ${primaryColor}, ${secondaryColor})`,
+                    color: getGradientContrastColor(primaryColor, secondaryColor),
+                    fontFamily: "Rubik, sans-serif",
+                  }}
+                >
                   🎡 Spin & Win Preview
                 </div>
               </div>

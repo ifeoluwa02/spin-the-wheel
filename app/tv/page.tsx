@@ -5,6 +5,7 @@ import type { Campaign, Participant, StoreLocation } from "@/types";
 import { getCampaign, subscribeCampaign, getParticipants, subscribeParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { QRCodeSVG } from "qrcode.react";
 import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X } from "lucide-react";
+import { getGradientContrastColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
 
 export default function TvDisplayMode() {
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
@@ -216,6 +217,12 @@ export default function TvDisplayMode() {
     );
   }
 
+  const bannerTextColor = getGradientContrastColor(gc, g2);
+  const subTitleColor = isLightColor(g2) ? "#ffffff" : g2;
+  const winRateColor = isLightColor(gc) ? "#ffffff" : gc;
+  const orb1Opacity = getAmbientGlowOpacity(gc, 0.2);
+  const orb2Opacity = getAmbientGlowOpacity(g2, 0.2);
+
   return (
     <div
       className="relative min-h-screen w-full flex flex-col justify-between overflow-hidden text-white selection:bg-teal-500 selection:text-white transition-colors duration-700"
@@ -226,12 +233,12 @@ export default function TvDisplayMode() {
     >
       {/* Dynamic Ambient Color Orbs */}
       <div
-        className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none transition-all duration-1000"
-        style={{ background: gc }}
+        className="absolute -top-40 -left-40 w-[500px] h-[500px] rounded-full blur-[140px] pointer-events-none transition-all duration-1000"
+        style={{ background: gc, opacity: orb1Opacity }}
       />
       <div
-        className="absolute -bottom-40 -right-40 w-[500px] h-[500px] rounded-full blur-[140px] opacity-20 pointer-events-none transition-all duration-1000"
-        style={{ background: g2 }}
+        className="absolute -bottom-40 -right-40 w-[500px] h-[500px] rounded-full blur-[140px] pointer-events-none transition-all duration-1000"
+        style={{ background: g2, opacity: orb2Opacity }}
       />
 
       {/* Grid Pattern Overlay */}
@@ -255,20 +262,20 @@ export default function TvDisplayMode() {
         }}
       >
         {latestWinner && (
-          <div className="flex items-center justify-center gap-3 px-6 text-center">
-            <Sparkles className="w-6 h-6 text-yellow-300 animate-bounce flex-shrink-0" />
+          <div className="flex items-center justify-center gap-3 px-6 text-center" style={{ color: bannerTextColor }}>
+            <Sparkles className="w-6 h-6 animate-bounce flex-shrink-0" style={{ color: bannerTextColor }} />
             <div className="flex items-center gap-2 truncate">
-              <span className="text-xs sm:text-sm font-black uppercase tracking-[0.25em] text-white/80">
+              <span className="text-xs sm:text-sm font-black uppercase tracking-[0.25em] opacity-80">
                 🎉 WINNER ANNOUNCEMENT:
               </span>
-              <span className="text-base sm:text-xl font-black text-white truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
+              <span className="text-base sm:text-xl font-black truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
                 {latestWinner.name}
               </span>
-              <span className="text-xs sm:text-base font-bold text-white/90 truncate">
-                won <span className="underline decoration-yellow-300 underline-offset-4">{latestWinner.prizeLabel}</span>!
+              <span className="text-xs sm:text-base font-bold opacity-90 truncate">
+                won <span className="underline underline-offset-4 font-black">{latestWinner.prizeLabel}</span>!
               </span>
             </div>
-            <Sparkles className="w-6 h-6 text-yellow-300 animate-bounce flex-shrink-0" />
+            <Sparkles className="w-6 h-6 animate-bounce flex-shrink-0" style={{ color: bannerTextColor }} />
           </div>
         )}
       </div>
@@ -302,7 +309,7 @@ export default function TvDisplayMode() {
               {campaign.subTitle && (
                 <p
                   className="font-bold uppercase tracking-[0.25em] text-xs truncate"
-                  style={{ color: g2 }}
+                  style={{ color: subTitleColor }}
                 >
                   {campaign.subTitle}
                 </p>
@@ -324,7 +331,7 @@ export default function TvDisplayMode() {
             {[
               { label: "Total Spins", value: totalSpins, color: "#ffffff", icon: Activity },
               { label: "Prizes Claimed", value: totalWinners, color: "#10b981", icon: Trophy },
-              { label: "Win Rate", value: `${winRate}%`, color: gc, icon: Zap },
+              { label: "Win Rate", value: `${winRate}%`, color: winRateColor, icon: Zap },
             ].map(({ label, value, color, icon: Icon }) => (
               <div key={label} className="px-5 sm:px-7 py-3 text-center flex flex-col justify-center">
                 <div className="flex items-center justify-center gap-1.5">

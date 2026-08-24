@@ -9,28 +9,28 @@ import {
   generateVoucherCode,
 } from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
+import { getGradientContrastColor, getContrastTextColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
+import { RotateCcw, Settings, ChevronRight, Loader2 } from "lucide-react";
+import Link from "next/link";
 import RegistrationForm, { RegistrationValues } from "@/components/RegistrationForm";
 import SpinWheel from "@/components/SpinWheel";
 import WinnerModal from "@/components/WinnerModal";
-import Link from "next/link";
-import { Settings, Loader2, WifiOff, ChevronRight, RotateCcw } from "lucide-react";
 
-type Step = "loading" | "not-found" | "register" | "wheel" | "already-spun";
+type Step = "loading" | "not-found" | "register" | "already-spun" | "wheel";
 
 export default function Home() {
-  const [step, setStep] = useState<Step>("loading");
   const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [step, setStep] = useState<Step>("loading");
   const [participant, setParticipant] = useState<RegistrationValues | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [regError, setRegError] = useState<string | null>(null);
-
+  const [isSpinning, setIsSpinning] = useState(false);
   const [targetIndex, setTargetIndex] = useState<number | null>(null);
   const [spinToken, setSpinToken] = useState(0);
-  const [isSpinning, setIsSpinning] = useState(false);
   const [wonPrize, setWonPrize] = useState<Prize | null>(null);
-  const [voucherCode, setVoucherCode] = useState<string>("");
-  const [activeStoreCode, setActiveStoreCode] = useState<string>("");
-  const [activeStoreName, setActiveStoreName] = useState<string>("");
+  const [voucherCode, setVoucherCode] = useState("");
+  const [activeStoreCode, setActiveStoreCode] = useState("");
+  const [activeStoreName, setActiveStoreName] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -83,8 +83,8 @@ export default function Home() {
     if (!campaign || isSpinning) return;
     const idx = pickPrizeIndex(campaign.prizes);
     setTargetIndex(idx);
+    setSpinToken(Date.now());
     setIsSpinning(true);
-    setSpinToken((t) => t + 1);
   }
 
   async function handleFinish(prize: Prize) {
@@ -124,6 +124,14 @@ export default function Home() {
   const gc = campaign?.gradientStart || campaign?.primaryColor || "#FF6B35";
   const g2 = campaign?.gradientEnd || campaign?.secondaryColor || "#00BFA6";
   const bgColor = campaign?.backgroundColor || "#070d14";
+  const spinBtnTextColor = getGradientContrastColor(gc, g2);
+  const subTitleColor = isLightColor(g2) ? "#ffffff" : g2;
+  const subTitleBg = isLightColor(g2) ? "rgba(255,255,255,0.15)" : `${g2}18`;
+  const subTitleBorder = isLightColor(g2) ? "rgba(255,255,255,0.3)" : `${g2}35`;
+  const nameHighlightColor = isLightColor(g2) ? "#ffffff" : g2;
+
+  const orb1Opacity = getAmbientGlowOpacity(gc, 0.25);
+  const orb2Opacity = getAmbientGlowOpacity(g2, 0.2);
 
   return (
     <div
@@ -136,12 +144,12 @@ export default function Home() {
       {/* Dynamic ambient background orbs */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div
-          className="absolute -top-32 -left-32 w-96 h-96 rounded-full blur-[120px] opacity-25 animate-pulse"
-          style={{ background: gc, animationDuration: "8s" }}
+          className="absolute -top-32 -left-32 w-96 h-96 rounded-full blur-[120px] animate-pulse"
+          style={{ background: gc, opacity: orb1Opacity, animationDuration: "8s" }}
         />
         <div
-          className="absolute top-1/3 -right-32 w-96 h-96 rounded-full blur-[120px] opacity-20 animate-pulse"
-          style={{ background: g2, animationDuration: "10s" }}
+          className="absolute top-1/3 -right-32 w-96 h-96 rounded-full blur-[120px] animate-pulse"
+          style={{ background: g2, opacity: orb2Opacity, animationDuration: "10s" }}
         />
         <div
           className="absolute -bottom-32 left-1/4 w-[500px] h-[500px] rounded-full blur-[140px] opacity-15"
@@ -213,7 +221,14 @@ export default function Home() {
               {campaign.name}
             </h1>
             {campaign.subTitle && (
-              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-[0.2em]" style={{ background: `${g2}18`, border: `1px solid ${g2}35`, color: g2 }}>
+              <div
+                className="inline-block px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-[0.2em]"
+                style={{
+                  background: subTitleBg,
+                  border: `1px solid ${subTitleBorder}`,
+                  color: subTitleColor,
+                }}
+              >
                 {campaign.subTitle}
               </div>
             )}
@@ -280,8 +295,12 @@ export default function Home() {
             </div>
             <button
               onClick={() => { setRegError(null); setStep("register"); }}
-              className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-black text-white transition-all hover:opacity-90 cursor-pointer"
-              style={{ background: `linear-gradient(135deg, ${gc}, ${g2})`, boxShadow: `0 6px 20px ${gc}35` }}
+              className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl text-sm font-black transition-all hover:opacity-90 cursor-pointer"
+              style={{
+                background: `linear-gradient(135deg, ${gc}, ${g2})`,
+                color: spinBtnTextColor,
+                boxShadow: `0 6px 20px ${gc}35`,
+              }}
             >
               <RotateCcw className="w-4 h-4" />
               Try a different number
@@ -295,7 +314,7 @@ export default function Home() {
         <main className="relative z-10 w-full max-w-sm px-4 pb-12 flex-1 flex flex-col items-center justify-center gap-6">
           <div className="text-center space-y-1">
             <p className="text-lg sm:text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
-              Welcome, <span style={{ color: g2 }}>{participant.name}</span>! 👋
+              Welcome, <span style={{ color: nameHighlightColor }}>{participant.name}</span>! 👋
             </p>
             <p className="text-xs sm:text-sm font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>
               {isSpinning ? "The wheel is spinning…" : "Tap the button below to spin for rewards!"}
@@ -321,9 +340,10 @@ export default function Home() {
           <button
             onClick={handleSpinClick}
             disabled={isSpinning}
-            className="w-full max-w-[290px] flex items-center justify-center gap-2.5 py-4 rounded-2xl font-black text-white text-base transition-all hover:opacity-95 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed shadow-2xl cursor-pointer"
+            className="w-full max-w-[290px] flex items-center justify-center gap-2.5 py-4 rounded-2xl font-black text-base transition-all hover:opacity-95 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed shadow-2xl cursor-pointer"
             style={{
               background: `linear-gradient(135deg, ${gc}, ${g2})`,
+              color: spinBtnTextColor,
               boxShadow: `0 12px 32px ${gc}50, 0 4px 12px ${g2}40`,
               fontFamily: "Rubik, sans-serif",
             }}

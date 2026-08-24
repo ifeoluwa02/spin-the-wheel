@@ -3,6 +3,7 @@
 import { useState, FormEvent } from "react";
 import { User, Phone, Mail, ArrowRight, AlertCircle, Loader2 } from "lucide-react";
 import { isValidNigerianPhone, normalizeNigerianPhone } from "@/lib/phone";
+import { getGradientContrastColor } from "@/lib/colors";
 
 export interface RegistrationValues {
   name: string;
@@ -29,6 +30,8 @@ export default function RegistrationForm({
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [touched, setTouched] = useState(false);
+
+  const btnTextColor = getGradientContrastColor(accentColor, secondaryColor || accentColor);
 
   const nameValid = name.trim().length >= 2;
   const phoneValid = isValidNigerianPhone(phone);
@@ -133,21 +136,22 @@ export default function RegistrationForm({
       <button
         type="submit"
         disabled={!canSubmit}
-        className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl font-black text-white text-base transition-all disabled:opacity-40 hover:opacity-90 active:scale-[0.98] group cursor-pointer"
+        className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl font-black text-base transition-all disabled:opacity-40 hover:opacity-90 active:scale-[0.98] group cursor-pointer"
         style={{
           background: `linear-gradient(135deg, ${accentColor}, ${secondaryColor || accentColor})`,
+          color: btnTextColor,
           boxShadow: `0 8px 24px ${accentColor}40`,
           fontFamily: "Rubik, sans-serif",
         }}
       >
         {submitting ? (
           <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Checking eligibility…
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span>Registering…</span>
           </>
         ) : (
           <>
-            Continue to Spin
+            <span>Proceed to Spin</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </>
         )}

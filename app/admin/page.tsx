@@ -20,6 +20,7 @@ import {
   ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import { getGradientContrastColor, isLightColor } from "@/lib/colors";
 
 type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw";
 
@@ -630,11 +631,11 @@ export default function AdminDashboard() {
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { name: "Brand Default", start: "#FF6B35", end: "#00BFA6", bg: "#070d14", pri: "#00BFA6", sec: "#FF6B35" },
+                    { name: "Minimal White", start: "#FFFFFF", end: "#94A3B8", bg: "#090D14", pri: "#FFFFFF", sec: "#38BDF8" },
                     { name: "Deep Ocean", start: "#0D1B2A", end: "#00BFA6", bg: "#06101c", pri: "#00BFA6", sec: "#38bdf8" },
                     { name: "Sunset Blaze", start: "#FF6B35", end: "#e11d48", bg: "#140608", pri: "#FF6B35", sec: "#fbbf24" },
                     { name: "Neon Violet", start: "#8b5cf6", end: "#ec4899", bg: "#0d0618", pri: "#8b5cf6", sec: "#ec4899" },
                     { name: "Emerald Gold", start: "#10b981", end: "#f59e0b", bg: "#04140d", pri: "#10b981", sec: "#f59e0b" },
-                    { name: "Arctic Glow", start: "#06b6d4", end: "#e0e7ff", bg: "#07121b", pri: "#06b6d4", sec: "#a5f3fc" },
                   ].map(p => (
                     <button key={p.name} onClick={() => setCampaign({ ...campaign, gradientStart: p.start, gradientEnd: p.end, backgroundColor: p.bg, primaryColor: p.pri, secondaryColor: p.sec })}
                       className="p-3 rounded-xl flex items-center gap-3 text-left transition-all hover:scale-[1.02] cursor-pointer"
@@ -645,16 +646,48 @@ export default function AdminDashboard() {
                   ))}
                 </div>
               </div>
-              <div className="w-full h-24 rounded-2xl flex flex-col items-center justify-center font-black text-sm text-white border border-white/10 p-3 relative overflow-hidden" style={{
-                background: `radial-gradient(circle at 20% 20%, ${campaign.gradientStart || "#FF6B35"}60 0%, transparent 60%), radial-gradient(circle at 80% 80%, ${campaign.gradientEnd || "#00BFA6"}50 0%, transparent 60%), ${campaign.backgroundColor || "#070d14"}`,
-                fontFamily: "Rubik, sans-serif",
-              }}>
-                <span className="text-base">{campaign.name || "Live Aura Preview"}</span>
-                {campaign.subTitle && (
-                  <span className="text-[10px] uppercase font-bold mt-1 px-2 py-0.5 rounded-full" style={{ color: campaign.secondaryColor || "#FF6B35", background: `${campaign.secondaryColor || "#FF6B35"}20` }}>
-                    {campaign.subTitle}
-                  </span>
-                )}
+
+              {/* Live Preview */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    Live Preview & Contrast Feedback
+                  </label>
+                  {(isLightColor(campaign.primaryColor || "") || isLightColor(campaign.secondaryColor || "") || isLightColor(campaign.gradientStart || "") || isLightColor(campaign.gradientEnd || "")) && (
+                    <span className="text-[10px] text-teal-300 font-bold bg-teal-950/50 border border-teal-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Check className="w-3 h-3 text-teal-400" />
+                      Auto High-Contrast Mode Active
+                    </span>
+                  )}
+                </div>
+
+                <div className="w-full h-32 rounded-2xl flex flex-col items-center justify-center text-white border border-white/10 p-3 relative overflow-hidden" style={{
+                  background: `radial-gradient(circle at 20% 20%, ${campaign.gradientStart || "#FF6B35"}60 0%, transparent 60%), radial-gradient(circle at 80% 80%, ${campaign.gradientEnd || "#00BFA6"}50 0%, transparent 60%), ${campaign.backgroundColor || "#070d14"}`,
+                  fontFamily: "Rubik, sans-serif",
+                }}>
+                  <span className="text-base font-black">{campaign.name || "Live Aura Preview"}</span>
+                  {campaign.subTitle && (
+                    <span
+                      className="text-[10px] uppercase font-bold mt-1 px-2.5 py-0.5 rounded-full"
+                      style={{
+                        color: isLightColor(campaign.secondaryColor) ? "#ffffff" : (campaign.secondaryColor || "#FF6B35"),
+                        background: isLightColor(campaign.secondaryColor) ? "rgba(255,255,255,0.18)" : `${campaign.secondaryColor || "#FF6B35"}20`,
+                        border: `1px solid ${isLightColor(campaign.secondaryColor) ? "rgba(255,255,255,0.3)" : `${campaign.secondaryColor || "#FF6B35"}40`}`,
+                      }}
+                    >
+                      {campaign.subTitle}
+                    </span>
+                  )}
+                  <div
+                    className="mt-2.5 px-3.5 py-1 rounded-xl text-xs font-black shadow-md"
+                    style={{
+                      background: `linear-gradient(135deg, ${campaign.primaryColor || "#00BFA6"}, ${campaign.secondaryColor || "#FF6B35"})`,
+                      color: getGradientContrastColor(campaign.primaryColor || "#00BFA6", campaign.secondaryColor || "#FF6B35"),
+                    }}
+                  >
+                    🎡 Spin Button Contrast Preview
+                  </div>
+                </div>
               </div>
             </div>
           </div>

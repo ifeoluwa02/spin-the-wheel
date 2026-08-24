@@ -3,15 +3,16 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Prize } from "@/types";
 import { playTickSound } from "@/lib/audio";
+import { getContrastTextColor, isLightColor } from "@/lib/colors";
 
 interface SpinWheelProps {
   prizes: Prize[];
-  onFinish: (prize: Prize) => void;
   targetIndex: number | null;
   spinToken: number;
-  size?: number;
-  accentColor: string;
+  onFinish: (prize: Prize) => void;
+  accentColor?: string;
   logoUrl?: string;
+  size?: number;
 }
 
 const TAU = Math.PI * 2;
@@ -22,21 +23,22 @@ function easeOutWheel(t: number): number {
 
 export default function SpinWheel({
   prizes,
-  onFinish,
   targetIndex,
   spinToken,
-  size = 360,
-  accentColor,
+  onFinish,
+  accentColor = "#FF6B35",
   logoUrl,
+  size = 320,
 }: SpinWheelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rotationRef = useRef(0);
   const animRef = useRef<number | null>(null);
   const [spinning, setSpinning] = useState(false);
-  const lastSpinToken = useRef(0);
+  const lastSpinToken = useRef(spinToken);
   const lastSegmentRef = useRef(-1);
 
-  const segmentAngle = TAU / Math.max(prizes.length, 1);
+  const numSegments = prizes.length;
+  const segmentAngle = TAU / (numSegments || 1);
 
   const draw = useCallback(
     (rotation: number) => {
@@ -54,6 +56,8 @@ export default function SpinWheel({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssSize, cssSize);
 
+      if (prizes.length === 0) return;
+
       const cx = cssSize / 2;
       const cy = cssSize / 2;
       const r = cssSize / 2 - 12;
@@ -66,6 +70,8 @@ export default function SpinWheel({
       prizes.forEach((prize, i) => {
         const start = i * segmentAngle;
         const end = start + segmentAngle;
+        const sliceLight = isLightColor(prize.color);
+        const sliceTextColor = getContrastTextColor(prize.color);
 
         // Wedge background
         ctx.beginPath();
@@ -76,7 +82,7 @@ export default function SpinWheel({
         ctx.fill();
 
         // Wedge border separator
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+        ctx.strokeStyle = sliceLight ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.4)";
         ctx.lineWidth = 2;
         ctx.stroke();
 
@@ -84,13 +90,13 @@ export default function SpinWheel({
         ctx.save();
         ctx.rotate(start + segmentAngle / 2);
         ctx.textAlign = "right";
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = sliceTextColor;
 
         // Dynamic font size calculation based on number of segments
         const fontSize = Math.max(10, Math.min(15, (size / prizes.length) * 0.45));
         ctx.font = `700 ${fontSize}px "Space Grotesk", system-ui, sans-serif`;
-        ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
-        ctx.shadowBlur = 4;
+        ctx.shadowColor = sliceLight ? "rgba(255, 255, 255, 0.6)" : "rgba(0, 0, 0, 0.6)";
+        ctx.shadowBlur = 3;
 
         const maxChars = prizes.length > 8 ? 12 : 16;
         const label =

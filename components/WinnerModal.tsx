@@ -5,6 +5,7 @@ import type { Prize } from "@/types";
 import { playWinSound, playLossSound } from "@/lib/audio";
 import { Copy, CheckCircle2, Ticket, Trophy, RefreshCw, Frown } from "lucide-react";
 import confetti from "canvas-confetti";
+import { getContrastTextColor, isLightColor } from "@/lib/colors";
 
 interface WinnerModalProps {
   prize: Prize;
@@ -32,6 +33,9 @@ export default function WinnerModal({
   const won = !prize.isLosing;
   const [copied, setCopied] = useState(false);
   const [visible, setVisible] = useState(false);
+
+  const toastTextColor = won ? getContrastTextColor(accentColor) : "#ffffff";
+  const accentHighlightColor = isLightColor(accentColor) ? "#ffffff" : accentColor;
 
   useEffect(() => {
     // Animate in
@@ -83,8 +87,12 @@ export default function WinnerModal({
         {/* Toast badge */}
         <div className="flex justify-center">
           <div
-            className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest text-white shadow-lg"
-            style={{ background: won ? `linear-gradient(135deg, ${accentColor}, ${accentColor}bb)` : "rgba(255,255,255,0.1)", boxShadow: won ? `0 4px 16px ${accentColor}50` : "none" }}
+            className="flex items-center gap-2 px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest shadow-lg"
+            style={{
+              background: won ? `linear-gradient(135deg, ${accentColor}, ${accentColor}bb)` : "rgba(255,255,255,0.1)",
+              color: toastTextColor,
+              boxShadow: won ? `0 4px 16px ${accentColor}50` : "none",
+            }}
           >
             {won ? <Trophy className="w-3.5 h-3.5" /> : <Frown className="w-3.5 h-3.5 opacity-60" />}
             {won ? `${participantName} Won!` : "Keep trying!"}
