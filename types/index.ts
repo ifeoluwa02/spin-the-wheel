@@ -48,11 +48,33 @@ export interface SuperAdminConfig {
   password: string;
 }
 
+export const AGE_RANGES = [
+  "0 - 12",
+  "13 - 17",
+  "18 - 25",
+  "26 - 35",
+  "36 - 45",
+  "46 - 60",
+  "60+",
+] as const;
+
+export type AgeRange = typeof AGE_RANGES[number];
+
+export const GENDERS = [
+  "Male",
+  "Female",
+  "Prefer not to say",
+] as const;
+
+export type Gender = typeof GENDERS[number];
+
 export interface Participant {
   id?: string;
   name: string;
   phone: string;
   email?: string;
+  ageRange?: string;
+  gender?: string;
   campaignId: string;
   prizeId: string;
   prizeLabel: string;

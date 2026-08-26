@@ -101,6 +101,8 @@ export default function Home() {
           name: participant.name,
           phone: participant.phone,
           email: participant.email || "",
+          ageRange: participant.ageRange || "",
+          gender: participant.gender || "",
           campaignId: campaign.id,
           prizeId: prize.id,
           prizeLabel: prize.label,

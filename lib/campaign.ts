@@ -128,6 +128,8 @@ export async function recordParticipant(participant: Participant): Promise<strin
     name: participant.name || "Anonymous",
     phone: normalizedPhone,
     email: participant.email || "",
+    ageRange: participant.ageRange || "",
+    gender: participant.gender || "",
     campaignId: participant.campaignId || "",
     prizeId: participant.prizeId || "",
     prizeLabel: participant.prizeLabel || "Unknown",

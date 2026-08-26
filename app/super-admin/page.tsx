@@ -155,11 +155,19 @@ export default function SuperAdminDashboard() {
   }
 
   function exportAll() {
-    const headers = ["Campaign", "Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA", "Store Code", "Date & Time"];
+    const headers = ["Campaign", "Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA", "Store Code", "Date & Time"];
     const rows = allParticipants.map(p => [
-      `"${p.campaignId}"`, `"${p.name}"`, `"${p.phone}"`, `"${p.email || ""}"`,
-      `"${p.prizeLabel}"`, `"${p.voucherCode || ""}"`, p.won ? "Winner" : "Non-Winner",
-      `"${p.storeName || "General Stage"}"`, `"${p.storeCode || ""}"`,
+      `"${p.campaignId}"`,
+      `"${p.name}"`,
+      `"${p.phone}"`,
+      `"${p.ageRange || "—"}"`,
+      `"${p.gender || "—"}"`,
+      `"${p.email || ""}"`,
+      `"${p.prizeLabel}"`,
+      `"${p.voucherCode || ""}"`,
+      p.won ? "Winner" : "Non-Winner",
+      `"${p.storeName || "General Stage"}"`,
+      `"${p.storeCode || ""}"`,
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
     const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");

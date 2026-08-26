@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Campaign, Participant, Prize, StoreLocation } from "@/types";
+import { AGE_RANGES, GENDERS } from "@/types";
 import {
   getCampaign,
   updateCampaign,
@@ -232,10 +233,15 @@ export default function AdminDashboard() {
   }
 
   function exportToCSV() {
-    const headers = ["Name", "Phone", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
+    const headers = ["Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
     const rows = participants.map(p => [
-      `"${p.name}"`, `"${p.phone}"`, `"${p.email || ""}"`,
-      `"${p.prizeLabel}"`, `"${p.voucherCode || ""}"`,
+      `"${p.name}"`,
+      `"${p.phone}"`,
+      `"${p.ageRange || "—"}"`,
+      `"${p.gender || "—"}"`,
+      `"${p.email || ""}"`,
+      `"${p.prizeLabel}"`,
+      `"${p.voucherCode || ""}"`,
       p.won ? "Winner" : "Non-Winner",
       `"${p.storeName || "General Stage"}"`,
       `"${p.storeCode || ""}"`,
@@ -551,13 +557,100 @@ export default function AdminDashboard() {
                       </div>
                       <div>
                         <p className="text-sm font-bold text-white leading-tight">{p.name}</p>
-                        <p className="text-xs font-mono" style={{ color: "rgba(255,255,255,0.35)" }}>{p.phone}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className="text-xs font-mono" style={{ color: "rgba(255,255,255,0.35)" }}>{p.phone}</p>
+                          {(p.ageRange || p.gender) && (
+                            <span className="text-[10px] text-teal-300/70 font-semibold">
+                              • {[p.ageRange ? `${p.ageRange} yrs` : "", p.gender].filter(Boolean).join(", ")}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <p className="text-xs font-bold" style={{ color: p.won ? "#10b981" : "rgba(255,255,255,0.3)" }}>{p.prizeLabel}</p>
                   </div>
                 ))}
                 {!participants.length && <p className="text-center py-8 text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No activations yet.</p>}
+              </div>
+            </div>
+
+            {/* ── Demographics Breakdown (Age & Gender) ── */}
+            <div className="col-span-1 lg:col-span-2 rounded-2xl p-6 space-y-6" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-black text-white text-base" style={{ fontFamily: "Rubik, sans-serif" }}>Audience Demographics Breakdown</h3>
+                  <p className="text-xs mt-0.5 text-white/40">Real-time age and gender distribution of registered campaign participants.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-950/40 border border-purple-500/30 text-purple-300">
+                    {totalParticipants} Registrations
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Age Distribution */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-white/60 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-purple-400" />
+                    Age Group Distribution
+                  </h4>
+                  <div className="space-y-2.5">
+                    {AGE_RANGES.map(range => {
+                      const count = participants.filter(p => p.ageRange === range).length;
+                      const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
+                      return (
+                        <div key={range} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-white/80 font-bold">{range} years</span>
+                            <span className="text-white/40 font-mono">{count} ({pct}%)</span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.max(pct, count > 0 ? 3 : 0)}%`,
+                                background: "linear-gradient(90deg, #8b5cf6, #a78bfa)",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Gender Distribution */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-white/60 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-teal-400" />
+                    Gender Distribution
+                  </h4>
+                  <div className="space-y-2.5">
+                    {GENDERS.map(g => {
+                      const count = participants.filter(p => p.gender === g).length;
+                      const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
+                      const barColor = g === "Female" ? "linear-gradient(90deg, #ec4899, #f472b6)" : g === "Male" ? "linear-gradient(90deg, #00BFA6, #38bdf8)" : "linear-gradient(90deg, #94a3b8, #cbd5e1)";
+                      return (
+                        <div key={g} className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-white/80 font-bold">{g}</span>
+                            <span className="text-white/40 font-mono">{count} ({pct}%)</span>
+                          </div>
+                          <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{
+                                width: `${Math.max(pct, count > 0 ? 3 : 0)}%`,
+                                background: barColor,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1037,18 +1130,35 @@ export default function AdminDashboard() {
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
                 <thead>
                   <tr>
-                    {["Name", "Phone", "Email", "Prize", "Voucher", "Store / BA", "Date & Time"].map(h => (
+                    {["Name", "Phone", "Age / Gender", "Email", "Prize", "Voucher", "Store / BA", "Date & Time"].map(h => (
                       <th key={h} className="pb-3 px-2 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={7} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
+                    <tr><td colSpan={8} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
                   ) : filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s=>s.code===storeFilter)?.id).map((p, i) => (
                     <tr key={p.id || i} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td className="py-3 px-2 font-bold text-white">{p.name}</td>
                       <td className="py-3 px-2 font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{p.phone}</td>
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {p.ageRange && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950/40 text-purple-300 border border-purple-500/20 whitespace-nowrap">
+                              {p.ageRange} yrs
+                            </span>
+                          )}
+                          {p.gender && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-950/40 text-blue-300 border border-blue-500/20 whitespace-nowrap">
+                              {p.gender}
+                            </span>
+                          )}
+                          {!p.ageRange && !p.gender && (
+                            <span className="text-[11px] text-white/30">—</span>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-3 px-2" style={{ color: "rgba(255,255,255,0.4)" }}>{p.email || "—"}</td>
                       <td className="py-3 px-2">
                         <span className="px-2 py-0.5 rounded-full text-[11px] font-bold" style={{ background: p.won ? "rgba(16,185,129,0.12)" : "rgba(255,255,255,0.05)", color: p.won ? "#10b981" : "rgba(255,255,255,0.35)", border: `1px solid ${p.won ? "rgba(16,185,129,0.25)" : "rgba(255,255,255,0.06)"}` }}>
