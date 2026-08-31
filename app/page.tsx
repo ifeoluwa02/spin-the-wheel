@@ -7,6 +7,7 @@ import {
   hasAlreadySpun,
   recordParticipant,
   generateVoucherCode,
+  getEffectivePrizes,
 } from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
 import { getGradientContrastColor, getContrastTextColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
@@ -81,8 +82,12 @@ export default function Home() {
 
   function handleSpinClick() {
     if (!campaign || isSpinning) return;
-    const idx = pickPrizeIndex(campaign.prizes);
-    setTargetIndex(idx);
+    // Use effective prizes (filtered by global + per-store pauses)
+    const effective = getEffectivePrizes(campaign, activeStoreCode);
+    const idx = pickPrizeIndex(effective);
+    // Map back to the full prizes array index so SpinWheel can locate the right segment
+    const fullIdx = campaign.prizes.findIndex((p) => p.id === effective[idx]?.id);
+    setTargetIndex(fullIdx >= 0 ? fullIdx : idx);
     setSpinToken(Date.now());
     setIsSpinning(true);
   }
@@ -330,8 +335,12 @@ export default function Home() {
               style={{ background: `radial-gradient(circle, ${gc}, ${g2})` }}
             />
             <SpinWheel
-              prizes={campaign.prizes}
-              targetIndex={targetIndex}
+              prizes={getEffectivePrizes(campaign, activeStoreCode)}
+              targetIndex={targetIndex !== null ? (() => {
+                const effective = getEffectivePrizes(campaign, activeStoreCode);
+                const full = campaign.prizes[targetIndex];
+                return effective.findIndex((p) => p.id === full?.id);
+              })() : null}
               spinToken={spinToken}
               onFinish={handleFinish}
               accentColor={campaign.primaryColor || gc}

@@ -6,6 +6,7 @@ import type { Prize } from "@/types";
  */
 export function isPrizeInStock(prize: Prize): boolean {
   if (prize.isLosing) return true; // Losing / Try Again segments are always available
+  if (prize.globallyPaused) return false; // Globally paused — excluded from all wheels
   if (prize.quantity === undefined || prize.quantity === null || prize.quantity < 0) {
     return true; // Unlimited
   }

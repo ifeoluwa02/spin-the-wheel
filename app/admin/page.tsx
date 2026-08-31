@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Campaign, Participant, Prize, StoreLocation } from "@/types";
-import { AGE_RANGES, GENDERS } from "@/types";
+import type { Campaign, Participant, Prize, StoreLocation, Supervisor, AdminRole } from "@/types";
+import { AGE_RANGES, GENDERS, NIGERIAN_STATES } from "@/types";
 import {
   getCampaign,
   updateCampaign,
@@ -11,6 +11,14 @@ import {
   subscribeCampaign,
   subscribeParticipants,
   getSuperAdminConfig,
+  getSupervisorByCredentials,
+  getSupervisorStores,
+  authenticateCampaignAdmin,
+  getAllCampaignAdmins,
+  pausePrizeGlobally,
+  unpausePrizeGlobally,
+  pausePrizeAtStore,
+  unpausePrizeAtStore,
   DEFAULT_CAMPAIGN,
 } from "@/lib/campaign";
 import Link from "next/link";
@@ -19,14 +27,18 @@ import {
   Plus, Trash2, Lock, LogOut, Sparkles, CheckCircle, Dices,
   ExternalLink, Palette, Save, Activity, Target, Layers,
   ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
+  UsersRound, PauseCircle, PlayCircle, Globe, Building2,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
+import TeamTab from "@/components/TeamTab";
 
-type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw";
+type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw" | "team";
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [adminRole, setAdminRole] = useState<AdminRole>("admin");
+  const [activeSupervisor, setActiveSupervisor] = useState<Supervisor | null>(null);
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -48,11 +60,13 @@ export default function AdminDashboard() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
+  const [pauseLoading, setPauseLoading] = useState<string | null>(null); // prizeId being toggled
 
   // Store management state
   const [newStoreName, setNewStoreName] = useState("");
   const [newStoreCode, setNewStoreCode] = useState("");
   const [newStoreCity, setNewStoreCity] = useState("");
+  const [newStoreState, setNewStoreState] = useState("");
   const [newStorePin, setNewStorePin] = useState("1234");
   const [selectedStoreForQr, setSelectedStoreForQr] = useState<StoreLocation | null>(null);
   const [storeSaving, setStoreSaving] = useState(false);
@@ -68,6 +82,7 @@ export default function AdminDashboard() {
       name: newStoreName.trim(),
       code,
       city: newStoreCity.trim() || undefined,
+      state: newStoreState.trim() || undefined,
       pin: newStorePin.trim() || undefined,
     };
     const updatedStores = [...(campaign.stores || []), newStore];
@@ -76,6 +91,7 @@ export default function AdminDashboard() {
     setNewStoreName("");
     setNewStoreCode("");
     setNewStoreCity("");
+    setNewStoreState("");
     setNewStorePin("1234");
 
     try {
@@ -112,7 +128,17 @@ export default function AdminDashboard() {
       const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
       setCampaignSlug(slug);
       setQrUrl(`${window.location.origin}/?c=${slug}`);
-      if (sessionStorage.getItem("admin_authed") === "true") setAuthenticated(true);
+      if (sessionStorage.getItem("admin_authed") === "true") {
+        setAuthenticated(true);
+        setAdminRole("admin");
+      } else if (sessionStorage.getItem("supervisor_authed") === "true") {
+        const svRaw = sessionStorage.getItem("supervisor_data");
+        if (svRaw) {
+          try { setActiveSupervisor(JSON.parse(svRaw)); } catch {}
+        }
+        setAuthenticated(true);
+        setAdminRole("supervisor");
+      }
     }
   }, []);
 
@@ -156,7 +182,9 @@ export default function AdminDashboard() {
     try {
       const superCfg = await getSuperAdminConfig();
       const isSuperAdmin = superCfg && clearPasswordInput === superCfg.password;
-      const isCampaignAdmin = campaign.adminPassword && clearPasswordInput === campaign.adminPassword;
+      const isCampaignAdmin =
+        (campaign.adminPassword && clearPasswordInput === campaign.adminPassword) ||
+        (campaign.admins?.some((a) => a.password === clearPasswordInput));
 
       if (!isSuperAdmin && !isCampaignAdmin) {
         setClearError("Incorrect admin password. Database reset denied.");
@@ -186,14 +214,31 @@ export default function AdminDashboard() {
         setLoginError("Campaign not found. Check the URL ?c= parameter.");
         return;
       }
-      const emailOk = emailInput.trim().toLowerCase() === (c.adminEmail || "").toLowerCase();
-      const passOk = passwordInput === c.adminPassword;
-      if (emailOk && passOk) {
+      const authedAdmin = authenticateCampaignAdmin(c, emailInput, passwordInput);
+      if (authedAdmin) {
+        // ✅ Campaign Admin (PM) login (supports any authorized campaign admin)
         setCampaign(c);
         setAuthenticated(true);
+        setAdminRole("admin");
         sessionStorage.setItem("admin_authed", "true");
+        sessionStorage.setItem("admin_data", JSON.stringify(authedAdmin));
+        sessionStorage.removeItem("supervisor_authed");
+        sessionStorage.removeItem("supervisor_data");
       } else {
-        setLoginError("Incorrect email or password.");
+        // 🔍 Try supervisor credentials
+        const sv = await getSupervisorByCredentials(campaignSlug, emailInput.trim(), passwordInput);
+        if (sv) {
+          setCampaign(c);
+          setAuthenticated(true);
+          setAdminRole("supervisor");
+          setActiveSupervisor(sv);
+          sessionStorage.setItem("supervisor_authed", "true");
+          sessionStorage.setItem("supervisor_data", JSON.stringify(sv));
+          sessionStorage.removeItem("admin_authed");
+          sessionStorage.removeItem("admin_data");
+        } else {
+          setLoginError("Incorrect email or password.");
+        }
       }
     } catch (err) {
       setLoginError("Login failed. Check your Firebase connection.");
@@ -204,7 +249,11 @@ export default function AdminDashboard() {
 
   function handleLogout() {
     setAuthenticated(false);
+    setAdminRole("admin");
+    setActiveSupervisor(null);
     sessionStorage.removeItem("admin_authed");
+    sessionStorage.removeItem("supervisor_authed");
+    sessionStorage.removeItem("supervisor_data");
   }
 
   async function handleSave() {
@@ -390,14 +439,24 @@ export default function AdminDashboard() {
     );
   }
 
-  const tabs: { id: Tab; label: string; icon: any }[] = [
+  const isSupervisor = adminRole === "supervisor";
+
+  // Stores that this supervisor can access
+  const supervisorStores = activeSupervisor
+    ? getSupervisorStores(campaign, activeSupervisor)
+    : (campaign.stores || []);
+
+  const allTabs: { id: Tab; label: string; icon: any; adminOnly?: boolean }[] = [
     { id: "analytics", label: "Analytics", icon: Activity },
-    { id: "branding", label: "Brand & Theme", icon: Palette },
     { id: "prizes", label: "Prizes & Stock", icon: Trophy },
-    { id: "stores", label: "Stores & BAs", icon: Store },
+    { id: "branding", label: "Brand & Theme", icon: Palette, adminOnly: true },
+    { id: "stores", label: "Stores & BAs", icon: Store, adminOnly: true },
+    { id: "team", label: "Team", icon: UsersRound, adminOnly: true },
     { id: "export", label: "Participants", icon: Users },
-    { id: "luckydraw", label: "Lucky Draw", icon: Sparkles },
+    { id: "luckydraw", label: "Lucky Draw", icon: Sparkles, adminOnly: true },
   ];
+  const tabs = allTabs.filter((t) => !t.adminOnly || !isSupervisor);
+
 
   // ─── DASHBOARD ───────────────────────────────────────────────────────────────
   return (
@@ -417,31 +476,44 @@ export default function AdminDashboard() {
               <p className="font-black text-white text-sm leading-tight truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
                 {campaign.name}
               </p>
-              <p className="text-[10px] font-mono" style={{ color: "#00BFA6" }}>/{campaignSlug}</p>
+              <div className="flex items-center gap-2 mt-0.5">
+                <p className="text-[10px] font-mono" style={{ color: "#00BFA6" }}>/{campaignSlug}</p>
+                {isSupervisor && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                    Supervisor
+                  </span>
+                )}
+              </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <Link href="/create-campaign" className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(0,191,166,0.1)", color: "#00BFA6", border: "1px solid rgba(0,191,166,0.2)" }}>
-              <Plus className="w-3.5 h-3.5" /> New Campaign
-            </Link>
-            <button onClick={() => setShowQrModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}>
-              <QrCode className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">QR Code</span>
-            </button>
+            {!isSupervisor && (
+              <Link href="/create-campaign" className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(0,191,166,0.1)", color: "#00BFA6", border: "1px solid rgba(0,191,166,0.2)" }}>
+                <Plus className="w-3.5 h-3.5" /> New Campaign
+              </Link>
+            )}
+            {!isSupervisor && (
+              <button onClick={() => setShowQrModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                <QrCode className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">QR Code</span>
+              </button>
+            )}
             <Link href={`/tv?c=${campaignSlug}`} target="_blank" className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <Tv className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">TV</span>
             </Link>
-            <button
-              onClick={handleOpenClearModal}
-              disabled={clearing}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 cursor-pointer"
-              title="Clear all spin participants and reset prize stock counts for this campaign in Firestore (Admin Password Required)"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Clear DB</span>
-            </button>
+            {!isSupervisor && (
+              <button
+                onClick={handleOpenClearModal}
+                disabled={clearing}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all text-red-400 bg-red-950/30 border border-red-500/30 hover:bg-red-900/40 cursor-pointer"
+                title="Clear all spin participants and reset prize stock counts for this campaign in Firestore (Admin Password Required)"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Clear DB</span>
+              </button>
+            )}
             <button onClick={handleLogout} className="p-2 rounded-xl text-xs transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.3)" }}>
               <LogOut className="w-4 h-4" />
             </button>
@@ -870,21 +942,180 @@ export default function AdminDashboard() {
                         <span className="text-xs font-bold text-white/30 px-3">No stock limit (Loss)</span>
                       )}
 
-                      {/* Loss Checkbox */}
-                      <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                        <input type="checkbox" checked={!!prize.isLosing} onChange={e => handleUpdatePrize(idx, "isLosing", e.target.checked)} className="w-3.5 h-3.5 accent-red-500 cursor-pointer" />
-                        <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>Loss</span>
-                      </label>
+                      {/* Loss Checkbox — admin only */}
+                      {!isSupervisor && (
+                        <label className="flex items-center gap-1.5 cursor-pointer px-2.5 py-1.5 rounded-lg" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                          <input type="checkbox" checked={!!prize.isLosing} onChange={e => handleUpdatePrize(idx, "isLosing", e.target.checked)} className="w-3.5 h-3.5 accent-red-500 cursor-pointer" />
+                          <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>Loss</span>
+                        </label>
+                      )}
 
-                      {/* Delete */}
-                      <button onClick={() => handleDeletePrize(idx)} className="p-2 rounded-lg transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.2)" }}>
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Global Pause Toggle — admin only */}
+                      {!isSupervisor && !prize.isLosing && (
+                        <button
+                          onClick={async () => {
+                            setPauseLoading(prize.id);
+                            try {
+                              if (prize.globallyPaused) {
+                                await unpausePrizeGlobally(campaign.id, prize.id);
+                                setCampaign(prev => ({ ...prev, prizes: prev.prizes.map(p => p.id === prize.id ? { ...p, globallyPaused: false } : p) }));
+                              } else {
+                                await pausePrizeGlobally(campaign.id, prize.id);
+                                setCampaign(prev => ({ ...prev, prizes: prev.prizes.map(p => p.id === prize.id ? { ...p, globallyPaused: true } : p) }));
+                              }
+                            } finally { setPauseLoading(null); }
+                          }}
+                          disabled={pauseLoading === prize.id}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                          style={{
+                            background: prize.globallyPaused ? "rgba(239,68,68,0.12)" : "rgba(255,255,255,0.04)",
+                            border: `1px solid ${prize.globallyPaused ? "rgba(239,68,68,0.35)" : "rgba(255,255,255,0.06)"}`,
+                            color: prize.globallyPaused ? "#f87171" : "rgba(255,255,255,0.45)",
+                          }}
+                          title={prize.globallyPaused ? "Globally Paused — click to restore" : "Pause globally across all stores"}
+                        >
+                          {prize.globallyPaused ? <PlayCircle className="w-3.5 h-3.5" /> : <PauseCircle className="w-3.5 h-3.5" />}
+                          {prize.globallyPaused ? "Paused" : "Pause"}
+                        </button>
+                      )}
+
+                      {/* Delete — admin only */}
+                      {!isSupervisor && (
+                        <button onClick={() => handleDeletePrize(idx)} className="p-2 rounded-lg transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.2)" }}>
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
+
+            {/* ── Per-Store Prize Pause Panel (Supervisor view) ── */}
+            {isSupervisor && activeSupervisor && (
+              <div className="mt-6 space-y-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "1.5rem" }}>
+                <div>
+                  <h4 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Pause Prizes at Your Stores</h4>
+                  <p className="text-xs mt-1 text-white/40">Toggle individual prizes ON or OFF for each store you manage. Changes take effect immediately.</p>
+                </div>
+                {supervisorStores.length === 0 ? (
+                  <p className="text-xs text-white/30 text-center py-6">No stores assigned to your account. Contact your Admin.</p>
+                ) : supervisorStores.map(store => (
+                  <div key={store.id} className="rounded-xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-teal-400" />
+                      <p className="text-sm font-black text-white">{store.name}</p>
+                      {store.state && <span className="text-[10px] font-bold text-white/40 bg-white/5 border border-white/10 px-2 py-0.5 rounded">{store.state}</span>}
+                    </div>
+                    <div className="space-y-2">
+                      {campaign.prizes.filter(p => !p.isLosing).map(prize => {
+                        const isPaused = (store.pausedPrizes || []).includes(prize.id);
+                        const isGloballyPaused = !!prize.globallyPaused;
+                        return (
+                          <div key={prize.id} className="flex items-center justify-between py-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
+                              <span className="text-sm text-white/80 font-semibold">{prize.label}</span>
+                              {isGloballyPaused && <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.5 rounded">Global Pause</span>}
+                            </div>
+                            <button
+                              disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
+                              onClick={async () => {
+                                setPauseLoading(`${store.id}-${prize.id}`);
+                                try {
+                                  if (isPaused) {
+                                    await unpausePrizeAtStore(campaign.id, store.id, prize.id);
+                                    setCampaign(prev => ({
+                                      ...prev,
+                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: (s.pausedPrizes || []).filter(id => id !== prize.id) } : s)
+                                    }));
+                                  } else {
+                                    await pausePrizeAtStore(campaign.id, store.id, prize.id);
+                                    setCampaign(prev => ({
+                                      ...prev,
+                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: [...(s.pausedPrizes || []), prize.id] } : s)
+                                    }));
+                                  }
+                                } finally { setPauseLoading(null); }
+                              }}
+                              className={`relative w-11 h-6 rounded-full transition-all ${isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                              style={{
+                                background: (!isPaused && !isGloballyPaused) ? "linear-gradient(135deg, #00BFA6, #0D9488)" : "rgba(255,255,255,0.1)",
+                                boxShadow: (!isPaused && !isGloballyPaused) ? "0 0 10px rgba(0,191,166,0.35)" : "none",
+                              }}
+                            >
+                              <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all" style={{ left: (!isPaused && !isGloballyPaused) ? "calc(100% - 22px)" : "2px" }} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Per-Store Pause Panel for Admin ── */}
+            {!isSupervisor && (campaign.stores || []).length > 0 && (
+              <div className="mt-6 space-y-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "1.5rem" }}>
+                <div>
+                  <h4 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Per-Store Prize Availability</h4>
+                  <p className="text-xs mt-1 text-white/40">Pause individual prizes at specific stores without removing them from the campaign.</p>
+                </div>
+                {(campaign.stores || []).map(store => (
+                  <div key={store.id} className="rounded-xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-teal-400" />
+                      <p className="text-sm font-black text-white">{store.name}</p>
+                      {store.state && <span className="text-[10px] font-bold text-white/40 bg-white/5 border border-white/10 px-2 py-0.5 rounded">{store.state}</span>}
+                    </div>
+                    <div className="space-y-2">
+                      {campaign.prizes.filter(p => !p.isLosing).map(prize => {
+                        const isPaused = (store.pausedPrizes || []).includes(prize.id);
+                        const isGloballyPaused = !!prize.globallyPaused;
+                        return (
+                          <div key={prize.id} className="flex items-center justify-between py-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
+                              <span className="text-sm text-white/80 font-semibold">{prize.label}</span>
+                              {isGloballyPaused && <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.5 rounded">Globally Paused</span>}
+                            </div>
+                            <button
+                              disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
+                              onClick={async () => {
+                                setPauseLoading(`${store.id}-${prize.id}`);
+                                try {
+                                  if (isPaused) {
+                                    await unpausePrizeAtStore(campaign.id, store.id, prize.id);
+                                    setCampaign(prev => ({
+                                      ...prev,
+                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: (s.pausedPrizes || []).filter(id => id !== prize.id) } : s)
+                                    }));
+                                  } else {
+                                    await pausePrizeAtStore(campaign.id, store.id, prize.id);
+                                    setCampaign(prev => ({
+                                      ...prev,
+                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: [...(s.pausedPrizes || []), prize.id] } : s)
+                                    }));
+                                  }
+                                } finally { setPauseLoading(null); }
+                              }}
+                              className={`relative w-11 h-6 rounded-full transition-all ${isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                              style={{
+                                background: (!isPaused && !isGloballyPaused) ? "linear-gradient(135deg, #00BFA6, #0D9488)" : "rgba(255,255,255,0.1)",
+                                boxShadow: (!isPaused && !isGloballyPaused) ? "0 0 10px rgba(0,191,166,0.35)" : "none",
+                              }}
+                            >
+                              <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all" style={{ left: (!isPaused && !isGloballyPaused) ? "calc(100% - 22px)" : "2px" }} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -941,12 +1172,29 @@ export default function AdminDashboard() {
                   <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>City / Location</label>
                   <input
                     type="text"
-                    placeholder="e.g. Lagos"
+                    placeholder="e.g. Ikeja"
                     value={newStoreCity}
                     onChange={e => setNewStoreCity(e.target.value)}
                     className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
                     style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: "rgba(255,255,255,0.4)" }}>State</label>
+                  <select
+                    value={newStoreState}
+                    onChange={e => setNewStoreState(e.target.value)}
+                    className="w-full rounded-xl px-3.5 py-2.5 text-xs text-white outline-none cursor-pointer"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  >
+                    <option value="" style={{ background: "#070d14", color: "rgba(255,255,255,0.5)" }}>Select State (Optional)</option>
+                    {NIGERIAN_STATES.map(st => (
+                      <option key={st} value={st} style={{ background: "#070d14", color: "#ffffff" }}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -1018,6 +1266,11 @@ export default function AdminDashboard() {
                                 </span>
                                 {s.city && (
                                   <span className="text-[10px] text-white/50">· {s.city}</span>
+                                )}
+                                {s.state && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                                    {s.state}
+                                  </span>
                                 )}
                                 {s.pin && (
                                   <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
@@ -1091,6 +1344,11 @@ export default function AdminDashboard() {
               )}
             </div>
           </div>
+        )}
+
+        {/* ── Team Tab ── */}
+        {activeTab === "team" && !isSupervisor && (
+          <TeamTab campaign={campaign} setCampaign={setCampaign} campaignSlug={campaignSlug} updateCampaign={updateCampaign} />
         )}
 
         {/* ── Participants Tab ── */}

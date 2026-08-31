@@ -45,6 +45,7 @@ export default function CreateCampaignWizard() {
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [additionalAdmins, setAdditionalAdmins] = useState<{ id: string; name: string; email: string; password: string }[]>([]);
   const [oneSpinPerPhone, setOneSpinPerPhone] = useState(true);
 
   const [primaryColor, setPrimaryColor] = useState("#00BFA6");
@@ -204,6 +205,16 @@ export default function CreateCampaignWizard() {
     }
     setSaving(true);
     const finalSlug = campaignSlug.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `campaign-${Date.now()}`;
+    const validAdmins = additionalAdmins
+      .filter(a => a.email.trim() && a.password.trim())
+      .map(a => ({
+        id: a.id || `admin-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        name: a.name.trim() || undefined,
+        email: a.email.trim().toLowerCase(),
+        password: a.password.trim(),
+        createdAt: Date.now(),
+      }));
+
     const newCampaign: Campaign = {
       id: finalSlug,
       name: campaignTitle || "Brand Experiential Activation",
@@ -219,6 +230,7 @@ export default function CreateCampaignWizard() {
       active: true,
       adminEmail: adminEmail.trim().toLowerCase(),
       adminPassword: adminPassword.trim(),
+      admins: validAdmins.length ? validAdmins : undefined,
       prizes,
     };
     await updateCampaign(newCampaign);
@@ -431,8 +443,82 @@ export default function CreateCampaignWizard() {
                 </button>
               </div>
               <p className="text-[11px] mt-1.5" style={{ color: "rgba(255,255,255,0.2)" }}>
-                Secure password for the brand admin login
+                Secure password for the primary brand admin login
               </p>
+            </div>
+
+            {/* Additional Admins */}
+            <div className="space-y-3 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/70">
+                    Additional Admins / Project Managers (Optional)
+                  </label>
+                  <p className="text-[11px] text-white/35">
+                    Grant multiple team members full admin access to this campaign
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAdditionalAdmins([...additionalAdmins, { id: `admin-${Date.now()}`, name: "", email: "", password: "" }])}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold text-teal-300 bg-teal-500/10 border border-teal-500/20 hover:bg-teal-500/20 transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Add Admin
+                </button>
+              </div>
+
+              {additionalAdmins.map((admin, idx) => (
+                <div key={admin.id || idx} className="p-3 rounded-xl bg-white/[0.02] border border-white/10 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-teal-400">Admin #{idx + 2}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAdditionalAdmins(additionalAdmins.filter((_, i) => i !== idx))}
+                      className="text-xs text-white/30 hover:text-red-400 p-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Name (e.g. Ade)"
+                      value={admin.name}
+                      onChange={e => {
+                        const arr = [...additionalAdmins];
+                        arr[idx].name = e.target.value;
+                        setAdditionalAdmins(arr);
+                      }}
+                      className="rounded-xl px-3 py-2 text-xs"
+                      style={inputStyle}
+                    />
+                    <input
+                      type="email"
+                      placeholder="Email *"
+                      value={admin.email}
+                      onChange={e => {
+                        const arr = [...additionalAdmins];
+                        arr[idx].email = e.target.value;
+                        setAdditionalAdmins(arr);
+                      }}
+                      className="rounded-xl px-3 py-2 text-xs"
+                      style={inputStyle}
+                    />
+                    <input
+                      type="password"
+                      placeholder="Password *"
+                      value={admin.password}
+                      onChange={e => {
+                        const arr = [...additionalAdmins];
+                        arr[idx].password = e.target.value;
+                        setAdditionalAdmins(arr);
+                      }}
+                      className="rounded-xl px-3 py-2 text-xs"
+                      style={inputStyle}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
 
 

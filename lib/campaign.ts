@@ -285,3 +285,208 @@ export async function getSuperAdminConfig(): Promise<SuperAdminConfig | null> {
 export async function setSuperAdminConfig(config: SuperAdminConfig): Promise<void> {
   await setDoc(doc(db, "config", "superAdmin"), config);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prize Pause / Unpause Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the effective prizes for a given store after applying:
+ * 1. Global pause (prize.globallyPaused === true) — removed from everyone
+ * 2. Per-store pause (store.pausedPrizes includes prizeId) — removed from this store only
+ * Losing/Try-Again segments are never filtered out.
+ */
+export function getEffectivePrizes(
+  campaign: import("@/types").Campaign,
+  storeCode: string
+): import("@/types").Prize[] {
+  const store = campaign.stores?.find(
+    (s) =>
+      s.code?.toLowerCase() === storeCode?.toLowerCase() ||
+      s.id === storeCode
+  );
+  const storePausedPrizes: string[] = store?.pausedPrizes || [];
+
+  return campaign.prizes.filter((prize) => {
+    if (prize.isLosing) return true; // never filter out losing segments
+    if (prize.globallyPaused) return false; // global pause — excluded everywhere
+    if (storePausedPrizes.includes(prize.id)) return false; // per-store pause
+    return true;
+  });
+}
+
+/**
+ * Globally pauses a prize across all stores.
+ * Only Campaign Admin (PM) should call this.
+ */
+export async function pausePrizeGlobally(
+  campaignId: string,
+  prizeId: string
+): Promise<void> {
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) return;
+  const prizes = campaign.prizes.map((p) =>
+    p.id === prizeId ? { ...p, globallyPaused: true } : p
+  );
+  await updateCampaign({ ...campaign, prizes });
+}
+
+/**
+ * Removes global pause from a prize, making it available again at all stores.
+ * Only Campaign Admin (PM) should call this.
+ */
+export async function unpausePrizeGlobally(
+  campaignId: string,
+  prizeId: string
+): Promise<void> {
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) return;
+  const prizes = campaign.prizes.map((p) =>
+    p.id === prizeId ? { ...p, globallyPaused: false } : p
+  );
+  await updateCampaign({ ...campaign, prizes });
+}
+
+/**
+ * Pauses a specific prize at a specific store (per-store pause).
+ * Can be called by Supervisor (for their store) or Admin.
+ */
+export async function pausePrizeAtStore(
+  campaignId: string,
+  storeId: string,
+  prizeId: string
+): Promise<void> {
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) return;
+  const stores = (campaign.stores || []).map((s) => {
+    if (s.id !== storeId) return s;
+    const already = s.pausedPrizes?.includes(prizeId);
+    return already ? s : { ...s, pausedPrizes: [...(s.pausedPrizes || []), prizeId] };
+  });
+  await updateCampaign({ ...campaign, stores });
+}
+
+/**
+ * Removes per-store pause, restoring a prize at that specific store.
+ * Can be called by Supervisor (for their store) or Admin.
+ */
+export async function unpausePrizeAtStore(
+  campaignId: string,
+  storeId: string,
+  prizeId: string
+): Promise<void> {
+  const campaign = await getCampaign(campaignId);
+  if (!campaign) return;
+  const stores = (campaign.stores || []).map((s) => {
+    if (s.id !== storeId) return s;
+    return { ...s, pausedPrizes: (s.pausedPrizes || []).filter((id) => id !== prizeId) };
+  });
+  await updateCampaign({ ...campaign, stores });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Supervisor Auth
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Checks supervisor credentials against those stored on the campaign document.
+ * Returns the matching Supervisor object or null if not found / wrong password.
+ */
+export async function getSupervisorByCredentials(
+  campaignId: string,
+  email: string,
+  password: string
+): Promise<import("@/types").Supervisor | null> {
+  const campaign = await getCampaign(campaignId);
+  if (!campaign?.supervisors?.length) return null;
+  const match = campaign.supervisors.find(
+    (sv) =>
+      sv.email.toLowerCase() === email.trim().toLowerCase() &&
+      sv.password === password
+  );
+  return match || null;
+}
+
+/**
+ * Returns the list of stores that a supervisor has access to,
+ * based on their scopeType ("state" or "stores").
+ */
+export function getSupervisorStores(
+  campaign: import("@/types").Campaign,
+  supervisor: import("@/types").Supervisor
+): import("@/types").StoreLocation[] {
+  const stores = campaign.stores || [];
+  if (supervisor.scopeType === "state" && supervisor.state) {
+    const state = supervisor.state.toLowerCase();
+    return stores.filter((s) => s.state?.toLowerCase() === state);
+  }
+  if (supervisor.scopeType === "stores" && supervisor.storeIds?.length) {
+    return stores.filter((s) => supervisor.storeIds!.includes(s.id));
+  }
+  return [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Campaign Admin Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns all configured admins for a campaign, consolidating
+ * legacy primary adminEmail/adminPassword with the newer admins[] array.
+ */
+export function getAllCampaignAdmins(
+  campaign: import("@/types").Campaign
+): import("@/types").CampaignAdmin[] {
+  const list: import("@/types").CampaignAdmin[] = [];
+  if (campaign.adminEmail && campaign.adminPassword) {
+    list.push({
+      id: "primary-admin",
+      name: "Primary Admin",
+      email: campaign.adminEmail,
+      password: campaign.adminPassword,
+    });
+  }
+  if (campaign.admins?.length) {
+    for (const a of campaign.admins) {
+      if (!list.some(existing => existing.email.toLowerCase() === a.email.toLowerCase())) {
+        list.push(a);
+      }
+    }
+  }
+  return list;
+}
+
+/**
+ * Authenticates whether given email and password belong to an authorized Campaign Admin.
+ * Returns the CampaignAdmin object or null.
+ */
+export function authenticateCampaignAdmin(
+  campaign: import("@/types").Campaign,
+  email: string,
+  password: string
+): import("@/types").CampaignAdmin | null {
+  const normEmail = email.trim().toLowerCase();
+  // Check primary
+  if (
+    campaign.adminEmail &&
+    campaign.adminEmail.toLowerCase() === normEmail &&
+    campaign.adminPassword === password
+  ) {
+    return {
+      id: "primary-admin",
+      name: "Primary Admin",
+      email: campaign.adminEmail,
+      password: campaign.adminPassword,
+    };
+  }
+  // Check admins array
+  if (campaign.admins?.length) {
+    const match = campaign.admins.find(
+      (a) => a.email.toLowerCase() === normEmail && a.password === password
+    );
+    if (match) return match;
+  }
+  return null;
+}
+
+

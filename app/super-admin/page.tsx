@@ -1,14 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Campaign, Participant, SuperAdminConfig } from "@/types";
-import { getAllCampaigns, getAllGlobalParticipants, updateCampaign, clearCampaignData, getSuperAdminConfig, setSuperAdminConfig } from "@/lib/campaign";
+import type { Campaign, Participant, SuperAdminConfig, CampaignAdmin } from "@/types";
+import {
+  getAllCampaigns,
+  getAllGlobalParticipants,
+  updateCampaign,
+  clearCampaignData,
+  getSuperAdminConfig,
+  setSuperAdminConfig,
+  getAllCampaignAdmins,
+} from "@/lib/campaign";
 import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
   Tv, ExternalLink, Settings, Activity, Trophy, Users,
   Power, ChevronRight, X, Check, Layers, RefreshCw, Database,
-  AlertTriangle, Trash2,
+  AlertTriangle, Trash2, UserPlus, UsersRound, Key, Mail, Eye, EyeOff,
 } from "lucide-react";
 
 export default function SuperAdminDashboard() {
@@ -31,6 +39,16 @@ export default function SuperAdminDashboard() {
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Admin Management Modal State
+  const [selectedCampaignForAdmins, setSelectedCampaignForAdmins] = useState<Campaign | null>(null);
+  const [newAdminName, setNewAdminName] = useState("");
+  const [newAdminEmail, setNewAdminEmail] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [showNewAdminPass, setShowNewAdminPass] = useState(false);
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [adminModalMsg, setAdminModalMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [deleteAdminLoading, setDeleteAdminLoading] = useState<string | null>(null);
 
   const [showWipeModal, setShowWipeModal] = useState(false);
   const [wipePasswordInput, setWipePasswordInput] = useState("");
@@ -152,6 +170,98 @@ export default function SuperAdminDashboard() {
     const updated = { ...c, active: !c.active };
     await updateCampaign(updated);
     setCampaigns(prev => prev.map(x => (x.id === c.id ? updated : x)));
+  }
+
+  function handleOpenAdminsModal(c: Campaign) {
+    setSelectedCampaignForAdmins(c);
+    setNewAdminName("");
+    setNewAdminEmail("");
+    setNewAdminPassword("");
+    setAdminModalMsg(null);
+  }
+
+  async function handleAddAdminToCampaign(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedCampaignForAdmins) return;
+    if (!newAdminEmail.trim() || !newAdminPassword.trim()) {
+      setAdminModalMsg({ type: "error", text: "Email and password are required." });
+      return;
+    }
+
+    setAdminSaving(true);
+    setAdminModalMsg(null);
+
+    const newAdmin: CampaignAdmin = {
+      id: `admin-${Date.now()}`,
+      name: newAdminName.trim() || undefined,
+      email: newAdminEmail.trim().toLowerCase(),
+      password: newAdminPassword.trim(),
+      createdAt: Date.now(),
+    };
+
+    const currentAdmins = selectedCampaignForAdmins.admins || [];
+    // Check if email already exists
+    const allAdmins = getAllCampaignAdmins(selectedCampaignForAdmins);
+    if (allAdmins.some(a => a.email.toLowerCase() === newAdmin.email.toLowerCase())) {
+      setAdminModalMsg({ type: "error", text: "An admin with this email already exists on this campaign." });
+      setAdminSaving(false);
+      return;
+    }
+
+    const updatedCampaign: Campaign = {
+      ...selectedCampaignForAdmins,
+      admins: [...currentAdmins, newAdmin],
+    };
+
+    try {
+      await updateCampaign(updatedCampaign);
+      setSelectedCampaignForAdmins(updatedCampaign);
+      setCampaigns(prev => prev.map(c => c.id === updatedCampaign.id ? updatedCampaign : c));
+      setNewAdminName("");
+      setNewAdminEmail("");
+      setNewAdminPassword("");
+      setAdminModalMsg({ type: "success", text: `✅ Admin account created for ${newAdmin.email}` });
+    } catch (err) {
+      console.error("Failed to add admin:", err);
+      setAdminModalMsg({ type: "error", text: "Failed to save admin. Check connection." });
+    } finally {
+      setAdminSaving(false);
+    }
+  }
+
+  async function handleRemoveAdminFromCampaign(adminId: string) {
+    if (!selectedCampaignForAdmins) return;
+    if (!window.confirm("Are you sure you want to remove this admin? They will lose access immediately.")) return;
+
+    setDeleteAdminLoading(adminId);
+    setAdminModalMsg(null);
+
+    let updatedCampaign: Campaign;
+    if (adminId === "primary-admin") {
+      // If removing legacy primary admin
+      updatedCampaign = {
+        ...selectedCampaignForAdmins,
+        adminEmail: undefined,
+        adminPassword: undefined,
+      };
+    } else {
+      updatedCampaign = {
+        ...selectedCampaignForAdmins,
+        admins: (selectedCampaignForAdmins.admins || []).filter(a => a.id !== adminId),
+      };
+    }
+
+    try {
+      await updateCampaign(updatedCampaign);
+      setSelectedCampaignForAdmins(updatedCampaign);
+      setCampaigns(prev => prev.map(c => c.id === updatedCampaign.id ? updatedCampaign : c));
+      setAdminModalMsg({ type: "success", text: "Admin removed successfully." });
+    } catch (err) {
+      console.error("Failed to remove admin:", err);
+      setAdminModalMsg({ type: "error", text: "Failed to remove admin. Check connection." });
+    } finally {
+      setDeleteAdminLoading(null);
+    }
   }
 
   function exportAll() {
@@ -403,7 +513,7 @@ export default function SuperAdminDashboard() {
               <table className="w-full" style={{ fontSize: "12px" }}>
                 <thead>
                   <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    {["Brand", "Slug", "Prizes", "Status", "Actions"].map(h => (
+                    {["Brand", "Slug", "Prizes", "Admins", "Status", "Actions"].map(h => (
                       <th key={h} className="px-6 py-3 text-left font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>{h}</th>
                     ))}
                   </tr>
@@ -412,6 +522,7 @@ export default function SuperAdminDashboard() {
                   {campaigns.map((c, i) => {
                     const slug = c.id || "";
                     const spins = allParticipants.filter(p => p.campaignId === slug).length;
+                    const adminList = getAllCampaignAdmins(c);
                     return (
                       <tr key={slug || i} className="group transition-colors hover:bg-white/[0.02]" style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
                         <td className="px-6 py-4">
@@ -434,6 +545,22 @@ export default function SuperAdminDashboard() {
                           <span className="px-2.5 py-1 rounded-full font-black text-[11px]" style={{ background: "rgba(167,139,250,0.1)", color: "#a78bfa", border: "1px solid rgba(167,139,250,0.2)" }}>
                             {c.prizes?.length || 0} prizes
                           </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={() => handleOpenAdminsModal(c)}
+                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all hover:scale-105 cursor-pointer"
+                            style={{
+                              background: adminList.length > 0 ? "rgba(245,158,11,0.12)" : "rgba(255,255,255,0.05)",
+                              color: adminList.length > 0 ? "#f59e0b" : "rgba(255,255,255,0.4)",
+                              border: `1px solid ${adminList.length > 0 ? "rgba(245,158,11,0.25)" : "rgba(255,255,255,0.08)"}`,
+                            }}
+                            title="Manage Campaign Admins"
+                          >
+                            <UsersRound className="w-3.5 h-3.5" />
+                            <span>{adminList.length} Admin{adminList.length !== 1 ? "s" : ""}</span>
+                            <Plus className="w-2.5 h-2.5 opacity-60" />
+                          </button>
                         </td>
                         <td className="px-6 py-4">
                           <button onClick={() => toggleCampaignActive(c)}
@@ -564,6 +691,163 @@ export default function SuperAdminDashboard() {
                   <span>{wiping ? "Wiping System…" : "Wipe All System Data"}</span>
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* ── Manage Campaign Admins Modal ── */}
+      {selectedCampaignForAdmins && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={() => { setSelectedCampaignForAdmins(null); setAdminModalMsg(null); }}
+        >
+          <div
+            className="rounded-3xl p-6 sm:p-7 max-w-lg w-full space-y-5 bg-[#0f1823] border border-amber-500/30 shadow-2xl animate-fadeIn max-h-[90vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-amber-400 bg-amber-950/40 border border-amber-500/30 flex-shrink-0">
+                  <UsersRound className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    Manage Campaign Admins
+                  </h3>
+                  <p className="text-xs text-white/50 truncate">
+                    {selectedCampaignForAdmins.name} <span className="font-mono text-teal-400">/{selectedCampaignForAdmins.id}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setSelectedCampaignForAdmins(null); setAdminModalMsg(null); }}
+                className="p-1.5 rounded-lg text-white/40 hover:text-white bg-white/5 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Status Messages */}
+            {adminModalMsg && (
+              <div
+                className={`p-3 rounded-xl text-xs font-bold ${
+                  adminModalMsg.type === "success"
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                    : "bg-red-500/15 border border-red-500/30 text-red-300"
+                }`}
+              >
+                {adminModalMsg.text}
+              </div>
+            )}
+
+            {/* Current Admins List */}
+            <div className="space-y-2.5">
+              <label className="block text-[11px] font-bold text-white/60 uppercase tracking-wider">
+                Assigned Admins ({getAllCampaignAdmins(selectedCampaignForAdmins).length})
+              </label>
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {getAllCampaignAdmins(selectedCampaignForAdmins).map((admin) => (
+                  <div
+                    key={admin.id}
+                    className="flex items-center justify-between p-3 rounded-xl bg-white/[0.03] border border-white/10"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-black text-white truncate">
+                          {admin.name || "Campaign Admin"}
+                        </p>
+                        {admin.id === "primary-admin" && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/25 uppercase">
+                            Primary
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] font-mono text-white/40 truncate">{admin.email}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAdminFromCampaign(admin.id)}
+                        disabled={deleteAdminLoading === admin.id}
+                        className="p-2 rounded-lg text-white/30 hover:text-red-400 hover:bg-red-950/30 transition-colors cursor-pointer"
+                        title="Remove admin"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Add New Admin Form */}
+            <form onSubmit={handleAddAdminToCampaign} className="space-y-3 pt-3 border-t border-white/10">
+              <h4 className="text-xs font-black text-white flex items-center gap-1.5">
+                <UserPlus className="w-3.5 h-3.5 text-amber-400" />
+                Add Another Admin / Project Manager
+              </h4>
+
+              <div>
+                <label className="block text-[10px] font-bold text-white/50 uppercase tracking-wider mb-1">
+                  Admin Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newAdminName}
+                  onChange={e => setNewAdminName(e.target.value)}
+                  placeholder="e.g. Ade Johnson"
+                  className="w-full rounded-xl px-3.5 py-2.5 bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-amber-500 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-white/50 uppercase tracking-wider mb-1">
+                  Login Email *
+                </label>
+                <input
+                  type="email"
+                  value={newAdminEmail}
+                  onChange={e => setNewAdminEmail(e.target.value)}
+                  placeholder="pm@brand.com"
+                  required
+                  className="w-full rounded-xl px-3.5 py-2.5 bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-amber-500 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-white/50 uppercase tracking-wider mb-1">
+                  Login Password *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewAdminPass ? "text" : "password"}
+                    value={newAdminPassword}
+                    onChange={e => setNewAdminPassword(e.target.value)}
+                    placeholder="Set a password (min. 6 chars)"
+                    required
+                    className="w-full rounded-xl px-3.5 py-2.5 pr-10 bg-black/40 border border-white/10 text-white text-xs outline-none focus:border-amber-500 transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowNewAdminPass(!showNewAdminPass)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-80 transition-opacity cursor-pointer"
+                  >
+                    {showNewAdminPass ? <EyeOff className="w-3.5 h-3.5 text-white" /> : <Eye className="w-3.5 h-3.5 text-white" />}
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={adminSaving || !newAdminEmail.trim() || !newAdminPassword.trim()}
+                className="w-full py-2.5 rounded-xl text-xs font-black text-black bg-amber-500 hover:bg-amber-400 disabled:opacity-50 transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-amber-950/40 cursor-pointer"
+                style={{ fontFamily: "Rubik, sans-serif" }}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{adminSaving ? "Adding Admin…" : "Add Admin Account"}</span>
+              </button>
             </form>
           </div>
         </div>
