@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import type { Campaign, Participant, StoreLocation } from "@/types";
 import { getCampaign, subscribeCampaign, getParticipants, subscribeParticipants, DEFAULT_CAMPAIGN } from "@/lib/campaign";
 import { QRCodeSVG } from "qrcode.react";
-import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X } from "lucide-react";
+import { Trophy, Flame, Sparkles, QrCode, Clock, Award, Activity, Zap, Radio, MapPin, Store, UserCheck, Lock, ChevronRight, X, ExternalLink } from "lucide-react";
 import { getGradientContrastColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
 
 export default function TvDisplayMode() {
@@ -379,8 +379,14 @@ export default function TvDisplayMode() {
               <span>Scan to Spin & Win</span>
             </div>
 
-            {/* Glowing QR Frame */}
-            <div className="relative w-full p-4 rounded-2xl bg-white shadow-2xl mt-2 group transition-transform hover:scale-[1.02]">
+            {/* Glowing QR Frame (Clickable) */}
+            <a
+              href={wheelUrl || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="relative w-full p-4 rounded-2xl bg-white shadow-2xl mt-2 group transition-all hover:scale-[1.02] hover:shadow-teal-500/20 block cursor-pointer"
+              title="Click or scan to spin the wheel"
+            >
               {wheelUrl && (
                 <QRCodeSVG
                   value={wheelUrl}
@@ -389,7 +395,7 @@ export default function TvDisplayMode() {
                   className="w-full h-auto rounded-lg"
                 />
               )}
-            </div>
+            </a>
 
             {/* Call to action instructions */}
             <div className="text-center space-y-2 w-full">
@@ -401,12 +407,22 @@ export default function TvDisplayMode() {
               </p>
             </div>
 
-            {/* Campaign URL link badge */}
-            <div className="w-full px-4 py-2.5 rounded-xl bg-white/[0.05] border border-white/10 text-center">
-              <p className="text-xs font-mono text-teal-400 break-all leading-tight">
+            {/* Campaign URL link badge (Clickable to spin directly on this device) */}
+            <a
+              href={wheelUrl || "#"}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group w-full px-4 py-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 hover:border-teal-400/50 transition-all flex flex-col items-center justify-center gap-1.5 text-center shadow-lg hover:shadow-teal-500/10 cursor-pointer"
+              title="Click to open and spin on this device"
+            >
+              <div className="flex items-center gap-1.5 text-xs font-bold text-teal-300 group-hover:text-teal-200 transition-colors">
+                <ExternalLink className="w-3.5 h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                <span>Click / Tap to Spin on this Device</span>
+              </div>
+              <p className="text-[11px] font-mono text-white/50 group-hover:text-white/80 break-all leading-tight transition-colors">
                 {wheelUrl}
               </p>
-            </div>
+            </a>
           </div>
         </div>
 
