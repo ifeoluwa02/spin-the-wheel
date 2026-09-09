@@ -61,6 +61,7 @@ export default function AdminDashboard() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
+  const [dateRangeFilter, setDateRangeFilter] = useState("all");
   const [pauseLoading, setPauseLoading] = useState<string | null>(null); // prizeId being toggled
 
   // Store management state
@@ -324,7 +325,38 @@ export default function AdminDashboard() {
   const totalParticipants = participants.length;
   const winnersCount = participants.filter(p => p.won).length;
   const winRate = totalParticipants ? Math.round((winnersCount / totalParticipants) * 100) : 0;
-  const filtered = participants.filter(p =>
+
+  // ─── Date Range Filter ──────────────────────────────────────────────────────
+  // All ranges are computed relative to the start of today (midnight local time)
+  // so a "Today" filter includes all spins from midnight to right now.
+  function getDateRangeCutoff(range: string): number {
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    switch (range) {
+      case "today":      return todayMidnight;
+      case "2days":      return todayMidnight - 1 * 24 * 60 * 60 * 1000;
+      case "week":       return todayMidnight - 6 * 24 * 60 * 60 * 1000;
+      case "month":      return todayMidnight - 29 * 24 * 60 * 60 * 1000;
+      case "3months":    return todayMidnight - 89 * 24 * 60 * 60 * 1000;
+      default:           return 0; // "all" — no cutoff
+    }
+  }
+
+  const DATE_RANGE_OPTIONS = [
+    { key: "all",     label: "All Time" },
+    { key: "today",   label: "Today" },
+    { key: "2days",   label: "Last 2 Days" },
+    { key: "week",    label: "This Week" },
+    { key: "month",   label: "This Month" },
+    { key: "3months", label: "Last 3 Months" },
+  ];
+
+  const cutoff = getDateRangeCutoff(dateRangeFilter);
+  const dateFiltered = cutoff > 0
+    ? participants.filter(p => (p.createdAt || 0) >= cutoff)
+    : participants;
+
+  const filtered = dateFiltered.filter(p =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.phone.includes(searchQuery) ||
     p.prizeLabel.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1358,9 +1390,18 @@ export default function AdminDashboard() {
         {/* ── Participants Tab ── */}
         {activeTab === "export" && (
           <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+            {/* ── Header row ── */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
               <div>
-                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Participant Registrations · {participants.length}</h3>
+                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
+                  Participant Registrations ·{" "}
+                  <span style={{ color: "#00BFA6" }}>{filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id).length}</span>
+                  {dateRangeFilter !== "all" || storeFilter !== "all" ? (
+                    <span className="text-[11px] ml-1.5 font-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
+                      (filtered from {participants.length} total)
+                    </span>
+                  ) : null}
+                </h3>
                 <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Real-time activation entries with store & BA attribution — export to CSV.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1388,6 +1429,39 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </div>
+
+            {/* ── Date Range Filter Pills ── */}
+            <div className="flex flex-wrap items-center gap-2 py-1">
+              <span className="text-[11px] font-bold uppercase tracking-widest mr-1" style={{ color: "rgba(255,255,255,0.25)" }}>Range:</span>
+              {DATE_RANGE_OPTIONS.map(opt => {
+                const isActive = dateRangeFilter === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    onClick={() => setDateRangeFilter(opt.key)}
+                    className="px-3 py-1 rounded-full text-[11px] font-bold transition-all"
+                    style={{
+                      background: isActive ? "rgba(0,191,166,0.18)" : "rgba(255,255,255,0.05)",
+                      border: isActive ? "1px solid rgba(0,191,166,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                      color: isActive ? "#00BFA6" : "rgba(255,255,255,0.45)",
+                      boxShadow: isActive ? "0 0 12px rgba(0,191,166,0.15)" : "none",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+              {dateRangeFilter !== "all" && (
+                <button
+                  onClick={() => setDateRangeFilter("all")}
+                  className="ml-1 px-2 py-1 rounded-full text-[10px] font-bold transition-all hover:opacity-80"
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,100,100,0.3)", color: "rgba(255,150,150,0.7)" }}
+                >
+                  ✕ Clear
+                </button>
+              )}
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
                 <thead>
