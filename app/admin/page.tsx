@@ -62,6 +62,8 @@ export default function AdminDashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [storeFilter, setStoreFilter] = useState("all");
   const [dateRangeFilter, setDateRangeFilter] = useState("all");
+  const [customFrom, setCustomFrom] = useState(""); // YYYY-MM-DD
+  const [customTo, setCustomTo] = useState("");     // YYYY-MM-DD
   const [pauseLoading, setPauseLoading] = useState<string | null>(null); // prizeId being toggled
 
   // Store management state
@@ -287,8 +289,14 @@ export default function AdminDashboard() {
   }
 
   function exportToCSV() {
+    // Export only what is currently visible (date range + store + search applied)
+    const exportRows = filtered.filter(p =>
+      storeFilter === "all" ||
+      p.storeCode === storeFilter ||
+      p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id
+    );
     const headers = ["Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
-    const rows = participants.map(p => [
+    const rows = exportRows.map(p => [
       `"${p.name}"`,
       `"${p.phone}"`,
       `"${p.ageRange || "—"}"`,
@@ -301,10 +309,22 @@ export default function AdminDashboard() {
       `"${p.storeCode || ""}"`,
       `"${new Date(p.createdAt).toLocaleString()}"`,
     ]);
+    // Build a descriptive filename that includes the date range
+    const rangeLabel =
+      dateRangeFilter === "custom" && customFrom && customTo
+        ? `${customFrom}_to_${customTo}`
+        : dateRangeFilter !== "all"
+        ? dateRangeFilter
+        : "all_time";
+    const storeLabel =
+      storeFilter !== "all"
+        ? `_${storeFilter}`
+        : "";
+    const filename = `${campaign.name.toLowerCase().replace(/\s+/g, "_")}_${rangeLabel}${storeLabel}.csv`;
     const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const link = document.createElement("a");
     link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", `${campaign.name.toLowerCase().replace(/\s+/g, "_")}_participants.csv`);
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -327,18 +347,17 @@ export default function AdminDashboard() {
   const winRate = totalParticipants ? Math.round((winnersCount / totalParticipants) * 100) : 0;
 
   // ─── Date Range Filter ──────────────────────────────────────────────────────
-  // All ranges are computed relative to the start of today (midnight local time)
-  // so a "Today" filter includes all spins from midnight to right now.
   function getDateRangeCutoff(range: string): number {
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     switch (range) {
-      case "today":      return todayMidnight;
-      case "2days":      return todayMidnight - 1 * 24 * 60 * 60 * 1000;
-      case "week":       return todayMidnight - 6 * 24 * 60 * 60 * 1000;
-      case "month":      return todayMidnight - 29 * 24 * 60 * 60 * 1000;
-      case "3months":    return todayMidnight - 89 * 24 * 60 * 60 * 1000;
-      default:           return 0; // "all" — no cutoff
+      case "today":    return todayMidnight;
+      case "2days":    return todayMidnight - 1 * 24 * 60 * 60 * 1000;
+      case "week":     return todayMidnight - 6 * 24 * 60 * 60 * 1000;
+      case "month":    return todayMidnight - 29 * 24 * 60 * 60 * 1000;
+      case "3months":  return todayMidnight - 89 * 24 * 60 * 60 * 1000;
+      case "custom":   return customFrom ? new Date(customFrom + "T00:00:00").getTime() : 0;
+      default:         return 0;
     }
   }
 
@@ -349,11 +368,20 @@ export default function AdminDashboard() {
     { key: "week",    label: "This Week" },
     { key: "month",   label: "This Month" },
     { key: "3months", label: "Last 3 Months" },
+    { key: "custom",  label: "Custom Range" },
   ];
 
   const cutoff = getDateRangeCutoff(dateRangeFilter);
+  // For custom range: apply both a floor (from) and a ceiling (to end of that day)
+  const customToCeiling = dateRangeFilter === "custom" && customTo
+    ? new Date(customTo + "T23:59:59").getTime()
+    : Infinity;
+
   const dateFiltered = cutoff > 0
-    ? participants.filter(p => (p.createdAt || 0) >= cutoff)
+    ? participants.filter(p => {
+        const ts = p.createdAt || 0;
+        return ts >= cutoff && ts <= customToCeiling;
+      })
     : participants;
 
   const filtered = dateFiltered.filter(p =>
@@ -1430,37 +1458,118 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* ── Date Range Filter Pills ── */}
-            <div className="flex flex-wrap items-center gap-2 py-1">
-              <span className="text-[11px] font-bold uppercase tracking-widest mr-1" style={{ color: "rgba(255,255,255,0.25)" }}>Range:</span>
-              {DATE_RANGE_OPTIONS.map(opt => {
-                const isActive = dateRangeFilter === opt.key;
-                return (
+            {/* ── Date Range Filter Pills + Calendar ── */}
+            <div className="space-y-3">
+              {/* Quick range pills */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-widest mr-1" style={{ color: "rgba(255,255,255,0.25)" }}>Range:</span>
+                {DATE_RANGE_OPTIONS.map(opt => {
+                  const isActive = dateRangeFilter === opt.key;
+                  const isCustom = opt.key === "custom";
+                  return (
+                    <button
+                      key={opt.key}
+                      onClick={() => {
+                        setDateRangeFilter(opt.key);
+                        // Reset custom dates when switching away from custom
+                        if (!isCustom) { setCustomFrom(""); setCustomTo(""); }
+                      }}
+                      className="px-3 py-1 rounded-full text-[11px] font-bold transition-all flex items-center gap-1"
+                      style={{
+                        background: isActive ? (isCustom ? "rgba(255,215,0,0.15)" : "rgba(0,191,166,0.18)") : "rgba(255,255,255,0.05)",
+                        border: isActive ? `1px solid ${isCustom ? "rgba(255,215,0,0.5)" : "rgba(0,191,166,0.5)"}` : "1px solid rgba(255,255,255,0.08)",
+                        color: isActive ? (isCustom ? "#FFD700" : "#00BFA6") : "rgba(255,255,255,0.45)",
+                        boxShadow: isActive ? `0 0 12px ${isCustom ? "rgba(255,215,0,0.1)" : "rgba(0,191,166,0.15)"}` : "none",
+                      }}
+                    >
+                      {isCustom && <span style={{ fontSize: "10px" }}>📅</span>}
+                      {opt.label}
+                    </button>
+                  );
+                })}
+                {dateRangeFilter !== "all" && (
                   <button
-                    key={opt.key}
-                    onClick={() => setDateRangeFilter(opt.key)}
-                    className="px-3 py-1 rounded-full text-[11px] font-bold transition-all"
-                    style={{
-                      background: isActive ? "rgba(0,191,166,0.18)" : "rgba(255,255,255,0.05)",
-                      border: isActive ? "1px solid rgba(0,191,166,0.5)" : "1px solid rgba(255,255,255,0.08)",
-                      color: isActive ? "#00BFA6" : "rgba(255,255,255,0.45)",
-                      boxShadow: isActive ? "0 0 12px rgba(0,191,166,0.15)" : "none",
-                    }}
+                    onClick={() => { setDateRangeFilter("all"); setCustomFrom(""); setCustomTo(""); }}
+                    className="ml-1 px-2 py-1 rounded-full text-[10px] font-bold transition-all hover:opacity-80"
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,100,100,0.3)", color: "rgba(255,150,150,0.7)" }}
                   >
-                    {opt.label}
+                    ✕ Clear
                   </button>
-                );
-              })}
-              {dateRangeFilter !== "all" && (
-                <button
-                  onClick={() => setDateRangeFilter("all")}
-                  className="ml-1 px-2 py-1 rounded-full text-[10px] font-bold transition-all hover:opacity-80"
-                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,100,100,0.3)", color: "rgba(255,150,150,0.7)" }}
-                >
-                  ✕ Clear
-                </button>
-              )}
+                )}
+              </div>
             </div>
+
+            {/* Custom date range calendar picker — visible only when Custom Range is selected */}
+            {dateRangeFilter === "custom" && (
+              <div
+                className="rounded-2xl p-4 flex flex-col sm:flex-row sm:items-end gap-4"
+                style={{ background: "rgba(255,215,0,0.04)", border: "1px solid rgba(255,215,0,0.15)" }}
+              >
+                <div className="flex items-center gap-2 flex-1">
+                  {/* From */}
+                  <div className="flex-1">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "rgba(255,215,0,0.6)" }}>
+                      From Date
+                    </label>
+                    <input
+                      type="date"
+                      value={customFrom}
+                      max={customTo || new Date().toISOString().split("T")[0]}
+                      onChange={e => setCustomFrom(e.target.value)}
+                      className="w-full rounded-xl px-3 py-2.5 text-xs text-white outline-none"
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: customFrom ? "1px solid rgba(255,215,0,0.4)" : "1px solid rgba(255,255,255,0.1)",
+                        colorScheme: "dark",
+                      }}
+                    />
+                  </div>
+
+                  <span className="text-white/30 text-xs font-bold mt-5">→</span>
+
+                  {/* To */}
+                  <div className="flex-1">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: "rgba(255,215,0,0.6)" }}>
+                      To Date
+                    </label>
+                    <input
+                      type="date"
+                      value={customTo}
+                      min={customFrom || undefined}
+                      max={new Date().toISOString().split("T")[0]}
+                      onChange={e => setCustomTo(e.target.value)}
+                      className="w-full rounded-xl px-3 py-2.5 text-xs text-white outline-none"
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: customTo ? "1px solid rgba(255,215,0,0.4)" : "1px solid rgba(255,255,255,0.1)",
+                        colorScheme: "dark",
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Live record count summary */}
+                <div className="text-right shrink-0">
+                  {customFrom && customTo ? (
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-black" style={{ color: "#FFD700" }}>
+                        {filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id).length} records
+                      </p>
+                      <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>
+                        {customFrom} → {customTo}
+                      </p>
+                      <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.25)" }}>
+                        ready to export
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-[11px]" style={{ color: "rgba(255,215,0,0.4)" }}>
+                      Select both dates
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
