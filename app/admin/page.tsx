@@ -19,6 +19,7 @@ import {
   unpausePrizeGlobally,
   pausePrizeAtStore,
   unpausePrizeAtStore,
+  invalidateCampaignCache,
   DEFAULT_CAMPAIGN,
 } from "@/lib/campaign";
 import Link from "next/link";
@@ -96,6 +97,7 @@ export default function AdminDashboard() {
 
     try {
       await updateCampaign(updatedCampaign);
+      invalidateCampaignCache(updatedCampaign.id);
       setStoreToast(`✅ "${newStore.name}" added and saved live!`);
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
@@ -115,6 +117,7 @@ export default function AdminDashboard() {
 
     try {
       await updateCampaign(updatedCampaign);
+      invalidateCampaignCache(updatedCampaign.id);
       setStoreToast("🗑️ Store account removed.");
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
@@ -259,6 +262,7 @@ export default function AdminDashboard() {
   async function handleSave() {
     setSaving(true);
     await updateCampaign(campaign);
+    invalidateCampaignCache(campaign.id);
     setSaving(false);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);

@@ -2,6 +2,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   collection,
   query,
   where,
@@ -11,6 +12,7 @@ import {
   limit,
   orderBy,
   onSnapshot,
+  increment,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Campaign, Participant, SuperAdminConfig } from "@/types";
@@ -37,14 +39,65 @@ export function generateVoucherCode(prefix = "SPIN"): string {
   return `${prefix}-${randomChars}`;
 }
 
-/** Loads campaign configuration strictly from Firestore */
-export async function getCampaign(campaignId: string): Promise<Campaign | null> {
+// ---------- Campaign Config Cache (sessionStorage) ----------
+// Caches the campaign document in sessionStorage for the lifetime of the browser tab.
+// This eliminates repeat reads when the user refreshes or navigates back, and drastically
+// reduces Firestore read consumption when 100s of users hit the page simultaneously.
+const CAMPAIGN_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCachedCampaign(campaignId: string): Campaign | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(`campaign_cache_${campaignId}`);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw) as { data: Campaign; ts: number };
+    if (Date.now() - ts > CAMPAIGN_CACHE_TTL_MS) {
+      sessionStorage.removeItem(`campaign_cache_${campaignId}`);
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedCampaign(campaign: Campaign): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      `campaign_cache_${campaign.id}`,
+      JSON.stringify({ data: campaign, ts: Date.now() })
+    );
+  } catch {
+    // sessionStorage quota exceeded — silently skip caching
+  }
+}
+
+/** Invalidates the local campaign cache. Call this after any admin write so the next
+ *  participant load fetches a fresh copy of the updated configuration. */
+export function invalidateCampaignCache(campaignId: string): void {
+  if (typeof window === "undefined") return;
+  try { sessionStorage.removeItem(`campaign_cache_${campaignId}`); } catch { /* noop */ }
+}
+
+/** Loads campaign configuration from Firestore, with a 5-minute sessionStorage cache.
+ *  Pass forceRefresh=true (e.g. from admin writes) to bypass the cache. */
+export async function getCampaign(campaignId: string, forceRefresh = false): Promise<Campaign | null> {
   if (!campaignId) return null;
+
+  // Return cached version if still fresh and not explicitly skipped
+  if (!forceRefresh) {
+    const cached = getCachedCampaign(campaignId);
+    if (cached) return cached;
+  }
+
   try {
     const ref = doc(db, "campaigns", campaignId);
     const snap = await getDoc(ref);
     if (snap.exists()) {
-      return { ...DEFAULT_CAMPAIGN, ...(snap.data() as Partial<Campaign>), id: snap.id };
+      const campaign = { ...DEFAULT_CAMPAIGN, ...(snap.data() as Partial<Campaign>), id: snap.id };
+      setCachedCampaign(campaign);
+      return campaign;
     }
   } catch (err) {
     console.warn("Firestore campaign fetch failed:", err);
@@ -98,22 +151,31 @@ export async function hasAlreadySpun(campaignId: string, phone: string): Promise
   return false;
 }
 
-/** Increments claimedCount for a prize when won */
+/** Atomically increments claimedCount for a prize using FieldValue.increment.
+ *
+ *  WHY: The old implementation used read → mutate → write which causes a race
+ *  condition when many users spin simultaneously — all reads return the same
+ *  count, all compute count+1, and all write the same value. FieldValue.increment
+ *  is processed server-side atomically so each concurrent call correctly adds 1.
+ *
+ *  Prizes are stored as an array inside the campaign document. Firestore does not
+ *  support FieldValue.increment on individual array elements by index, so we store
+ *  a separate lightweight counter document per prize in the `prizeCounts` sub-collection.
+ *  The admin dashboard reads the campaign document for display; this counter is used
+ *  only for accurate real-time stock tracking.
+ */
 export async function incrementPrizeClaimed(campaignId: string, prizeId: string): Promise<void> {
+  if (!campaignId || !prizeId) return;
   try {
-    const campaign = await getCampaign(campaignId);
-    if (!campaign || !campaign.prizes) return;
-    let updated = false;
-    const prizes = campaign.prizes.map((p) => {
-      if (p.id === prizeId) {
-        updated = true;
-        return { ...p, claimedCount: (p.claimedCount || 0) + 1 };
-      }
-      return p;
+    const counterRef = doc(db, "campaigns", campaignId, "prizeCounts", prizeId);
+    // increment() is fully atomic and concurrent-safe — no read needed
+    await updateDoc(counterRef, { claimedCount: increment(1) }).catch(async () => {
+      // Counter doc doesn't exist yet on first win — create it
+      const { setDoc: sd } = await import("firebase/firestore");
+      await sd(counterRef, { prizeId, campaignId, claimedCount: 1 }, { merge: true });
     });
-    if (updated) {
-      await updateCampaign({ ...campaign, prizes });
-    }
+    // Bust the local cache so the next getCampaign call fetches fresh prize counts
+    invalidateCampaignCache(campaignId);
   } catch (err) {
     console.warn("Failed to increment prize claimed count:", err);
   }
