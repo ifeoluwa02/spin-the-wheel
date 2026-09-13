@@ -15,7 +15,7 @@ import {
   increment,
 } from "firebase/firestore";
 import { db } from "./firebase";
-import type { Campaign, Participant, SuperAdminConfig } from "@/types";
+import type { Campaign, Participant, SuperAdminConfig, StoreInventoryRecord } from "@/types";
 import { normalizeNigerianPhone } from "./phone";
 
 export const DEFAULT_CAMPAIGN: Campaign = {
@@ -124,6 +124,7 @@ export async function updateCampaign(campaign: Campaign): Promise<void> {
     const ref = doc(db, "campaigns", campaign.id);
     const cleanCampaign = JSON.parse(JSON.stringify(campaign));
     await setDoc(ref, cleanCampaign, { merge: true });
+    invalidateCampaignCache(campaign.id);
   } catch (err) {
     console.error("Firestore campaign update failed:", err);
     throw err;
@@ -171,13 +172,45 @@ export async function incrementPrizeClaimed(campaignId: string, prizeId: string)
     // increment() is fully atomic and concurrent-safe — no read needed
     await updateDoc(counterRef, { claimedCount: increment(1) }).catch(async () => {
       // Counter doc doesn't exist yet on first win — create it
-      const { setDoc: sd } = await import("firebase/firestore");
-      await sd(counterRef, { prizeId, campaignId, claimedCount: 1 }, { merge: true });
+      await setDoc(counterRef, { prizeId, campaignId, claimedCount: 1 }, { merge: true });
     });
     // Bust the local cache so the next getCampaign call fetches fresh prize counts
     invalidateCampaignCache(campaignId);
   } catch (err) {
     console.warn("Failed to increment prize claimed count:", err);
+  }
+}
+
+/**
+ * Atomically increments the store-specific claimed count for a prize.
+ * Stored at campaigns/{campaignId}/storeInventory/{storeCode}
+ * Fully atomic with FieldValue.increment — safe under high concurrency (100+ simultaneous spins).
+ */
+export async function incrementStorePrizeClaimed(
+  campaignId: string,
+  storeCode: string,
+  prizeId: string
+): Promise<void> {
+  if (!campaignId || !storeCode || !prizeId) return;
+  try {
+    const cleanStoreCode = storeCode.trim().toLowerCase();
+    const inventoryRef = doc(db, "campaigns", campaignId, "storeInventory", cleanStoreCode);
+    await updateDoc(inventoryRef, {
+      [`claimedCounts.${prizeId}`]: increment(1),
+      updatedAt: Date.now(),
+    }).catch(async () => {
+      await setDoc(
+        inventoryRef,
+        {
+          storeCode: cleanStoreCode,
+          claimedCounts: { [prizeId]: 1 },
+          updatedAt: Date.now(),
+        },
+        { merge: true }
+      );
+    });
+  } catch (err) {
+    console.warn("Failed to increment store prize claimed count:", err);
   }
 }
 
@@ -202,9 +235,16 @@ export async function recordParticipant(participant: Participant): Promise<strin
     storeName: participant.storeName || "",
   };
 
-  // If the participant won a prize, deduct 1 from available stock pool
+  // If the participant won a prize, deduct 1 from both global and store-specific available stock pool
   if (cleanParticipant.won && cleanParticipant.prizeId && cleanParticipant.campaignId) {
     incrementPrizeClaimed(cleanParticipant.campaignId, cleanParticipant.prizeId).catch(() => {});
+    if (cleanParticipant.storeCode) {
+      incrementStorePrizeClaimed(
+        cleanParticipant.campaignId,
+        cleanParticipant.storeCode,
+        cleanParticipant.prizeId
+      ).catch(() => {});
+    }
   }
 
   try {
@@ -312,7 +352,7 @@ export async function clearCampaignData(campaignId?: string): Promise<{ deletedC
     throw err;
   }
 
-  // 2. Reset claimedCount on campaign prizes in Firestore
+  // 2. Reset claimedCount on campaign prizes in Firestore and wipe sub-collections
   if (campaignId) {
     try {
       const campaign = await getCampaign(campaignId);
@@ -320,8 +360,16 @@ export async function clearCampaignData(campaignId?: string): Promise<{ deletedC
         const resetPrizes = campaign.prizes.map((p) => ({ ...p, claimedCount: 0 }));
         await updateCampaign({ ...campaign, prizes: resetPrizes });
       }
+
+      // Delete prizeCounts sub-collection
+      const prizeCountsSnap = await getDocs(collection(db, "campaigns", campaignId, "prizeCounts"));
+      await Promise.all(prizeCountsSnap.docs.map((d) => deleteDoc(d.ref)));
+
+      // Delete storeInventory sub-collection
+      const storeInvSnap = await getDocs(collection(db, "campaigns", campaignId, "storeInventory"));
+      await Promise.all(storeInvSnap.docs.map((d) => deleteDoc(d.ref)));
     } catch (err) {
-      console.error("Error resetting prize claimed counts:", err);
+      console.error("Error resetting prize claimed counts and store inventory:", err);
     }
   }
 
@@ -349,101 +397,292 @@ export async function setSuperAdminConfig(config: SuperAdminConfig): Promise<voi
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Prize Pause / Unpause Functions
+// Store-Specific Inventory & Prize Functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Calculates the allocated quota for a specific prize at a given store.
+ * 1. If store has customAllocations[prizeId] set, uses that custom number.
+ * 2. Else if prize has an allocated quantity and stores exist, divides equally:
+ *    floor(prize.quantity / totalStores).
+ * 3. Else returns prize.quantity (or null if unlimited).
+ */
+export function getStorePrizeQuota(
+  campaign: Campaign,
+  storeCode: string,
+  prizeId: string
+): number | null {
+  const prize = campaign.prizes?.find((p) => p.id === prizeId);
+  if (!prize) return 0;
+  if (prize.isLosing || prize.quantity === undefined || prize.quantity === null || prize.quantity < 0) {
+    return null; // Unlimited stock
+  }
+
+  const cleanStoreCode = (storeCode || "").trim().toLowerCase();
+  if (!cleanStoreCode) {
+    return prize.quantity;
+  }
+
+  const store = campaign.stores?.find(
+    (s) =>
+      (s.code && s.code.toLowerCase() === cleanStoreCode) ||
+      (s.id && s.id.toLowerCase() === cleanStoreCode)
+  );
+
+  // Check custom allocation override first
+  if (store?.customAllocations?.[prizeId] !== undefined) {
+    return Math.max(0, store.customAllocations[prizeId]);
+  }
+
+  // Equal split across all configured stores
+  const totalStores = campaign.stores?.length || 1;
+  return Math.floor(prize.quantity / totalStores);
+}
+
+/**
+ * Calculates the remaining stock for a prize at a specific store.
+ * Returns null if unlimited.
+ */
+export function getStorePrizeRemaining(
+  campaign: Campaign,
+  storeCode: string,
+  prizeId: string,
+  claimedCounts?: Record<string, number>
+): number | null {
+  const quota = getStorePrizeQuota(campaign, storeCode, prizeId);
+  if (quota === null) return null; // Unlimited stock
+  const claimed = claimedCounts?.[prizeId] || 0;
+  return Math.max(0, quota - claimed);
+}
 
 /**
  * Returns the effective prizes for a given store after applying:
  * 1. Global pause (prize.globallyPaused === true) — removed from everyone
  * 2. Per-store pause (store.pausedPrizes includes prizeId) — removed from this store only
+ * 3. Per-store stock exhaustion (remaining <= 0) — removed when store quota is consumed
  * Losing/Try-Again segments are never filtered out.
  */
 export function getEffectivePrizes(
   campaign: import("@/types").Campaign,
-  storeCode: string
+  storeCode: string,
+  storeClaimedCounts?: Record<string, number>
 ): import("@/types").Prize[] {
-  const store = campaign.stores?.find(
-    (s) =>
-      s.code?.toLowerCase() === storeCode?.toLowerCase() ||
-      s.id === storeCode
-  );
+  if (!campaign || !campaign.prizes) return [];
+
+  const cleanStoreCode = (storeCode || "").trim().toLowerCase();
+  const store = cleanStoreCode
+    ? campaign.stores?.find(
+        (s) =>
+          (s.code && s.code.toLowerCase() === cleanStoreCode) ||
+          (s.id && s.id.toLowerCase() === cleanStoreCode)
+      )
+    : undefined;
   const storePausedPrizes: string[] = store?.pausedPrizes || [];
 
-  return campaign.prizes.filter((prize) => {
+  const filtered = campaign.prizes.filter((prize) => {
     if (prize.isLosing) return true; // never filter out losing segments
     if (prize.globallyPaused) return false; // global pause — excluded everywhere
     if (storePausedPrizes.includes(prize.id)) return false; // per-store pause
+
+    // Check store-specific stock depletion if storeCode is provided and claimedCounts are supplied
+    if (cleanStoreCode && storeClaimedCounts && prize.quantity !== undefined && prize.quantity !== null && prize.quantity >= 0) {
+      const remaining = getStorePrizeRemaining(campaign, cleanStoreCode, prize.id, storeClaimedCounts);
+      if (remaining !== null && remaining <= 0) {
+        return false; // Out of stock at this store
+      }
+    }
+
     return true;
   });
+
+  // Safety fallback: if all winning prizes are paused/depleted and no losing segment exists,
+  // return a fallback "Try Again" so the wheel canvas is never empty and never divides by 0
+  if (filtered.length === 0 && campaign.prizes.length > 0) {
+    return [{
+      id: "fallback-try-again",
+      label: "Try Again",
+      color: "#6b7280",
+      weight: 100,
+      isLosing: true,
+    }];
+  }
+
+  return filtered;
 }
+
+/** Fetches the inventory claimed counts for a specific store */
+export async function getStoreInventory(
+  campaignId: string,
+  storeCode: string
+): Promise<StoreInventoryRecord | null> {
+  if (!campaignId || !storeCode) return null;
+  try {
+    const cleanStoreCode = storeCode.trim().toLowerCase();
+    const ref = doc(db, "campaigns", campaignId, "storeInventory", cleanStoreCode);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      return snap.data() as StoreInventoryRecord;
+    }
+  } catch (err) {
+    console.warn("Firestore getStoreInventory failed:", err);
+  }
+  return null;
+}
+
+/** Subscribes to real-time inventory updates for a specific store */
+export function subscribeStoreInventory(
+  campaignId: string,
+  storeCode: string,
+  callback: (inventory: StoreInventoryRecord | null) => void
+): () => void {
+  if (!campaignId || !storeCode) {
+    callback(null);
+    return () => {};
+  }
+  const cleanStoreCode = storeCode.trim().toLowerCase();
+  const ref = doc(db, "campaigns", campaignId, "storeInventory", cleanStoreCode);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        callback(snap.data() as StoreInventoryRecord);
+      } else {
+        callback(null);
+      }
+    },
+    (err) => {
+      console.warn("subscribeStoreInventory snapshot error:", err);
+    }
+  );
+}
+
+/** Fetches all store inventory records for a campaign */
+export async function getAllStoreInventories(
+  campaignId: string
+): Promise<Record<string, StoreInventoryRecord>> {
+  const result: Record<string, StoreInventoryRecord> = {};
+  if (!campaignId) return result;
+  try {
+    const colRef = collection(db, "campaigns", campaignId, "storeInventory");
+    const snap = await getDocs(colRef);
+    snap.forEach((docSnap) => {
+      result[docSnap.id] = docSnap.data() as StoreInventoryRecord;
+    });
+  } catch (err) {
+    console.warn("getAllStoreInventories failed:", err);
+  }
+  return result;
+}
+
 
 /**
  * Globally pauses a prize across all stores.
- * Only Campaign Admin (PM) should call this.
+ * Directly updates Firestore document field to prevent cache race conditions.
  */
 export async function pausePrizeGlobally(
   campaignId: string,
   prizeId: string
 ): Promise<void> {
-  const campaign = await getCampaign(campaignId);
-  if (!campaign) return;
-  const prizes = campaign.prizes.map((p) =>
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const prizes = (c.prizes || []).map((p) =>
     p.id === prizeId ? { ...p, globallyPaused: true } : p
   );
-  await updateCampaign({ ...campaign, prizes });
+  await updateDoc(ref, { prizes });
+  invalidateCampaignCache(campaignId);
 }
 
 /**
  * Removes global pause from a prize, making it available again at all stores.
- * Only Campaign Admin (PM) should call this.
+ * Directly updates Firestore document field to prevent cache race conditions.
  */
 export async function unpausePrizeGlobally(
   campaignId: string,
   prizeId: string
 ): Promise<void> {
-  const campaign = await getCampaign(campaignId);
-  if (!campaign) return;
-  const prizes = campaign.prizes.map((p) =>
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const prizes = (c.prizes || []).map((p) =>
     p.id === prizeId ? { ...p, globallyPaused: false } : p
   );
-  await updateCampaign({ ...campaign, prizes });
+  await updateDoc(ref, { prizes });
+  invalidateCampaignCache(campaignId);
 }
 
 /**
  * Pauses a specific prize at a specific store (per-store pause).
  * Can be called by Supervisor (for their store) or Admin.
+ * Directly reads latest Firestore document and updates stores field.
  */
 export async function pausePrizeAtStore(
   campaignId: string,
-  storeId: string,
+  storeIdOrCode: string,
   prizeId: string
 ): Promise<void> {
-  const campaign = await getCampaign(campaignId);
-  if (!campaign) return;
-  const stores = (campaign.stores || []).map((s) => {
-    if (s.id !== storeId) return s;
-    const already = s.pausedPrizes?.includes(prizeId);
-    return already ? s : { ...s, pausedPrizes: [...(s.pausedPrizes || []), prizeId] };
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const clean = storeIdOrCode.trim().toLowerCase();
+  const stores = (c.stores || []).map((s) => {
+    if (s.id.toLowerCase() !== clean && s.code?.toLowerCase() !== clean) return s;
+    const current = s.pausedPrizes || [];
+    return current.includes(prizeId) ? s : { ...s, pausedPrizes: [...current, prizeId] };
   });
-  await updateCampaign({ ...campaign, stores });
+  await updateDoc(ref, { stores });
+  invalidateCampaignCache(campaignId);
 }
 
 /**
  * Removes per-store pause, restoring a prize at that specific store.
  * Can be called by Supervisor (for their store) or Admin.
+ * Directly reads latest Firestore document and updates stores field.
  */
 export async function unpausePrizeAtStore(
   campaignId: string,
-  storeId: string,
+  storeIdOrCode: string,
   prizeId: string
 ): Promise<void> {
-  const campaign = await getCampaign(campaignId);
-  if (!campaign) return;
-  const stores = (campaign.stores || []).map((s) => {
-    if (s.id !== storeId) return s;
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const clean = storeIdOrCode.trim().toLowerCase();
+  const stores = (c.stores || []).map((s) => {
+    if (s.id.toLowerCase() !== clean && s.code?.toLowerCase() !== clean) return s;
     return { ...s, pausedPrizes: (s.pausedPrizes || []).filter((id) => id !== prizeId) };
   });
-  await updateCampaign({ ...campaign, stores });
+  await updateDoc(ref, { stores });
+  invalidateCampaignCache(campaignId);
+}
+
+/**
+ * Batch pauses or resumes all winning prizes at a specific store.
+ * Directly reads latest Firestore document and updates stores field.
+ */
+export async function batchToggleStorePrizes(
+  campaignId: string,
+  storeIdOrCode: string,
+  pauseAll: boolean
+): Promise<void> {
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const clean = storeIdOrCode.trim().toLowerCase();
+  const winningPrizeIds = (c.prizes || [])
+    .filter((p) => !p.isLosing && !p.globallyPaused)
+    .map((p) => p.id);
+  const stores = (c.stores || []).map((s) => {
+    if (s.id.toLowerCase() !== clean && s.code?.toLowerCase() !== clean) return s;
+    return { ...s, pausedPrizes: pauseAll ? winningPrizeIds : [] };
+  });
+  await updateDoc(ref, { stores });
+  invalidateCampaignCache(campaignId);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

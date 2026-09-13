@@ -32,7 +32,19 @@ export interface StoreLocation {
    * Supervisors can toggle these; Admin can also manage them.
    */
   pausedPrizes?: string[];
+  /**
+   * Optional custom stock allocations per prizeId: { [prizeId]: number }
+   * If not specified, stock is divided equally across all stores: floor(prize.quantity / totalStores)
+   */
+  customAllocations?: Record<string, number>;
 }
+
+export interface StoreInventoryRecord {
+  storeCode: string;
+  claimedCounts: Record<string, number>;
+  updatedAt?: number;
+}
+
 
 /**
  * A Supervisor is a field team member who can:

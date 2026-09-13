@@ -2,11 +2,15 @@ import type { Prize } from "@/types";
 
 /**
  * Checks if a prize item is currently in stock.
+ * If remainingStockOverride is provided, checks against it (> 0).
  * If quantity is undefined/null, it is considered unlimited stock.
  */
-export function isPrizeInStock(prize: Prize): boolean {
+export function isPrizeInStock(prize: Prize, remainingStockOverride?: number | null): boolean {
   if (prize.isLosing) return true; // Losing / Try Again segments are always available
   if (prize.globallyPaused) return false; // Globally paused — excluded from all wheels
+  if (remainingStockOverride !== undefined && remainingStockOverride !== null) {
+    return remainingStockOverride > 0;
+  }
   if (prize.quantity === undefined || prize.quantity === null || prize.quantity < 0) {
     return true; // Unlimited
   }
@@ -18,7 +22,10 @@ export function isPrizeInStock(prize: Prize): boolean {
  * Gets remaining stock for a prize item.
  * Returns Infinity if stock is unlimited.
  */
-export function getRemainingStock(prize: Prize): number {
+export function getRemainingStock(prize: Prize, remainingStockOverride?: number | null): number {
+  if (remainingStockOverride !== undefined && remainingStockOverride !== null) {
+    return Math.max(0, remainingStockOverride);
+  }
   if (prize.quantity === undefined || prize.quantity === null || prize.quantity < 0) {
     return Infinity;
   }
@@ -27,12 +34,16 @@ export function getRemainingStock(prize: Prize): number {
 
 /**
  * Picks a prize index using each prize's `weight` as a relative probability,
- * automatically filtering out any prizes that are OUT OF STOCK.
+ * automatically filtering out any prizes that are OUT OF STOCK (globally or per store).
  */
-export function pickPrizeIndex(prizes: Prize[]): number {
+export function pickPrizeIndex(
+  prizes: Prize[],
+  remainingStockMap?: Record<string, number | null>
+): number {
   // Calculate weights only for in-stock prizes
   const effectiveWeights = prizes.map((p) => {
-    if (!isPrizeInStock(p)) return 0; // Exclude out-of-stock items
+    const remaining = remainingStockMap ? remainingStockMap[p.id] : undefined;
+    if (!isPrizeInStock(p, remaining)) return 0; // Exclude out-of-stock items
     return Math.max(p.weight, 0);
   });
 

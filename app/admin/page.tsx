@@ -19,19 +19,24 @@ import {
   unpausePrizeGlobally,
   pausePrizeAtStore,
   unpausePrizeAtStore,
+  batchToggleStorePrizes,
+  getStorePrizeQuota,
+  getStorePrizeRemaining,
   invalidateCampaignCache,
   DEFAULT_CAMPAIGN,
 } from "@/lib/campaign";
 import Link from "next/link";
 import {
-  Settings, Trophy, Users, BarChart3, Download, QrCode, Tv,
+  Settings, Trophy, Users, BarChart3, Download, QrCode, Tv, Smartphone,
   Plus, Trash2, Lock, LogOut, Sparkles, CheckCircle, Dices,
   ExternalLink, Palette, Save, Activity, Target, Layers,
-  ChevronRight, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
-  UsersRound, PauseCircle, PlayCircle, Globe, Building2,
+  ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
+  UsersRound, PauseCircle, PlayCircle, Globe, Building2, Search, SlidersHorizontal,
+  Play, Pause, Package,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
+import { getRemainingStock } from "@/lib/pickPrize";
 import TeamTab from "@/components/TeamTab";
 
 type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw" | "team";
@@ -65,6 +70,20 @@ export default function AdminDashboard() {
   const [customFrom, setCustomFrom] = useState(""); // YYYY-MM-DD
   const [customTo, setCustomTo] = useState("");     // YYYY-MM-DD
   const [pauseLoading, setPauseLoading] = useState<string | null>(null); // prizeId being toggled
+
+  // Per-store prize pause state — store ID stored in state, object derived from campaign.stores
+  const [selectedStoreIdForPrizes, setSelectedStoreIdForPrizes] = useState<string | null>(null);
+  const selectedStoreForPrizes = selectedStoreIdForPrizes
+    ? (campaign.stores || []).find(
+        (s) => s.id === selectedStoreIdForPrizes || s.code === selectedStoreIdForPrizes
+      ) || null
+    : null;
+  const setSelectedStoreForPrizes = (store: StoreLocation | null) => setSelectedStoreIdForPrizes(store ? store.id : null);
+
+  const [storePrizeSearch, setStorePrizeSearch] = useState("");
+  const [storePrizeStateFilter, setStorePrizeStateFilter] = useState("all");
+  const [storePrizeStatusFilter, setStorePrizeStatusFilter] = useState<"all" | "paused" | "active">("all");
+  const [expandedStores, setExpandedStores] = useState<Record<string, boolean>>({});
 
   // Store management state
   const [newStoreName, setNewStoreName] = useState("");
@@ -126,6 +145,82 @@ export default function AdminDashboard() {
     } catch (err) {
       console.error("Failed to delete store from Firestore:", err);
     }
+  }
+
+  async function handleToggleStorePrize(store: StoreLocation, prize: Prize, pause: boolean) {
+    const key = `${store.id}-${prize.id}`;
+    setPauseLoading(key);
+    try {
+      if (!pause) {
+        await unpausePrizeAtStore(campaign.id, store.id, prize.id);
+        const updatedStores = (campaign.stores || []).map(s =>
+          (s.id === store.id || s.code === store.code)
+            ? { ...s, pausedPrizes: (s.pausedPrizes || []).filter(id => id !== prize.id) }
+            : s
+        );
+        setCampaign(prev => ({ ...prev, stores: updatedStores }));
+        setStoreToast(`▶️ Resumed "${prize.label}" at ${store.name}`);
+      } else {
+        await pausePrizeAtStore(campaign.id, store.id, prize.id);
+        const updatedStores = (campaign.stores || []).map(s =>
+          (s.id === store.id || s.code === store.code)
+            ? { ...s, pausedPrizes: [...(s.pausedPrizes || []), prize.id] }
+            : s
+        );
+        setCampaign(prev => ({ ...prev, stores: updatedStores }));
+        setStoreToast(`⏸️ Paused "${prize.label}" at ${store.name}`);
+      }
+      setTimeout(() => setStoreToast(null), 3000);
+    } catch (err) {
+      console.error("Failed to toggle store prize:", err);
+      setStoreToast("❌ Failed to update prize status. Please try again.");
+      setTimeout(() => setStoreToast(null), 3000);
+    } finally {
+      setPauseLoading(null);
+    }
+  }
+
+  async function handleBatchToggleStorePrizes(store: StoreLocation, pauseAll: boolean) {
+    const key = `batch-${store.id}`;
+    setPauseLoading(key);
+    try {
+      await batchToggleStorePrizes(campaign.id, store.id, pauseAll);
+      const winningPrizes = campaign.prizes.filter(p => !p.isLosing && !p.globallyPaused);
+      const allPrizeIds = winningPrizes.map(p => p.id);
+      const updatedStores = (campaign.stores || []).map(s =>
+        (s.id === store.id || s.code === store.code)
+          ? { ...s, pausedPrizes: pauseAll ? allPrizeIds : [] }
+          : s
+      );
+      setCampaign(prev => ({ ...prev, stores: updatedStores }));
+      setStoreToast(pauseAll ? `⏸️ Paused all winning prizes at ${store.name}` : `▶️ Resumed all prizes at ${store.name}`);
+      setTimeout(() => setStoreToast(null), 3000);
+    } catch (err) {
+      console.error("Failed to batch toggle store prizes:", err);
+      setStoreToast("❌ Failed to batch update. Please try again.");
+      setTimeout(() => setStoreToast(null), 3000);
+    } finally {
+      setPauseLoading(null);
+    }
+  }
+
+  function toggleStoreExpanded(storeId: string) {
+    setExpandedStores(prev => {
+      // If not yet explicitly set, clicking will toggle from its current default (which is true if search is active, else false)
+      const current = prev[storeId] ?? (storePrizeSearch.trim().length > 0);
+      return {
+        ...prev,
+        [storeId]: !current,
+      };
+    });
+  }
+
+  function handleSetAllExpanded(expand: boolean) {
+    const next: Record<string, boolean> = {};
+    storesToDisplay.forEach(s => {
+      next[s.id] = expand;
+    });
+    setExpandedStores(next);
   }
 
   useEffect(() => {
@@ -510,6 +605,28 @@ export default function AdminDashboard() {
     ? getSupervisorStores(campaign, activeSupervisor)
     : (campaign.stores || []);
 
+  const storesToDisplay = isSupervisor ? supervisorStores : (campaign.stores || []);
+  const filteredStorePrizes = storesToDisplay.filter(store => {
+    const q = storePrizeSearch.toLowerCase().trim();
+    const matchesSearch = !q || (
+      store.name.toLowerCase().includes(q) ||
+      (store.code && store.code.toLowerCase().includes(q)) ||
+      (store.city && store.city.toLowerCase().includes(q)) ||
+      (store.state && store.state.toLowerCase().includes(q)) ||
+      campaign.prizes.some(p => p.label.toLowerCase().includes(q))
+    );
+    const matchesState = storePrizeStateFilter === "all" || store.state?.toLowerCase() === storePrizeStateFilter.toLowerCase();
+    const pausedCount = (store.pausedPrizes || []).length;
+    const matchesStatus =
+      storePrizeStatusFilter === "all" ? true :
+      storePrizeStatusFilter === "paused" ? pausedCount > 0 :
+      pausedCount === 0;
+    return matchesSearch && matchesState && matchesStatus;
+  });
+
+  const storesWithPausedCount = storesToDisplay.filter(s => (s.pausedPrizes || []).length > 0).length;
+  const allFilteredExpanded = filteredStorePrizes.length > 0 && filteredStorePrizes.every(s => expandedStores[s.id] ?? (storePrizeSearch.trim().length > 0));
+
   const allTabs: { id: Tab; label: string; icon: any; adminOnly?: boolean }[] = [
     { id: "analytics", label: "Analytics", icon: Activity },
     { id: "prizes", label: "Prizes & Stock", icon: Trophy },
@@ -566,6 +683,10 @@ export default function AdminDashboard() {
             <Link href={`/tv?c=${campaignSlug}`} target="_blank" className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <Tv className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">TV</span>
+            </Link>
+            <Link href={`/kiosk?c=${campaignSlug}`} target="_blank" className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(0,191,166,0.08)", color: "#00BFA6", border: "1px solid rgba(0,191,166,0.25)" }}>
+              <Smartphone className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Kiosk</span>
             </Link>
             {!isSupervisor && (
               <button
@@ -988,7 +1109,7 @@ export default function AdminDashboard() {
                           <div className="h-4 w-px bg-white/10" />
 
                           {/* Inventory Badges */}
-                          <div className="flex items-center gap-1.5 text-xs font-bold font-mono">
+                          <div className="flex items-center gap-1.5 text-xs font-bold font-mono flex-wrap">
                             <span className="text-emerald-400">{wonCount} won</span>
                             <span className="text-white/20">/</span>
                             {isOutOfStock ? (
@@ -998,6 +1119,11 @@ export default function AdminDashboard() {
                             ) : (
                               <span className="text-teal-300">
                                 {hasLimit ? `${remaining} left` : "∞ stock"}
+                              </span>
+                            )}
+                            {hasLimit && (campaign.stores?.length || 0) > 0 && (
+                              <span className="text-[10px] text-amber-300/80 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 font-sans">
+                                ~{Math.floor(prize.quantity! / campaign.stores!.length)}/store ({campaign.stores!.length} stores)
                               </span>
                             )}
                           </div>
@@ -1055,129 +1181,346 @@ export default function AdminDashboard() {
               })}
             </div>
 
-            {/* ── Per-Store Prize Pause Panel (Supervisor view) ── */}
-            {isSupervisor && activeSupervisor && (
-              <div className="mt-6 space-y-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "1.5rem" }}>
-                <div>
-                  <h4 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Pause Prizes at Your Stores</h4>
-                  <p className="text-xs mt-1 text-white/40">Toggle individual prizes ON or OFF for each store you manage. Changes take effect immediately.</p>
-                </div>
-                {supervisorStores.length === 0 ? (
-                  <p className="text-xs text-white/30 text-center py-6">No stores assigned to your account. Contact your Admin.</p>
-                ) : supervisorStores.map(store => (
-                  <div key={store.id} className="rounded-xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                    <div className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-teal-400" />
-                      <p className="text-sm font-black text-white">{store.name}</p>
-                      {store.state && <span className="text-[10px] font-bold text-white/40 bg-white/5 border border-white/10 px-2 py-0.5 rounded">{store.state}</span>}
-                    </div>
-                    <div className="space-y-2">
-                      {campaign.prizes.filter(p => !p.isLosing).map(prize => {
-                        const isPaused = (store.pausedPrizes || []).includes(prize.id);
-                        const isGloballyPaused = !!prize.globallyPaused;
-                        return (
-                          <div key={prize.id} className="flex items-center justify-between py-1.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
-                              <span className="text-sm text-white/80 font-semibold">{prize.label}</span>
-                              {isGloballyPaused && <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.5 rounded">Global Pause</span>}
-                            </div>
-                            <button
-                              disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
-                              onClick={async () => {
-                                setPauseLoading(`${store.id}-${prize.id}`);
-                                try {
-                                  if (isPaused) {
-                                    await unpausePrizeAtStore(campaign.id, store.id, prize.id);
-                                    setCampaign(prev => ({
-                                      ...prev,
-                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: (s.pausedPrizes || []).filter(id => id !== prize.id) } : s)
-                                    }));
-                                  } else {
-                                    await pausePrizeAtStore(campaign.id, store.id, prize.id);
-                                    setCampaign(prev => ({
-                                      ...prev,
-                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: [...(s.pausedPrizes || []), prize.id] } : s)
-                                    }));
-                                  }
-                                } finally { setPauseLoading(null); }
-                              }}
-                              className={`relative w-11 h-6 rounded-full transition-all ${isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
-                              style={{
-                                background: (!isPaused && !isGloballyPaused) ? "linear-gradient(135deg, #00BFA6, #0D9488)" : "rgba(255,255,255,0.1)",
-                                boxShadow: (!isPaused && !isGloballyPaused) ? "0 0 10px rgba(0,191,166,0.35)" : "none",
-                              }}
-                            >
-                              <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all" style={{ left: (!isPaused && !isGloballyPaused) ? "calc(100% - 22px)" : "2px" }} />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
+            {/* ── Per-Store Prize Management Hub (Admin & Supervisor) ── */}
+            {((isSupervisor && activeSupervisor && supervisorStores.length > 0) || (!isSupervisor && (campaign.stores || []).length > 0)) && (
+              <div className="mt-8 space-y-5" style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "2rem" }}>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <h4 className="font-black text-white text-base flex items-center gap-2" style={{ fontFamily: "Rubik, sans-serif" }}>
+                      <Building2 className="w-5 h-5 text-teal-400" />
+                      Per-Store Prize Availability & Overrides
+                    </h4>
+                    <p className="text-xs mt-1 text-white/40">
+                      {isSupervisor
+                        ? "Pause or resume prizes at the retail locations you supervise when gifts run out. Changes apply instantly to live wheels."
+                        : "Look through any store to pause or resume prizes when physical stock runs out or replenishes at that specific location."}
+                    </p>
                   </div>
-                ))}
-              </div>
-            )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white/60">
+                      {storesWithPausedCount > 0 ? (
+                        <span className="text-amber-300 font-bold">⏸️ {storesWithPausedCount} store(s) with paused prizes</span>
+                      ) : (
+                        <span className="text-emerald-400 font-bold">✅ All store wheels active</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
 
-            {/* ── Per-Store Pause Panel for Admin ── */}
-            {!isSupervisor && (campaign.stores || []).length > 0 && (
-              <div className="mt-6 space-y-4" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "1.5rem" }}>
-                <div>
-                  <h4 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Per-Store Prize Availability</h4>
-                  <p className="text-xs mt-1 text-white/40">Pause individual prizes at specific stores without removing them from the campaign.</p>
-                </div>
-                {(campaign.stores || []).map(store => (
-                  <div key={store.id} className="rounded-xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}>
-                    <div className="flex items-center gap-2">
-                      <Building2 className="w-4 h-4 text-teal-400" />
-                      <p className="text-sm font-black text-white">{store.name}</p>
-                      {store.state && <span className="text-[10px] font-bold text-white/40 bg-white/5 border border-white/10 px-2 py-0.5 rounded">{store.state}</span>}
-                    </div>
-                    <div className="space-y-2">
-                      {campaign.prizes.filter(p => !p.isLosing).map(prize => {
-                        const isPaused = (store.pausedPrizes || []).includes(prize.id);
-                        const isGloballyPaused = !!prize.globallyPaused;
-                        return (
-                          <div key={prize.id} className="flex items-center justify-between py-1.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
-                              <span className="text-sm text-white/80 font-semibold">{prize.label}</span>
-                              {isGloballyPaused && <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.5 rounded">Globally Paused</span>}
-                            </div>
-                            <button
-                              disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
-                              onClick={async () => {
-                                setPauseLoading(`${store.id}-${prize.id}`);
-                                try {
-                                  if (isPaused) {
-                                    await unpausePrizeAtStore(campaign.id, store.id, prize.id);
-                                    setCampaign(prev => ({
-                                      ...prev,
-                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: (s.pausedPrizes || []).filter(id => id !== prize.id) } : s)
-                                    }));
-                                  } else {
-                                    await pausePrizeAtStore(campaign.id, store.id, prize.id);
-                                    setCampaign(prev => ({
-                                      ...prev,
-                                      stores: (prev.stores || []).map(s => s.id === store.id ? { ...s, pausedPrizes: [...(s.pausedPrizes || []), prize.id] } : s)
-                                    }));
-                                  }
-                                } finally { setPauseLoading(null); }
-                              }}
-                              className={`relative w-11 h-6 rounded-full transition-all ${isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
-                              style={{
-                                background: (!isPaused && !isGloballyPaused) ? "linear-gradient(135deg, #00BFA6, #0D9488)" : "rgba(255,255,255,0.1)",
-                                boxShadow: (!isPaused && !isGloballyPaused) ? "0 0 10px rgba(0,191,166,0.35)" : "none",
-                              }}
-                            >
-                              <div className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all" style={{ left: (!isPaused && !isGloballyPaused) ? "calc(100% - 22px)" : "2px" }} />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
+                {/* Search and Filters Bar */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="sm:col-span-5 relative">
+                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
+                      storePrizeSearch ? "text-teal-400" : "text-white/40"
+                    }`} />
+                    <input
+                      type="text"
+                      placeholder="Search stores (name, code, city) or prize item..."
+                      value={storePrizeSearch}
+                      onChange={e => setStorePrizeSearch(e.target.value)}
+                      className="w-full pl-10 pr-20 py-2.5 rounded-xl text-xs text-white outline-none placeholder-white/30 transition-all focus:border-teal-500/50"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    />
+                    {storePrizeSearch && (
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/30">
+                          {filteredStorePrizes.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setStorePrizeSearch("")}
+                          className="text-white/40 hover:text-white p-1 rounded transition-colors"
+                          title="Clear search"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ))}
+
+                  {!isSupervisor && (
+                    <div className="sm:col-span-3">
+                      <select
+                        value={storePrizeStateFilter}
+                        onChange={e => setStorePrizeStateFilter(e.target.value)}
+                        className="w-full px-3 py-2.5 rounded-xl text-xs text-white outline-none cursor-pointer"
+                        style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                      >
+                        <option value="all" style={{ background: "#070d14", color: "#ffffff" }}>All States</option>
+                        {NIGERIAN_STATES.map(st => (
+                          <option key={st} value={st} style={{ background: "#070d14", color: "#ffffff" }}>{st}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className={`${isSupervisor ? "sm:col-span-7" : "sm:col-span-4"} flex items-center gap-1.5 overflow-x-auto`}>
+                    <button
+                      type="button"
+                      onClick={() => setStorePrizeStatusFilter("all")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storePrizeStatusFilter === "all"
+                          ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      All ({storesToDisplay.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStorePrizeStatusFilter("paused")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storePrizeStatusFilter === "paused"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      Paused ({storesWithPausedCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStorePrizeStatusFilter("active")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storePrizeStatusFilter === "active"
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      Active ({storesToDisplay.length - storesWithPausedCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllExpanded(!allFilteredExpanded)}
+                      className="px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 bg-white/5 hover:bg-white/10 text-white/70 hover:text-white border border-white/10 ml-auto"
+                      title={allFilteredExpanded ? "Collapse all store accordions" : "Expand all store accordions"}
+                    >
+                      <ChevronsUpDown className="w-3.5 h-3.5 text-teal-400" />
+                      <span>{allFilteredExpanded ? "Collapse All" : "Expand All"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Store Cards Grid / Accordions */}
+                {filteredStorePrizes.length === 0 ? (
+                  <div className="text-center py-10 rounded-2xl border border-white/5 bg-white/[0.01] space-y-2">
+                    <p className="text-2xl">🔍</p>
+                    <p className="text-sm font-bold text-white">No stores match your search or filters.</p>
+                    <button
+                      onClick={() => { setStorePrizeSearch(""); setStorePrizeStateFilter("all"); setStorePrizeStatusFilter("all"); }}
+                      className="text-xs text-teal-400 hover:underline font-bold"
+                    >
+                      Clear search filters
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    {filteredStorePrizes.map(store => {
+                      const pausedList = store.pausedPrizes || [];
+                      const winningPrizes = campaign.prizes.filter(p => !p.isLosing);
+                      const hasPaused = pausedList.length > 0;
+                      // Default is collapsed unless search query is typed or user explicitly expanded it
+                      const isExpanded = expandedStores[store.id] ?? (storePrizeSearch.trim().length > 0);
+
+                      return (
+                        <div
+                          key={store.id}
+                          className="rounded-2xl transition-all overflow-hidden"
+                          style={{
+                            background: hasPaused ? "rgba(245, 158, 11, 0.02)" : "rgba(255,255,255,0.02)",
+                            border: hasPaused ? "1px solid rgba(245, 158, 11, 0.2)" : "1px solid rgba(255,255,255,0.06)",
+                          }}
+                        >
+                          {/* Store Card Header (Clickable Accordion Trigger) */}
+                          <div
+                            onClick={() => toggleStoreExpanded(store.id)}
+                            className="flex items-center justify-between gap-3 p-4 cursor-pointer hover:bg-white/[0.04] transition-colors select-none"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
+                                hasPaused
+                                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-300"
+                                  : "bg-teal-500/15 border border-teal-500/30 text-teal-300"
+                              }`}>
+                                <Building2 className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h5 className="text-sm font-black text-white truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
+                                    {store.name}
+                                  </h5>
+                                  {store.state && (
+                                    <span className="text-[10px] font-bold text-white/50 bg-white/5 border border-white/10 px-1.5 py-0.2 rounded">
+                                      {store.state}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2 flex-wrap text-[11px] font-mono text-teal-400/80">
+                                  <span>{store.code}{store.city ? ` · ${store.city}` : ""}</span>
+                                  <span className="text-white/30 font-sans">· {winningPrizes.length} prizes</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {hasPaused ? (
+                                <span className="text-[10px] font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                                  ⏸️ {pausedList.length} Paused
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                                  ✅ All Active
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedStoreForPrizes(store);
+                                }}
+                                className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer"
+                                title="Open Focused Prize Manager"
+                              >
+                                Manage
+                              </button>
+                              <div className="p-1 rounded-lg text-white/40 group-hover:text-white transition-colors">
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4 text-teal-400" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-white/40" />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Quick Summary Preview when Collapsed with Paused Prizes */}
+                          {!isExpanded && hasPaused && (
+                            <div className="px-4 pb-3 pt-0 text-[11px] text-amber-400/80 flex items-center gap-1.5 truncate border-t border-white/5 pt-2">
+                              <span className="font-bold">Paused items:</span>
+                              <span className="truncate">
+                                {winningPrizes.filter(p => pausedList.includes(p.id)).map(p => p.label).join(", ")}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Prize Items List (Collapsible Body) */}
+                          {isExpanded && (
+                            <div className="px-4 pb-4 pt-2 border-t border-white/5 space-y-2 animate-fadeIn">
+                              {winningPrizes.map(prize => {
+                                const isPaused = pausedList.includes(prize.id);
+                                const isGloballyPaused = !!prize.globallyPaused;
+                                const storeQuota = getStorePrizeQuota(campaign, store.code || store.id, prize.id);
+                                const claimedAtStore = participants.filter(
+                                  p => (p.storeCode?.toLowerCase() === (store.code || "").toLowerCase() || p.storeCode === store.id) && p.prizeId === prize.id
+                                ).length;
+                                const storeRemaining = storeQuota !== null ? Math.max(0, storeQuota - claimedAtStore) : Infinity;
+                                const isStoreOutOfStock = storeQuota !== null && storeRemaining <= 0;
+
+                                return (
+                                  <div
+                                    key={prize.id}
+                                    className={`flex items-center justify-between py-2 px-3 rounded-xl transition-all ${
+                                      isPaused
+                                        ? "bg-amber-500/10 border border-amber-500/20"
+                                        : isGloballyPaused
+                                        ? "bg-red-500/5 border border-red-500/15 opacity-60"
+                                        : isStoreOutOfStock
+                                        ? "bg-red-950/20 border border-red-500/20 opacity-80"
+                                        : "bg-white/[0.02] border border-white/5"
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-xs font-bold text-white truncate">{prize.label}</span>
+                                          {isGloballyPaused ? (
+                                            <span className="text-[9px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.2 rounded">
+                                              Global Pause
+                                            </span>
+                                          ) : isPaused ? (
+                                            <span className="text-[9px] font-bold text-amber-300 bg-amber-950/40 border border-amber-500/25 px-1.5 py-0.2 rounded">
+                                              Paused
+                                            </span>
+                                          ) : isStoreOutOfStock ? (
+                                            <span className="text-[9px] font-bold text-red-400 bg-red-950/40 border border-red-500/25 px-1.5 py-0.2 rounded">
+                                              Out of Stock at Store
+                                            </span>
+                                          ) : (
+                                            <span className="text-[9px] font-bold text-teal-300 bg-teal-950/40 border border-teal-500/25 px-1.5 py-0.2 rounded">
+                                              Active
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                          {isStoreOutOfStock ? (
+                                            <span className="text-[10px] font-bold text-red-400 font-mono">
+                                              ⚠️ Quota Finished (0 / {storeQuota} left · {claimedAtStore} won)
+                                            </span>
+                                          ) : storeRemaining === Infinity ? (
+                                            <span className="text-[10px] text-white/40">Unlimited Stock</span>
+                                          ) : (
+                                            <span className="text-[10px] text-white/50 font-mono">
+                                              Store Quota: <span className="text-teal-300 font-bold">{storeRemaining}</span> / {storeQuota} left ({claimedAtStore} won)
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      {isGloballyPaused ? (
+                                        <span className="text-[10px] text-white/30 italic">Global</span>
+                                      ) : isPaused ? (
+                                        <button
+                                          disabled={pauseLoading === `${store.id}-${prize.id}`}
+                                          onClick={() => handleToggleStorePrize(store, prize, false)}
+                                          className="px-2.5 py-1 rounded-lg text-xs font-bold text-teal-300 bg-teal-500/20 hover:bg-teal-500/30 border border-teal-500/40 flex items-center gap-1 transition-all cursor-pointer"
+                                        >
+                                          <Play className="w-3 h-3" />
+                                          <span>Resume</span>
+                                        </button>
+                                      ) : (
+                                        <button
+                                          disabled={pauseLoading === `${store.id}-${prize.id}`}
+                                          onClick={() => handleToggleStorePrize(store, prize, true)}
+                                          className="px-2.5 py-1 rounded-lg text-xs font-bold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 flex items-center gap-1 transition-all cursor-pointer"
+                                        >
+                                          <Pause className="w-3 h-3" />
+                                          <span>Pause</span>
+                                        </button>
+                                      )}
+
+                                      {/* Smooth Toggle Switch */}
+                                      <button
+                                        disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
+                                        onClick={() => handleToggleStorePrize(store, prize, !isPaused)}
+                                        className={`relative w-10 h-5 rounded-full transition-all flex-shrink-0 ${
+                                          isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
+                                        }`}
+                                        style={{
+                                          background: (!isPaused && !isGloballyPaused)
+                                            ? "linear-gradient(135deg, #00BFA6, #0D9488)"
+                                            : "rgba(255,255,255,0.12)",
+                                          boxShadow: (!isPaused && !isGloballyPaused) ? "0 0 8px rgba(0,191,166,0.35)" : "none",
+                                        }}
+                                        title={isPaused ? "Click to Resume prize" : "Click to Pause prize"}
+                                      >
+                                        <div
+                                          className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
+                                          style={{ left: (!isPaused && !isGloballyPaused) ? "calc(100% - 18px)" : "2px" }}
+                                        />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1363,6 +1706,32 @@ export default function AdminDashboard() {
                             <p className="text-base font-black font-mono text-orange-400">{storeWinRate}%</p>
                             <p className="text-[9px] uppercase font-bold text-white/40">Win Rate</p>
                           </div>
+                        </div>
+
+                        {/* Store Prize Availability Status & Quick Pause Action */}
+                        <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-white/[0.02] border border-white/5">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Trophy className="w-3.5 h-3.5 text-teal-400 flex-shrink-0" />
+                            <span className="text-[11px] text-white/70 font-semibold truncate">Prize Stock:</span>
+                            {(s.pausedPrizes || []).length > 0 ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 flex-shrink-0">
+                                ⏸️ {(s.pausedPrizes || []).length} Paused
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-500/15 text-teal-300 border border-teal-500/30 flex-shrink-0">
+                                ✅ All Active
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedStoreForPrizes(s)}
+                            className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20 text-white flex items-center gap-1 transition-all cursor-pointer flex-shrink-0"
+                            title="Pause or resume individual prizes for this store"
+                          >
+                            <PauseCircle className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Manage Prizes</span>
+                          </button>
                         </div>
 
                         {/* Action Buttons */}
@@ -1770,6 +2139,190 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Store Prize Management Modal ── */}
+      {selectedStoreForPrizes && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50 animate-fadeIn"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={() => setSelectedStoreForPrizes(null)}
+        >
+          <div
+            className="rounded-3xl p-6 sm:p-7 max-w-xl w-full space-y-5 bg-[#0b131e] border border-white/15 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/10 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-300 flex-shrink-0">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                      {selectedStoreForPrizes.name}
+                    </h3>
+                    {selectedStoreForPrizes.state && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                        {selectedStoreForPrizes.state}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-white/50 mt-0.5 truncate">
+                    Store Code: <span className="font-mono text-teal-400">{selectedStoreForPrizes.code}</span>
+                    {selectedStoreForPrizes.city && ` · ${selectedStoreForPrizes.city}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedStoreForPrizes(null)}
+                className="p-2 rounded-xl text-white/40 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Action Bar & Stats */}
+            <div className="flex items-center justify-between gap-2 p-3 rounded-xl bg-white/[0.03] border border-white/10 flex-shrink-0">
+              <div className="text-xs">
+                <span className="text-white/60">Status: </span>
+                {(selectedStoreForPrizes.pausedPrizes || []).length > 0 ? (
+                  <span className="font-bold text-amber-300">
+                    {(selectedStoreForPrizes.pausedPrizes || []).length} of {campaign.prizes.filter(p => !p.isLosing).length} prizes paused
+                  </span>
+                ) : (
+                  <span className="font-bold text-emerald-400">
+                    All prizes active on store wheel
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleBatchToggleStorePrizes(selectedStoreForPrizes, false)}
+                  disabled={pauseLoading === `batch-${selectedStoreForPrizes.id}`}
+                  className="px-2.5 py-1 rounded-lg text-xs font-bold text-teal-300 hover:text-white bg-teal-500/10 hover:bg-teal-500/20 border border-teal-500/30 transition-all cursor-pointer"
+                >
+                  Resume All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBatchToggleStorePrizes(selectedStoreForPrizes, true)}
+                  disabled={pauseLoading === `batch-${selectedStoreForPrizes.id}`}
+                  className="px-2.5 py-1 rounded-lg text-xs font-bold text-amber-300 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all cursor-pointer"
+                >
+                  Pause All
+                </button>
+              </div>
+            </div>
+
+            {/* Prize List Scrollable */}
+            <div className="overflow-y-auto space-y-2.5 pr-1 flex-1">
+              {campaign.prizes.filter(p => !p.isLosing).map(prize => {
+                const isPaused = (selectedStoreForPrizes.pausedPrizes || []).includes(prize.id);
+                const isGloballyPaused = !!prize.globallyPaused;
+                const storeQuota = getStorePrizeQuota(campaign, selectedStoreForPrizes.code || selectedStoreForPrizes.id, prize.id);
+                const claimedAtStore = participants.filter(
+                  p => (p.storeCode?.toLowerCase() === (selectedStoreForPrizes.code || "").toLowerCase() || p.storeCode === selectedStoreForPrizes.id) && p.prizeId === prize.id
+                ).length;
+                const storeRemaining = storeQuota !== null ? Math.max(0, storeQuota - claimedAtStore) : Infinity;
+                const isStoreOutOfStock = storeQuota !== null && storeRemaining <= 0;
+
+                return (
+                  <div
+                    key={prize.id}
+                    className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
+                      isPaused
+                        ? "bg-amber-500/[0.03] border-amber-500/20"
+                        : isGloballyPaused
+                        ? "bg-red-500/[0.03] border-red-500/20 opacity-60"
+                        : isStoreOutOfStock
+                        ? "bg-red-950/20 border-red-500/20 opacity-80"
+                        : "bg-white/[0.02] border-white/10"
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: prize.color }} />
+                        <span className="text-sm font-bold text-white truncate">{prize.label}</span>
+                        {isGloballyPaused ? (
+                          <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/30 px-2 py-0.5 rounded">
+                            Global Pause
+                          </span>
+                        ) : isPaused ? (
+                          <span className="text-[10px] font-bold text-amber-300 bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded">
+                            Paused at Store
+                          </span>
+                        ) : isStoreOutOfStock ? (
+                          <span className="text-[10px] font-bold text-red-400 bg-red-950/40 border border-red-500/30 px-2 py-0.5 rounded">
+                            Out of Stock at Store
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-teal-300 bg-teal-950/40 border border-teal-500/30 px-2 py-0.5 rounded">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        {isStoreOutOfStock ? (
+                          <span className="text-[11px] font-bold text-red-400 bg-red-950/40 px-2 py-0.5 rounded border border-red-500/30 font-mono">
+                            ⚠️ Store Quota Finished: 0 of {storeQuota} left ({claimedAtStore} won here)
+                          </span>
+                        ) : storeRemaining === Infinity ? (
+                          <span className="text-[11px] text-white/40">Stock: Unlimited</span>
+                        ) : (
+                          <span className="text-[11px] font-mono text-white/60">
+                            Store Quota: <span className="text-teal-300 font-bold">{storeRemaining}</span> of {storeQuota} left ({claimedAtStore} won here)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {isGloballyPaused ? (
+                        <span className="text-xs text-white/30 italic">Globally disabled</span>
+                      ) : isPaused ? (
+                        <button
+                          type="button"
+                          disabled={pauseLoading === `${selectedStoreForPrizes.id}-${prize.id}`}
+                          onClick={() => handleToggleStorePrize(selectedStoreForPrizes, prize, false)}
+                          className="px-3 py-2 rounded-xl text-xs font-black text-white bg-teal-600 hover:bg-teal-500 flex items-center gap-1.5 shadow-md shadow-teal-900/30 transition-all cursor-pointer"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Resume</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={pauseLoading === `${selectedStoreForPrizes.id}-${prize.id}`}
+                          onClick={() => handleToggleStorePrize(selectedStoreForPrizes, prize, true)}
+                          className="px-3 py-2 rounded-xl text-xs font-black text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <Pause className="w-3.5 h-3.5" />
+                          <span>Pause Prize</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-white/10 flex items-center justify-between text-xs text-white/40 flex-shrink-0">
+              <p>💡 Changes sync to store wheels instantly without page reloads.</p>
+              <button
+                type="button"
+                onClick={() => setSelectedStoreForPrizes(null)}
+                className="px-4 py-2 rounded-xl font-bold text-white bg-white/10 hover:bg-white/20 transition-all cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -141,7 +141,10 @@ export default function SpinWheel({
     if (spinToken === 0 || spinToken === lastSpinToken.current) return;
     if (targetIndex === null) return;
     const resolvedTargetIndex = targetIndex;
-    lastSpinToken.current = spinToken;
+    if (resolvedTargetIndex < 0 || resolvedTargetIndex >= prizes.length) {
+      console.warn("Invalid targetIndex passed to SpinWheel:", resolvedTargetIndex, "Prizes count:", prizes.length);
+      return;
+    }
 
     const targetMid = resolvedTargetIndex * segmentAngle + segmentAngle / 2;
     const extraSpins = 5 + Math.floor(Math.random() * 2);
@@ -179,7 +182,10 @@ export default function SpinWheel({
         animRef.current = requestAnimationFrame(frame);
       } else {
         setSpinning(false);
-        onFinish(prizes[resolvedTargetIndex]);
+        const winningPrize = prizes[resolvedTargetIndex];
+        if (winningPrize) {
+          onFinish(winningPrize);
+        }
       }
     }
 

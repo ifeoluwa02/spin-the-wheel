@@ -8,6 +8,8 @@ import {
   recordParticipant,
   generateVoucherCode,
   getEffectivePrizes,
+  subscribeStoreInventory,
+  subscribeCampaign,
 } from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
 import { getGradientContrastColor, getContrastTextColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
@@ -27,14 +29,16 @@ export default function Home() {
   const [regError, setRegError] = useState<string | null>(null);
   const [isSpinning, setIsSpinning] = useState(false);
   const [targetIndex, setTargetIndex] = useState<number | null>(null);
+  const [spinningPrizes, setSpinningPrizes] = useState<Prize[] | null>(null);
   const [spinToken, setSpinToken] = useState(0);
   const [wonPrize, setWonPrize] = useState<Prize | null>(null);
   const [voucherCode, setVoucherCode] = useState("");
   const [activeStoreCode, setActiveStoreCode] = useState("");
   const [activeStoreName, setActiveStoreName] = useState("");
+  const [storeInventory, setStoreInventory] = useState<Record<string, number>>({});
 
+  // Subscribe to live campaign configuration (updates instantly if admin/supervisor pauses prizes)
   useEffect(() => {
-    let cancelled = false;
     let targetCampaignId = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
     let storeCodeParam = "";
 
@@ -46,21 +50,46 @@ export default function Home() {
       setActiveStoreCode(storeCodeParam);
     }
 
-    getCampaign(targetCampaignId).then((c) => {
-      if (cancelled) return;
-      if (!c || !c.active || !c.prizes?.length) { setStep("not-found"); return; }
+    if (!targetCampaignId) {
+      setStep("not-found");
+      return;
+    }
+
+    const unsub = subscribeCampaign(targetCampaignId, (c) => {
+      if (!c || !c.active || !c.prizes?.length) {
+        setStep("not-found");
+        return;
+      }
       setCampaign(c);
 
       if (storeCodeParam && c.stores?.length) {
-        const matched = c.stores.find(s => s.code?.toLowerCase() === storeCodeParam.toLowerCase() || s.id === storeCodeParam);
+        const cleanStoreParam = storeCodeParam.trim().toLowerCase();
+        const matched = c.stores.find(
+          (s) =>
+            (s.code && s.code.toLowerCase() === cleanStoreParam) ||
+            (s.id && s.id.toLowerCase() === cleanStoreParam)
+        );
         if (matched) setActiveStoreName(matched.name);
         else setActiveStoreName(storeCodeParam);
       }
 
-      setStep("register");
+      setStep((curr) => (curr === "loading" || curr === "not-found" ? "register" : curr));
     });
-    return () => { cancelled = true; };
+
+    return () => unsub();
   }, []);
+
+  // Listen to store inventory in real-time when store is selected
+  useEffect(() => {
+    if (!campaign?.id || !activeStoreCode) {
+      setStoreInventory({});
+      return;
+    }
+    const unsub = subscribeStoreInventory(campaign.id, activeStoreCode, (inv) => {
+      setStoreInventory(inv?.claimedCounts || {});
+    });
+    return () => unsub();
+  }, [campaign?.id, activeStoreCode]);
 
   async function handleRegister(values: RegistrationValues) {
     if (!campaign) return;
@@ -82,24 +111,34 @@ export default function Home() {
 
   function handleSpinClick() {
     if (!campaign || isSpinning) return;
-    // Use effective prizes (filtered by global + per-store pauses)
-    const effective = getEffectivePrizes(campaign, activeStoreCode);
+    const effective = getEffectivePrizes(campaign, activeStoreCode, storeInventory);
+    if (!effective.length) return;
     const idx = pickPrizeIndex(effective);
-    // Map back to the full prizes array index so SpinWheel can locate the right segment
-    const fullIdx = campaign.prizes.findIndex((p) => p.id === effective[idx]?.id);
-    setTargetIndex(fullIdx >= 0 ? fullIdx : idx);
+    if (idx < 0 || idx >= effective.length) return;
+    // Lock the prizes array for the duration of this spin to prevent canvas glitching mid-spin
+    setSpinningPrizes(effective);
+    setTargetIndex(idx);
     setSpinToken(Date.now());
     setIsSpinning(true);
   }
 
   async function handleFinish(prize: Prize) {
     setIsSpinning(false);
+    setSpinningPrizes(null);
+    setTargetIndex(null);
+    if (!prize) return;
+
     const code = prize.isLosing ? "" : generateVoucherCode(prize.voucherPrefix || "SPIN");
     setVoucherCode(code);
     setWonPrize(prize);
     if (campaign && participant) {
       try {
-        const resolvedStore = campaign.stores?.find(s => s.code?.toLowerCase() === (activeStoreCode || "").toLowerCase() || s.id === activeStoreCode);
+        const cleanStoreParam = (activeStoreCode || "").trim().toLowerCase();
+        const resolvedStore = campaign.stores?.find(
+          (s) =>
+            (s.code && s.code.toLowerCase() === cleanStoreParam) ||
+            (s.id && s.id.toLowerCase() === cleanStoreParam)
+        );
         const finalStoreName = activeStoreName || resolvedStore?.name || (activeStoreCode ? activeStoreCode : "General Stage");
 
         const participantId = await recordParticipant({
@@ -125,7 +164,11 @@ export default function Home() {
   }
 
   function handleReset() {
-    setWonPrize(null); setParticipant(null); setTargetIndex(null); setStep("register");
+    setWonPrize(null);
+    setParticipant(null);
+    setTargetIndex(null);
+    setSpinningPrizes(null);
+    setStep("register");
   }
 
   const gc = campaign?.gradientStart || campaign?.primaryColor || "#FF6B35";
@@ -335,12 +378,8 @@ export default function Home() {
               style={{ background: `radial-gradient(circle, ${gc}, ${g2})` }}
             />
             <SpinWheel
-              prizes={getEffectivePrizes(campaign, activeStoreCode)}
-              targetIndex={targetIndex !== null ? (() => {
-                const effective = getEffectivePrizes(campaign, activeStoreCode);
-                const full = campaign.prizes[targetIndex];
-                return effective.findIndex((p) => p.id === full?.id);
-              })() : null}
+              prizes={spinningPrizes || getEffectivePrizes(campaign, activeStoreCode, storeInventory)}
+              targetIndex={targetIndex}
               spinToken={spinToken}
               onFinish={handleFinish}
               accentColor={campaign.primaryColor || gc}

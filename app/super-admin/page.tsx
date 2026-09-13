@@ -14,7 +14,7 @@ import {
 import Link from "next/link";
 import {
   Shield, LogOut, BarChart3, Globe, Plus, Download,
-  Tv, ExternalLink, Settings, Activity, Trophy, Users,
+  Tv, Smartphone, ExternalLink, Settings, Activity, Trophy, Users,
   Power, ChevronRight, X, Check, Layers, RefreshCw, Database,
   AlertTriangle, Trash2, UserPlus, UsersRound, Key, Mail, Eye, EyeOff,
 } from "lucide-react";
@@ -574,14 +574,17 @@ export default function SuperAdminDashboard() {
                         </td>
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-1.5">
-                            <Link href={`/?c=${slug}`} target="_blank" className="p-2 rounded-lg transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.04)" }} title="Wheel">
+                            <Link href={`/?c=${slug}`} target="_blank" className="p-2 rounded-lg transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.04)" }} title="Spin Wheel">
                               <ExternalLink className="w-3.5 h-3.5" />
                             </Link>
                             <Link href={`/admin?c=${slug}`} className="p-2 rounded-lg transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.04)" }} title="Admin">
                               <Settings className="w-3.5 h-3.5" />
                             </Link>
-                            <Link href={`/tv?c=${slug}`} target="_blank" className="p-2 rounded-lg transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.04)" }} title="TV">
+                            <Link href={`/tv?c=${slug}`} target="_blank" className="p-2 rounded-lg transition-colors hover:text-white" style={{ color: "rgba(255,255,255,0.3)", background: "rgba(255,255,255,0.04)" }} title="TV Display">
                               <Tv className="w-3.5 h-3.5" />
+                            </Link>
+                            <Link href={`/kiosk?c=${slug}`} target="_blank" className="p-2 rounded-lg transition-colors" style={{ color: "#00BFA6", background: "rgba(0,191,166,0.08)", border: "1px solid rgba(0,191,166,0.2)" }} title="Kiosk Mode">
+                              <Smartphone className="w-3.5 h-3.5" />
                             </Link>
                           </div>
                         </td>
