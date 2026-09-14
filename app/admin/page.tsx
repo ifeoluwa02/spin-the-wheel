@@ -229,17 +229,41 @@ export default function AdminDashboard() {
       const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
       setCampaignSlug(slug);
       setQrUrl(`${window.location.origin}/?c=${slug}`);
-      if (sessionStorage.getItem("admin_authed") === "true") {
-        setAuthenticated(true);
-        setAdminRole("admin");
-      } else if (sessionStorage.getItem("supervisor_authed") === "true") {
-        const svRaw = sessionStorage.getItem("supervisor_data");
-        if (svRaw) {
-          try { setActiveSupervisor(JSON.parse(svRaw)); } catch {}
-        }
-        setAuthenticated(true);
-        setAdminRole("supervisor");
-      }
+      // Verify signed server session
+      fetch("/api/auth/session")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.campaignSession && data.campaignSession.campaignId === slug) {
+            setAuthenticated(true);
+            setAdminRole(data.campaignSession.role);
+            if (data.campaignSession.role === "supervisor") {
+              setActiveSupervisor({
+                id: data.campaignSession.supervisorId || "",
+                name: data.campaignSession.name || "",
+                email: data.campaignSession.email || "",
+                scopeType: data.campaignSession.scopeType || "state",
+                state: data.campaignSession.state,
+                storeIds: data.campaignSession.storeIds,
+              });
+            }
+          } else if (sessionStorage.getItem("admin_authed") === "true") {
+            setAuthenticated(true);
+            setAdminRole("admin");
+          } else if (sessionStorage.getItem("supervisor_authed") === "true") {
+            const svRaw = sessionStorage.getItem("supervisor_data");
+            if (svRaw) {
+              try { setActiveSupervisor(JSON.parse(svRaw)); } catch {}
+            }
+            setAuthenticated(true);
+            setAdminRole("supervisor");
+          }
+        })
+        .catch(() => {
+          if (sessionStorage.getItem("admin_authed") === "true") {
+            setAuthenticated(true);
+            setAdminRole("admin");
+          }
+        });
     }
   }, []);
 
@@ -310,49 +334,56 @@ export default function AdminDashboard() {
     setLoginLoading(true);
     setLoginError("");
     try {
-      const c = await getCampaign(campaignSlug);
-      if (!c) {
-        setLoginError("Campaign not found. Check the URL ?c= parameter.");
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaignSlug,
+          email: emailInput,
+          password: passwordInput,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setLoginError(data.error || "Incorrect email or password.");
         return;
       }
-      const authedAdmin = authenticateCampaignAdmin(c, emailInput, passwordInput);
-      if (authedAdmin) {
-        // ✅ Campaign Admin (PM) login (supports any authorized campaign admin)
-        setCampaign(c);
-        setAuthenticated(true);
+
+      const c = await getCampaign(campaignSlug, true);
+      if (c) setCampaign(c);
+
+      setAuthenticated(true);
+      if (data.user.role === "admin") {
         setAdminRole("admin");
         sessionStorage.setItem("admin_authed", "true");
-        sessionStorage.setItem("admin_data", JSON.stringify(authedAdmin));
+        sessionStorage.setItem("admin_data", JSON.stringify(data.user));
         sessionStorage.removeItem("supervisor_authed");
         sessionStorage.removeItem("supervisor_data");
       } else {
-        // 🔍 Try supervisor credentials
-        const sv = await getSupervisorByCredentials(campaignSlug, emailInput.trim(), passwordInput);
-        if (sv) {
-          setCampaign(c);
-          setAuthenticated(true);
-          setAdminRole("supervisor");
-          setActiveSupervisor(sv);
-          sessionStorage.setItem("supervisor_authed", "true");
-          sessionStorage.setItem("supervisor_data", JSON.stringify(sv));
-          sessionStorage.removeItem("admin_authed");
-          sessionStorage.removeItem("admin_data");
-        } else {
-          setLoginError("Incorrect email or password.");
-        }
+        setAdminRole("supervisor");
+        setActiveSupervisor(data.user);
+        sessionStorage.setItem("supervisor_authed", "true");
+        sessionStorage.setItem("supervisor_data", JSON.stringify(data.user));
+        sessionStorage.removeItem("admin_authed");
+        sessionStorage.removeItem("admin_data");
       }
-    } catch (err) {
-      setLoginError("Login failed. Check your Firebase connection.");
+    } catch {
+      setLoginError("Login failed. Check your network connection.");
     } finally {
       setLoginLoading(false);
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
     setAuthenticated(false);
     setAdminRole("admin");
     setActiveSupervisor(null);
     sessionStorage.removeItem("admin_authed");
+    sessionStorage.removeItem("admin_data");
     sessionStorage.removeItem("supervisor_authed");
     sessionStorage.removeItem("supervisor_data");
   }

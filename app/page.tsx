@@ -10,6 +10,7 @@ import {
   getEffectivePrizes,
   subscribeStoreInventory,
   subscribeCampaign,
+  sanitizeCampaignForPublic,
 } from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
 import { getGradientContrastColor, getContrastTextColor, isLightColor, getAmbientGlowOpacity } from "@/lib/colors";
@@ -60,7 +61,7 @@ export default function Home() {
         setStep("not-found");
         return;
       }
-      setCampaign(c);
+      setCampaign(sanitizeCampaignForPublic(c));
 
       if (storeCodeParam && c.stores?.length) {
         const cleanStoreParam = storeCodeParam.trim().toLowerCase();
@@ -109,58 +110,87 @@ export default function Home() {
     }
   }
 
-  function handleSpinClick() {
-    if (!campaign || isSpinning) return;
+  const [spinError, setSpinError] = useState<string | null>(null);
+  const [pendingResult, setPendingResult] = useState<{ prize: Prize; voucherCode: string } | null>(null);
+
+  async function handleSpinClick() {
+    if (!campaign || isSpinning || !participant) return;
     const effective = getEffectivePrizes(campaign, activeStoreCode, storeInventory);
-    if (!effective.length) return;
-    const idx = pickPrizeIndex(effective);
-    if (idx < 0 || idx >= effective.length) return;
-    // Lock the prizes array for the duration of this spin to prevent canvas glitching mid-spin
-    setSpinningPrizes(effective);
-    setTargetIndex(idx);
-    setSpinToken(Date.now());
+    if (!effective.length) {
+      setSpinError("No prizes currently available.");
+      return;
+    }
+
     setIsSpinning(true);
+    setSpinError(null);
+
+    try {
+      const cleanStoreParam = (activeStoreCode || "").trim().toLowerCase();
+      const resolvedStore = campaign.stores?.find(
+        (s) =>
+          (s.code && s.code.toLowerCase() === cleanStoreParam) ||
+          (s.id && s.id.toLowerCase() === cleanStoreParam)
+      );
+      const finalStoreName =
+        activeStoreName || resolvedStore?.name || (activeStoreCode ? activeStoreCode : "General Stage");
+
+      const res = await fetch("/api/spin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeCode: activeStoreCode || "",
+          isKiosk: false,
+          participant: {
+            name: participant.name,
+            phone: participant.phone,
+            email: participant.email || "",
+            ageRange: participant.ageRange || "",
+            gender: participant.gender || "",
+            storeName: finalStoreName,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setIsSpinning(false);
+        if (res.status === 409) {
+          setStep("already-spun");
+        } else {
+          setSpinError(data.error || "Failed to process spin. Please try again.");
+        }
+        return;
+      }
+
+      // Lock prizes array during spin and set server-determined target index
+      const resolvedPrizes = (data.prizes && data.prizes.length > 0) ? data.prizes : effective;
+      const resolvedTarget = (typeof data.targetIndex === "number" && data.targetIndex >= 0 && data.targetIndex < resolvedPrizes.length)
+        ? data.targetIndex
+        : resolvedPrizes.findIndex((p: Prize) => p.id === data.prize?.id);
+
+      setSpinningPrizes(resolvedPrizes);
+      setTargetIndex(resolvedTarget >= 0 ? resolvedTarget : 0);
+      setPendingResult({ prize: data.prize, voucherCode: data.voucherCode });
+      setSpinToken(Date.now());
+    } catch {
+      setIsSpinning(false);
+      setSpinError("Connection error. Please check your network and try again.");
+    }
   }
 
-  async function handleFinish(prize: Prize) {
+  function handleFinish(prize: Prize) {
     setIsSpinning(false);
     setSpinningPrizes(null);
     setTargetIndex(null);
-    if (!prize) return;
 
-    const code = prize.isLosing ? "" : generateVoucherCode(prize.voucherPrefix || "SPIN");
-    setVoucherCode(code);
-    setWonPrize(prize);
-    if (campaign && participant) {
-      try {
-        const cleanStoreParam = (activeStoreCode || "").trim().toLowerCase();
-        const resolvedStore = campaign.stores?.find(
-          (s) =>
-            (s.code && s.code.toLowerCase() === cleanStoreParam) ||
-            (s.id && s.id.toLowerCase() === cleanStoreParam)
-        );
-        const finalStoreName = activeStoreName || resolvedStore?.name || (activeStoreCode ? activeStoreCode : "General Stage");
+    // Use the cryptographically/server-verified outcome
+    const finalPrize = pendingResult?.prize || prize;
+    const finalCode = pendingResult?.voucherCode || "";
 
-        const participantId = await recordParticipant({
-          name: participant.name,
-          phone: participant.phone,
-          email: participant.email || "",
-          ageRange: participant.ageRange || "",
-          gender: participant.gender || "",
-          campaignId: campaign.id,
-          prizeId: prize.id,
-          prizeLabel: prize.label,
-          voucherCode: code,
-          won: !prize.isLosing,
-          createdAt: Date.now(),
-          storeCode: activeStoreCode || "",
-          storeName: finalStoreName,
-        });
-        console.log("Successfully recorded participant spin:", participantId);
-      } catch (err) {
-        console.error("Failed to record participant in Firestore:", err);
-      }
-    }
+    setVoucherCode(finalCode);
+    setWonPrize(finalPrize);
+    setPendingResult(null);
   }
 
   function handleReset() {
@@ -404,6 +434,12 @@ export default function Home() {
               <>🎡 Spin the Wheel!</>
             )}
           </button>
+
+          {spinError && (
+            <p className="text-red-400 text-xs font-semibold text-center max-w-[290px] px-2 py-1 rounded-lg bg-red-950/40 border border-red-500/20">
+              {spinError}
+            </p>
+          )}
         </main>
       )}
 

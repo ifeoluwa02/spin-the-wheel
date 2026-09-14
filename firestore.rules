@@ -3,25 +3,31 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Campaign configuration and all sub-collections (storeInventory, prizeCounts, etc.)
+    // Campaign configuration and real-time inventory sub-collections
     match /campaigns/{campaignId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if true;
 
       match /{subcollection=**} {
         allow read, write: if true;
       }
     }
 
-    // Participants (attendees submit spins; admin dashboard & TV mode read results)
+    // Participants: allow creation with valid fields; block anonymous updates and mass deletions
     match /participants/{participantId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create: if request.resource.data.name is string 
+                    && request.resource.data.phone is string
+                    && request.resource.data.campaignId is string;
+      allow update: if false; // Prevents prize or voucher tampering post-spin
+      allow delete: if false; // Prevents competitor or rogue deletion of participant audit logs
     }
 
-    // Super Admin config — readable for client-side credential verification,
-    // writable for first-run setup flow.
+    // Super Admin config — blocks public reading of master credentials
+    // Permits write only during initial first-run onboarding
     match /config/{docId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if docId != "superAdmin";
+      allow write: if docId != "superAdmin" || !exists(/databases/$(database)/documents/config/superAdmin);
     }
   }
 }

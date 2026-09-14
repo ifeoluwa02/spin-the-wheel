@@ -10,6 +10,7 @@ import {
   getEffectivePrizes,
   subscribeStoreInventory,
   subscribeCampaign,
+  sanitizeCampaignForPublic,
 } from "@/lib/campaign";
 import { pickPrizeIndex } from "@/lib/pickPrize";
 import {
@@ -65,7 +66,7 @@ export default function KioskPage() {
         setStep("not-found");
         return;
       }
-      setCampaign(c);
+      setCampaign(sanitizeCampaignForPublic(c));
       setStep((curr) => (curr === "loading" || curr === "not-found" ? (c.stores?.length ? "pick-store" : "register") : curr));
     });
 
@@ -112,49 +113,72 @@ export default function KioskPage() {
     }
   }
 
-  function handleSpinClick() {
-    if (!campaign || isSpinning) return;
+  const [spinError, setSpinError] = useState<string | null>(null);
+  const [pendingResult, setPendingResult] = useState<{ prize: Prize; voucherCode: string } | null>(null);
+
+  async function handleSpinClick() {
+    if (!campaign || isSpinning || !participant) return;
     const effective = getEffectivePrizes(campaign, storeCode, storeInventory);
-    if (!effective.length) return;
-    const idx = pickPrizeIndex(effective);
-    if (idx < 0 || idx >= effective.length) return;
-    // Lock prizes array during spin to avoid canvas redraw glitch
-    setSpinningPrizes(effective);
-    setTargetIndex(idx);
-    setSpinToken(Date.now());
+    if (!effective.length) {
+      setSpinError("No prizes currently available for this store.");
+      return;
+    }
+
     setIsSpinning(true);
+    setSpinError(null);
+
+    try {
+      const res = await fetch("/api/spin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeCode: storeCode || "",
+          isKiosk: true,
+          participant: {
+            name: participant.name,
+            phone: participant.phone,
+            email: participant.email || "",
+            ageRange: participant.ageRange || "",
+            gender: participant.gender || "",
+            storeName: storeName || "Kiosk",
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setIsSpinning(false);
+        setSpinError(data.error || "Failed to process spin. Please try again.");
+        return;
+      }
+
+      const resolvedPrizes = (data.prizes && data.prizes.length > 0) ? data.prizes : effective;
+      const resolvedTarget = (typeof data.targetIndex === "number" && data.targetIndex >= 0 && data.targetIndex < resolvedPrizes.length)
+        ? data.targetIndex
+        : resolvedPrizes.findIndex((p: Prize) => p.id === data.prize?.id);
+
+      setSpinningPrizes(resolvedPrizes);
+      setTargetIndex(resolvedTarget >= 0 ? resolvedTarget : 0);
+      setPendingResult({ prize: data.prize, voucherCode: data.voucherCode });
+      setSpinToken(Date.now());
+    } catch {
+      setIsSpinning(false);
+      setSpinError("Connection error. Please check network connection.");
+    }
   }
 
-  async function handleFinish(prize: Prize) {
+  function handleFinish(prize: Prize) {
     setIsSpinning(false);
     setSpinningPrizes(null);
     setTargetIndex(null);
-    if (!prize) return;
 
-    const code = prize.isLosing ? "" : generateVoucherCode(prize.voucherPrefix || "SPIN");
-    setVoucherCode(code);
-    setWonPrize(prize);
-    if (campaign && participant) {
-      try {
-        await recordParticipant({
-          name: participant.name,
-          phone: participant.phone,
-          email: participant.email || "",
-          ageRange: participant.ageRange || "",
-          gender: participant.gender || "",
-          campaignId: campaign.id,
-          prizeId: prize.id,
-          prizeLabel: prize.label,
-          voucherCode: code,
-          won: !prize.isLosing,
-          createdAt: Date.now(),
-          storeCode: storeCode || "",
-          storeName: storeName || "Kiosk",
-        });
-      } catch (err) {
-        console.error("Kiosk: failed to record participant:", err);
-      }
-    }
+    const finalPrize = pendingResult?.prize || prize;
+    const finalCode = pendingResult?.voucherCode || "";
+
+    setVoucherCode(finalCode);
+    setWonPrize(finalPrize);
+    setPendingResult(null);
   }
 
   // Resets to registration but keeps store selected
@@ -164,6 +188,8 @@ export default function KioskPage() {
     setTargetIndex(null);
     setSpinningPrizes(null);
     setRegError(null);
+    setSpinError(null);
+    setPendingResult(null);
     setStep("register");
   }
 
@@ -405,6 +431,11 @@ export default function KioskPage() {
             >
               {isSpinning ? <><Loader2 className="w-5 h-5 animate-spin" /> Spinning…</> : <>🎡 Spin the Wheel!</>}
             </button>
+            {spinError && (
+              <p className="text-red-400 text-xs font-semibold text-center max-w-[290px] px-2 py-1 rounded-lg bg-red-950/40 border border-red-500/20">
+                {spinError}
+              </p>
+            )}
             <button onClick={() => { setParticipant(null); setStep("register"); }} className="text-xs font-bold transition-all hover:opacity-80" style={{ color: "rgba(255,255,255,0.25)" }}>
               <RotateCcw className="w-3 h-3 inline mr-1" />Back to registration
             </button>

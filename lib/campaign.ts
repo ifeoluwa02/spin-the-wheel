@@ -790,4 +790,26 @@ export function authenticateCampaignAdmin(
   return null;
 }
 
+/**
+ * Strips sensitive administrative credentials from a campaign object
+ * before exposing it to public attendee or kiosk browsers.
+ */
+export function sanitizeCampaignForPublic(campaign: Campaign): Campaign {
+  if (!campaign) return campaign;
+  return {
+    ...campaign,
+    adminPassword: "",
+    adminPin: "",
+    admins: (campaign.admins || []).map((a) => ({
+      ...a,
+      password: "",
+    })),
+    supervisors: (campaign.supervisors || []).map((s) => ({
+      ...s,
+      password: "",
+    })),
+  };
+}
+
+
 

@@ -56,10 +56,22 @@ export default function SuperAdminDashboard() {
   const [wiping, setWiping] = useState(false);
 
   useEffect(() => {
-    // Check if already authenticated in session
-    if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
-      setAuthenticated(true);
-    }
+    // Check if already authenticated in server session or session storage
+    fetch("/api/auth/session")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.superAdminSession) {
+          setAuthenticated(true);
+        } else if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
+          setAuthenticated(true);
+        }
+      })
+      .catch(() => {
+        if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
+          setAuthenticated(true);
+        }
+      });
+
     // Always check if a Super Admin account has been configured
     getSuperAdminConfig().then(cfg => {
       setHasConfig(!!cfg);
@@ -130,15 +142,25 @@ export default function SuperAdminDashboard() {
     setLoginLoading(true);
     setLoginError("");
     try {
-      const cfg = await getSuperAdminConfig();
-      if (cfg && emailInput.trim().toLowerCase() === cfg.email.toLowerCase() && passwordInput === cfg.password) {
-        setAuthenticated(true);
-        sessionStorage.setItem("super_admin_authed", "true");
-      } else {
-        setLoginError("Incorrect email or password.");
+      const res = await fetch("/api/auth/super-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: emailInput,
+          password: passwordInput,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setLoginError(data.error || "Incorrect email or password.");
+        return;
       }
-    } catch (err) {
-      setLoginError("Login failed. Check your Firebase connection.");
+
+      setAuthenticated(true);
+      sessionStorage.setItem("super_admin_authed", "true");
+    } catch {
+      setLoginError("Login failed. Check your network connection.");
     } finally {
       setLoginLoading(false);
     }
@@ -161,7 +183,10 @@ export default function SuperAdminDashboard() {
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {}
     setAuthenticated(false);
     sessionStorage.removeItem("super_admin_authed");
   }

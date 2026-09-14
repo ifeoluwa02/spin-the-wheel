@@ -56,7 +56,7 @@ export interface Supervisor {
   id: string;
   name: string;
   email: string;
-  password: string;
+  password?: string;
   /**
    * "state" = supervisor manages ALL stores whose `state` field matches `state`.
    * "stores" = supervisor manages only the specific stores listed in `storeIds`.
@@ -80,7 +80,7 @@ export interface CampaignAdmin {
   id: string;
   name?: string;
   email: string;
-  password: string;
+  password?: string;
   createdAt?: number;
 }
 

@@ -68,13 +68,25 @@ export default function TvDisplayMode() {
       applyCampaign(c);
     });
 
-    const unsubParticipants = subscribeParticipants(campaignSlug, (list) => {
-      setParticipants(list);
-    });
+    // Fetch and poll sanitized winners feed (protects participant PII from public TV screens)
+    async function loadSanitizedWinners() {
+      try {
+        const res = await fetch(`/api/tv/recent-winners?c=${campaignSlug}`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.winners)) {
+          setParticipants(data.winners);
+        }
+      } catch (err) {
+        // Fallback silently if offline
+      }
+    }
+
+    loadSanitizedWinners();
+    const pollInterval = setInterval(loadSanitizedWinners, 4000);
 
     return () => {
       if (unsubCampaign) unsubCampaign();
-      if (unsubParticipants) unsubParticipants();
+      clearInterval(pollInterval);
     };
   }, [campaignSlug]);
 
