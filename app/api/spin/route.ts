@@ -122,6 +122,22 @@ export async function POST(request: NextRequest) {
 
       // 6. Fetch Store Inventory & Calculate Available Prizes
       const cleanStoreCode = storeCode ? String(storeCode).trim().toLowerCase() : "";
+
+      // Block spins from stores that have been deactivated by the admin
+      if (cleanStoreCode) {
+        const storeRecord = campaign.stores?.find(
+          (s) =>
+            (s.code && s.code.toLowerCase() === cleanStoreCode) ||
+            (s.id && s.id.toLowerCase() === cleanStoreCode)
+        );
+        if (storeRecord && storeRecord.active === false) {
+          return NextResponse.json(
+            { error: "This store is not currently active. Please check back later." },
+            { status: 403 }
+          );
+        }
+      }
+
       let storeInventory: Record<string, number> = {};
       if (cleanStoreCode) {
         const invRecord = await getStoreInventory(campaignId, cleanStoreCode);

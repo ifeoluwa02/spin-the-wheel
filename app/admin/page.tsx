@@ -20,6 +20,7 @@ import {
   pausePrizeAtStore,
   unpausePrizeAtStore,
   batchToggleStorePrizes,
+  toggleStoreActive,
   getStorePrizeQuota,
   getStorePrizeRemaining,
   invalidateCampaignCache,
@@ -94,6 +95,7 @@ export default function AdminDashboard() {
   const [selectedStoreForQr, setSelectedStoreForQr] = useState<StoreLocation | null>(null);
   const [storeSaving, setStoreSaving] = useState(false);
   const [storeToast, setStoreToast] = useState<string | null>(null);
+  const [storeToggleLoading, setStoreToggleLoading] = useState<string | null>(null); // storeId being toggled
 
   async function handleAddStore(e: React.FormEvent) {
     e.preventDefault();
@@ -127,6 +129,29 @@ export default function AdminDashboard() {
       alert("❌ Could not save store to database. Please check connection.");
     } finally {
       setStoreSaving(false);
+    }
+  }
+
+  async function handleToggleStoreActive(store: StoreLocation, makeActive: boolean) {
+    setStoreToggleLoading(store.id);
+    try {
+      await toggleStoreActive(campaign.id, store.id, makeActive);
+      const updatedStores = (campaign.stores || []).map((s) =>
+        s.id === store.id ? { ...s, active: makeActive } : s
+      );
+      setCampaign((prev) => ({ ...prev, stores: updatedStores }));
+      setStoreToast(
+        makeActive
+          ? `✅ "${store.name}" is now ACTIVE — spins allowed.`
+          : `⏸️ "${store.name}" is now INACTIVE — spins blocked.`
+      );
+      setTimeout(() => setStoreToast(null), 3000);
+    } catch (err) {
+      console.error("Failed to toggle store active state:", err);
+      setStoreToast("❌ Failed to update store status. Please try again.");
+      setTimeout(() => setStoreToast(null), 3000);
+    } finally {
+      setStoreToggleLoading(null);
     }
   }
 
@@ -1687,17 +1712,44 @@ export default function AdminDashboard() {
                     const storeTvUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/tv?c=${campaignSlug}&store=${s.code}`;
                     const storeWheelUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${s.code}`;
 
+                    const isStoreActive = s.active !== false; // undefined = active by default
+                    const isTogglingThisStore = storeToggleLoading === s.id;
+
                     return (
-                      <div key={s.id || s.code} className="rounded-2xl p-5 space-y-4 bg-white/[0.03] border border-white/10 relative group hover:border-teal-500/40 transition-all">
+                      <div
+                        key={s.id || s.code}
+                        className={`rounded-2xl p-5 space-y-4 relative group transition-all ${
+                          isStoreActive
+                            ? "bg-white/[0.03] border border-white/10 hover:border-teal-500/40"
+                            : "bg-red-950/20 border border-red-500/25 hover:border-red-500/50"
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-300 flex-shrink-0">
+                            <div
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                                isStoreActive
+                                  ? "bg-teal-500/15 border border-teal-500/30 text-teal-300"
+                                  : "bg-red-500/15 border border-red-500/30 text-red-400"
+                              }`}
+                            >
                               <MapPin className="w-5 h-5" />
                             </div>
                             <div className="min-w-0 flex-1">
-                              <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
-                                {s.name}
-                              </h4>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
+                                  {s.name}
+                                </h4>
+                                {isStoreActive ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                    ● Active
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                                    ○ Inactive
+                                  </span>
+                                )}
+                              </div>
                               <div className="flex items-center gap-1.5 flex-wrap mt-1">
                                 <span className="text-[11px] font-mono text-teal-400">
                                   {s.code}
@@ -1718,9 +1770,31 @@ export default function AdminDashboard() {
                               </div>
                             </div>
                           </div>
-                          <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all cursor-pointer flex-shrink-0" title="Delete Store">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {/* Activate / Deactivate Store Toggle */}
+                            <button
+                              type="button"
+                              disabled={isTogglingThisStore}
+                              onClick={() => handleToggleStoreActive(s, !isStoreActive)}
+                              title={isStoreActive ? "Deactivate store — blocks all spins" : "Activate store — allow spins"}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer disabled:opacity-50 ${
+                                isStoreActive
+                                  ? "bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25"
+                                  : "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25"
+                              }`}
+                            >
+                              {isTogglingThisStore ? (
+                                <span className="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
+                              ) : isStoreActive ? (
+                                <><Pause className="w-3 h-3" /><span>Deactivate</span></>
+                              ) : (
+                                <><Play className="w-3 h-3" /><span>Activate</span></>
+                              )}
+                            </button>
+                            <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all cursor-pointer" title="Delete Store">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         {/* Stats Row */}

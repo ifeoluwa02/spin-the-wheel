@@ -18,12 +18,12 @@ import {
   isLightColor,
   getAmbientGlowOpacity,
 } from "@/lib/colors";
-import { Loader2, MapPin, ChevronRight, RotateCcw, Search, X } from "lucide-react";
+import { Loader2, MapPin, ChevronRight, RotateCcw, Search, X, Lock, Eye, EyeOff } from "lucide-react";
 import RegistrationForm, { RegistrationValues } from "@/components/RegistrationForm";
 import SpinWheel from "@/components/SpinWheel";
 import WinnerModal from "@/components/WinnerModal";
 
-type KioskStep = "loading" | "not-found" | "pick-store" | "register" | "wheel";
+type KioskStep = "loading" | "not-found" | "pick-store" | "pin-entry" | "register" | "wheel";
 
 export default function KioskPage() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
@@ -34,6 +34,13 @@ export default function KioskPage() {
   const [storeName, setStoreName] = useState("");
   const [storeSearch, setStoreSearch] = useState("");
   const [storeInventory, setStoreInventory] = useState<Record<string, number>>({});
+
+  // PIN gate state — set when a store with a PIN is selected
+  const [pendingStore, setPendingStore] = useState<{ code: string; name: string; pin: string } | null>(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [pinLoading, setPinLoading] = useState(false);
 
   // Per-spin participant state
   const [participant, setParticipant] = useState<RegistrationValues | null>(null);
@@ -85,10 +92,42 @@ export default function KioskPage() {
     return () => unsub();
   }, [campaign?.id, storeCode]);
 
-  function handlePickStore(code: string, name: string) {
-    setStoreCode(code);
-    setStoreName(name);
-    setStep("register");
+  function handlePickStore(code: string, name: string, pin?: string) {
+    setStoreSearch("");
+    if (pin) {
+      // Store has a PIN — show PIN entry gate first
+      setPendingStore({ code, name, pin });
+      setPinInput("");
+      setPinError("");
+      setShowPin(false);
+      setStep("pin-entry");
+    } else {
+      // No PIN — proceed directly to registration
+      setStoreCode(code);
+      setStoreName(name);
+      setStep("register");
+    }
+  }
+
+  function handlePinSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pendingStore) return;
+    setPinLoading(true);
+    setPinError("");
+    // Small artificial delay so it doesn't feel instant (prevents brute-force feel)
+    setTimeout(() => {
+      if (pinInput.trim() === pendingStore.pin.trim()) {
+        setStoreCode(pendingStore.code);
+        setStoreName(pendingStore.name);
+        setPendingStore(null);
+        setPinInput("");
+        setStep("register");
+      } else {
+        setPinError("Incorrect PIN. Please try again.");
+        setPinInput("");
+      }
+      setPinLoading(false);
+    }, 350);
   }
 
   async function handleRegister(values: RegistrationValues) {
@@ -240,14 +279,16 @@ export default function KioskPage() {
       {/* PICK STORE */}
       {step === "pick-store" && campaign && (() => {
         const query = storeSearch.trim().toLowerCase();
+        // Only show stores that are active (active !== false)
+        const activeStores = campaign.stores!.filter(s => s.active !== false);
         const visibleStores = query
-          ? campaign.stores!.filter(s =>
+          ? activeStores.filter(s =>
               s.name.toLowerCase().includes(query) ||
               (s.state && s.state.toLowerCase().includes(query)) ||
               (s.city && s.city.toLowerCase().includes(query)) ||
               (s.code && s.code.toLowerCase().includes(query))
             )
-          : campaign.stores!;
+          : activeStores;
         return (
           <div className="relative z-10 w-full max-w-md px-5 py-12 flex flex-col items-center gap-6">
             {/* Brand header */}
@@ -316,7 +357,7 @@ export default function KioskPage() {
                 return (
                   <button
                     key={s.id || s.code}
-                    onClick={() => { handlePickStore(s.code, s.name); setStoreSearch(""); }}
+                    onClick={() => { handlePickStore(s.code, s.name, s.pin); }}
                     className="w-full flex items-center justify-between px-5 py-4 rounded-2xl text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
                     style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${gc}30`, backdropFilter: "blur(16px)" }}
                   >
@@ -333,7 +374,14 @@ export default function KioskPage() {
                         )}
                       </div>
                     </div>
-                    <ChevronRight className="w-4 h-4 shrink-0" style={{ color: "rgba(255,255,255,0.3)" }} />
+                    <div className="flex items-center gap-2 shrink-0">
+                      {s.pin && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase" style={{ background: `${gc}20`, color: gc, border: `1px solid ${gc}35` }}>
+                          <Lock className="w-2.5 h-2.5" /> PIN
+                        </span>
+                      )}
+                      <ChevronRight className="w-4 h-4" style={{ color: "rgba(255,255,255,0.3)" }} />
+                    </div>
                   </button>
                 );
               })}
@@ -348,6 +396,119 @@ export default function KioskPage() {
           </div>
         );
       })()}
+
+      {/* PIN ENTRY */}
+      {step === "pin-entry" && campaign && pendingStore && (
+        <div className="relative z-10 w-full max-w-sm px-5 flex flex-col items-center justify-center gap-6 py-12">
+          {/* Brand header */}
+          <div className="text-center space-y-3">
+            {campaign.logoUrl ? (
+              <img src={campaign.logoUrl} alt={campaign.name} className="h-14 w-auto mx-auto object-contain" style={{ filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.5))" }} />
+            ) : (
+              <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center text-3xl" style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}>🎯</div>
+            )}
+            <div>
+              <h1 className="text-xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{campaign.name}</h1>
+              <div className="inline-flex items-center gap-1.5 mt-1.5 px-3 py-1 rounded-full text-[11px] font-bold" style={{ background: `${gc}18`, border: `1px solid ${gc}35`, color: gc }}>
+                <MapPin className="w-3 h-3" /> {pendingStore.name}
+              </div>
+            </div>
+          </div>
+
+          {/* PIN card */}
+          <form
+            onSubmit={handlePinSubmit}
+            className="w-full rounded-3xl p-7 space-y-5"
+            style={{
+              background: `linear-gradient(180deg, rgba(255,255,255,0.06), ${gc}0a), rgba(10,18,30,0.75)`,
+              backdropFilter: "blur(24px)",
+              border: `1px solid ${gc}30`,
+              boxShadow: `0 24px 60px rgba(0,0,0,0.5), 0 0 40px ${gc}15, inset 0 1px 0 rgba(255,255,255,0.12)`,
+            }}
+          >
+            <div className="h-1 w-16 rounded-full mx-auto" style={{ background: `linear-gradient(90deg, ${gc}, ${g2})` }} />
+
+            {/* Lock icon + heading */}
+            <div className="flex flex-col items-center gap-3 text-center">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: `${gc}20`, border: `1px solid ${gc}40` }}>
+                <Lock className="w-7 h-7" style={{ color: gc }} />
+              </div>
+              <div>
+                <h2 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Store PIN Required</h2>
+                <p className="text-xs mt-1" style={{ color: "rgba(255,255,255,0.45)" }}>
+                  Enter the PIN for <strong style={{ color: "rgba(255,255,255,0.75)" }}>{pendingStore.name}</strong> to continue
+                </p>
+              </div>
+            </div>
+
+            {/* PIN input */}
+            <div className="relative">
+              <input
+                id="kiosk-pin-input"
+                type={showPin ? "text" : "password"}
+                inputMode="numeric"
+                maxLength={10}
+                value={pinInput}
+                onChange={e => { setPinInput(e.target.value); setPinError(""); }}
+                placeholder="Enter PIN"
+                autoFocus
+                autoComplete="off"
+                className="w-full px-5 pr-12 py-4 rounded-2xl text-center text-xl font-black text-white tracking-[0.3em] outline-none transition-all"
+                style={{
+                  background: "rgba(255,255,255,0.06)",
+                  border: pinError ? "1px solid rgba(239,68,68,0.6)" : `1px solid ${gc}50`,
+                  boxShadow: pinError ? "0 0 0 3px rgba(239,68,68,0.12)" : `0 0 0 3px ${gc}18`,
+                  letterSpacing: "0.3em",
+                }}
+              />
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => setShowPin(v => !v)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 transition-all hover:opacity-70"
+                style={{ color: "rgba(255,255,255,0.35)" }}
+              >
+                {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Error message */}
+            {pinError && (
+              <p className="text-red-400 text-xs font-semibold text-center px-2 py-1.5 rounded-xl bg-red-950/40 border border-red-500/20">
+                🔒 {pinError}
+              </p>
+            )}
+
+            {/* Submit button */}
+            <button
+              type="submit"
+              disabled={!pinInput.trim() || pinLoading}
+              className="w-full py-4 rounded-2xl font-black text-base transition-all active:scale-[0.97] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              style={{
+                background: `linear-gradient(135deg, ${gc}, ${g2})`,
+                color: "#fff",
+                boxShadow: `0 8px 24px ${gc}45`,
+                fontFamily: "Rubik, sans-serif",
+              }}
+            >
+              {pinLoading ? (
+                <><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Verifying…</>
+              ) : (
+                <>Confirm PIN →</>
+              )}
+            </button>
+          </form>
+
+          {/* Back link */}
+          <button
+            onClick={() => { setPendingStore(null); setPinInput(""); setPinError(""); setStep("pick-store"); }}
+            className="text-xs font-bold transition-all hover:opacity-80"
+            style={{ color: "rgba(255,255,255,0.3)" }}
+          >
+            ← Back to store list
+          </button>
+        </div>
+      )}
 
       {/* REGISTER */}
       {step === "register" && campaign && (

@@ -685,6 +685,33 @@ export async function batchToggleStorePrizes(
   invalidateCampaignCache(campaignId);
 }
 
+/**
+ * Activates or deactivates an entire store.
+ * When active=false, the spin API rejects spin attempts from that store code
+ * and the kiosk/attendee page shows a "Store not yet active" message.
+ *
+ * This is intentionally separate from pausePrizes — pausing prizes is fine-grained
+ * (individual item ran out), while toggling store active is coarse (store not open today).
+ */
+export async function toggleStoreActive(
+  campaignId: string,
+  storeIdOrCode: string,
+  active: boolean
+): Promise<void> {
+  const ref = doc(db, "campaigns", campaignId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return;
+  const c = snap.data() as Campaign;
+  const clean = storeIdOrCode.trim().toLowerCase();
+  const stores = (c.stores || []).map((s) =>
+    s.id.toLowerCase() === clean || (s.code && s.code.toLowerCase() === clean)
+      ? { ...s, active }
+      : s
+  );
+  await updateDoc(ref, { stores });
+  invalidateCampaignCache(campaignId);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Supervisor Auth
 // ─────────────────────────────────────────────────────────────────────────────

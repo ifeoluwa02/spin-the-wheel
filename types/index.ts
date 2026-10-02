@@ -28,6 +28,12 @@ export interface StoreLocation {
   /** State/region this store belongs to — used to scope supervisors by state */
   state?: string;
   /**
+   * When false, the store is fully deactivated — spins are rejected at the API level
+   * and the store wheel shows a "not yet active" message.
+   * Defaults to true (active) when not set.
+   */
+  active?: boolean;
+  /**
    * Array of prize IDs paused at this specific store.
    * Supervisors can toggle these; Admin can also manage them.
    */
