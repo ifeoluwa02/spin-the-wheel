@@ -86,6 +86,11 @@ export default function AdminDashboard() {
   const [storePrizeStatusFilter, setStorePrizeStatusFilter] = useState<"all" | "paused" | "active">("all");
   const [expandedStores, setExpandedStores] = useState<Record<string, boolean>>({});
 
+  // Stores tab filter state
+  const [storeTabSearch, setStoreTabSearch] = useState("");
+  const [storeTabStateFilter, setStoreTabStateFilter] = useState("all");
+  const [storeTabStatusFilter, setStoreTabStatusFilter] = useState<"all" | "paused" | "active">("all");
+
   // Store management state
   const [newStoreName, setNewStoreName] = useState("");
   const [newStoreCode, setNewStoreCode] = useState("");
@@ -682,6 +687,29 @@ export default function AdminDashboard() {
 
   const storesWithPausedCount = storesToDisplay.filter(s => (s.pausedPrizes || []).length > 0).length;
   const allFilteredExpanded = filteredStorePrizes.length > 0 && filteredStorePrizes.every(s => expandedStores[s.id] ?? (storePrizeSearch.trim().length > 0));
+
+  // Filter calculation for Stores & BAs Tab
+  const allCampaignStores = campaign.stores || [];
+  const activeStoresCount = allCampaignStores.filter(s => s.active !== false).length;
+  const inactiveStoresCount = allCampaignStores.filter(s => s.active === false).length;
+
+  const filteredStoresTab = allCampaignStores.filter(store => {
+    const q = storeTabSearch.toLowerCase().trim();
+    const matchesSearch = !q || (
+      store.name.toLowerCase().includes(q) ||
+      (store.code && store.code.toLowerCase().includes(q)) ||
+      (store.city && store.city.toLowerCase().includes(q)) ||
+      (store.state && store.state.toLowerCase().includes(q)) ||
+      (store.pin && store.pin.toLowerCase().includes(q))
+    );
+    const matchesState = storeTabStateFilter === "all" || store.state?.toLowerCase() === storeTabStateFilter.toLowerCase();
+    const isStoreActive = store.active !== false;
+    const matchesStatus =
+      storeTabStatusFilter === "all" ? true :
+      storeTabStatusFilter === "paused" ? !isStoreActive :
+      isStoreActive;
+    return matchesSearch && matchesState && matchesStatus;
+  });
 
   const allTabs: { id: Tab; label: string; icon: any; adminOnly?: boolean }[] = [
     { id: "analytics", label: "Analytics", icon: Activity },
@@ -1686,22 +1714,137 @@ export default function AdminDashboard() {
 
             {/* Store Directory Grid */}
             <div className="rounded-2xl p-6 space-y-4" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
-              <div className="flex items-center justify-between">
-                <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
-                  Active Stores & Brand Ambassadors ({(campaign.stores || []).length})
-                </h3>
-                <span className="text-xs text-white/40 font-semibold">Real-time Activation Performance</span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-black text-white text-sm flex items-center gap-2" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    <Store className="w-4 h-4 text-teal-400" />
+                    Stores & Brand Ambassadors ({allCampaignStores.length})
+                  </h3>
+                  <p className="text-xs mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
+                    Real-time activation performance, TV links, QR codes & access control.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white/60">
+                    {inactiveStoresCount > 0 ? (
+                      <span className="text-amber-300 font-bold">⏸️ {inactiveStoresCount} store(s) paused</span>
+                    ) : (
+                      <span className="text-emerald-400 font-bold">✅ All {allCampaignStores.length} stores active</span>
+                    )}
+                  </span>
+                </div>
               </div>
 
-              {!campaign.stores?.length ? (
+              {/* Search and Filters Bar */}
+              {allCampaignStores.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
+                  <div className="sm:col-span-5 relative">
+                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
+                      storeTabSearch ? "text-teal-400" : "text-white/40"
+                    }`} />
+                    <input
+                      type="text"
+                      placeholder="Search stores (name, code, city)..."
+                      value={storeTabSearch}
+                      onChange={e => setStoreTabSearch(e.target.value)}
+                      className="w-full pl-10 pr-20 py-2.5 rounded-xl text-xs text-white outline-none placeholder-white/30 transition-all focus:border-teal-500/50"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    />
+                    {storeTabSearch && (
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/30">
+                          {filteredStoresTab.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setStoreTabSearch("")}
+                          className="text-white/40 hover:text-white p-1 rounded transition-colors"
+                          title="Clear search"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="sm:col-span-3">
+                    <select
+                      value={storeTabStateFilter}
+                      onChange={e => setStoreTabStateFilter(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-xl text-xs text-white outline-none cursor-pointer"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    >
+                      <option value="all" style={{ background: "#070d14", color: "#ffffff" }}>All States</option>
+                      {NIGERIAN_STATES.map(st => (
+                        <option key={st} value={st} style={{ background: "#070d14", color: "#ffffff" }}>{st}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="sm:col-span-4 flex items-center gap-1.5 overflow-x-auto">
+                    <button
+                      type="button"
+                      onClick={() => setStoreTabStatusFilter("all")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storeTabStatusFilter === "all"
+                          ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      All ({allCampaignStores.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoreTabStatusFilter("paused")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storeTabStatusFilter === "paused"
+                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      Paused ({inactiveStoresCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoreTabStatusFilter("active")}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                        storeTabStatusFilter === "active"
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                      }`}
+                    >
+                      Active ({activeStoresCount})
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!allCampaignStores.length ? (
                 <div className="text-center py-12 space-y-2">
                   <p className="text-3xl">🏪</p>
                   <p className="text-sm font-bold text-white">No store or BA accounts created yet.</p>
                   <p className="text-xs text-white/40">Use the form above to add retail locations or Brand Ambassadors.</p>
                 </div>
+              ) : filteredStoresTab.length === 0 ? (
+                <div className="text-center py-12 space-y-2">
+                  <p className="text-3xl">🔍</p>
+                  <p className="text-sm font-bold text-white">No stores match your search or filter.</p>
+                  <p className="text-xs text-white/40">Try searching for a different keyword or reset filters.</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStoreTabSearch("");
+                      setStoreTabStateFilter("all");
+                      setStoreTabStatusFilter("all");
+                    }}
+                    className="mt-2 text-xs font-bold px-3 py-1.5 rounded-lg bg-teal-500/15 border border-teal-500/30 text-teal-300 hover:bg-teal-500/25 transition-all cursor-pointer"
+                  >
+                    Reset Filters
+                  </button>
+                </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {campaign.stores.map((s) => {
+                  {filteredStoresTab.map((s) => {
                     const storeSpins = participants.filter(p =>
                       (p.storeCode && s.code && p.storeCode.toLowerCase() === s.code.toLowerCase()) ||
                       p.storeCode === s.id ||
@@ -1916,7 +2059,7 @@ export default function AdminDashboard() {
                     <option value="all" className="bg-slate-900">All Locations / BAs</option>
                     {campaign.stores.map((s) => (
                       <option key={s.id || s.code} value={s.code} className="bg-slate-900">
-                        📍 {s.name}
+                        📍 {s.code} — {s.name}
                       </option>
                     ))}
                   </select>
@@ -2049,7 +2192,7 @@ export default function AdminDashboard() {
               <table className="w-full text-left" style={{ fontSize: "12px" }}>
                 <thead>
                   <tr>
-                    {["Name", "Phone", "Age / Gender", "Email", "Prize", "Voucher", "Store / BA", "Date & Time"].map(h => (
+                    {["Name", "Phone", "Age / Gender", "Email", "Prize", "Voucher", "Store Code", "Date & Time"].map(h => (
                       <th key={h} className="pb-3 px-2 font-bold uppercase tracking-wide" style={{ color: "rgba(255,255,255,0.25)" }}>{h}</th>
                     ))}
                   </tr>
@@ -2086,9 +2229,22 @@ export default function AdminDashboard() {
                       </td>
                       <td className="py-3 px-2 font-mono" style={{ color: "#00BFA6" }}>{p.voucherCode || "—"}</td>
                       <td className="py-3 px-2">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-white/5 border border-white/10 text-teal-300">
-                          {p.storeName || p.storeCode || "General Stage"}
-                        </span>
+                        {(() => {
+                          const storeCode = p.storeCode || campaign.stores?.find(s => s.name?.toLowerCase() === p.storeName?.toLowerCase())?.code;
+                          const storeName = p.storeName || campaign.stores?.find(s => s.code?.toLowerCase() === p.storeCode?.toLowerCase())?.name;
+                          return (
+                            <div>
+                              <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                                {storeCode || storeName || "General Stage"}
+                              </span>
+                              {storeName && storeCode && storeName.toLowerCase() !== storeCode.toLowerCase() && (
+                                <p className="text-[10px] text-white/40 mt-0.5 truncate max-w-[140px]" title={storeName}>
+                                  {storeName}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-3 px-2">
                         <div className="text-white text-xs font-semibold whitespace-nowrap">
