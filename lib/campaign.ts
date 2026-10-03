@@ -33,11 +33,21 @@ export const DEFAULT_CAMPAIGN: Campaign = {
   stores: [],
 };
 
-/** Generates a voucher code like SPIN-HW87EIDP */
+/** Generates a cryptographically secure, unpredictable voucher code like SPIN-A8F29BC1 */
 export function generateVoucherCode(prefix = "SPIN"): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+      const bytes = new Uint8Array(4);
+      crypto.getRandomValues(bytes);
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("").toUpperCase();
+      return `${prefix}-${hex}`;
+    }
+  } catch {}
+  // Universal fallback if WebCrypto is unavailable
   const randomChars = Math.random().toString(36).substring(2, 10).toUpperCase();
   return `${prefix}-${randomChars}`;
 }
+
 
 // ---------- Campaign Config Cache (sessionStorage) ----------
 // Caches the campaign document in sessionStorage for the lifetime of the browser tab.
@@ -309,13 +319,17 @@ export async function getAllCampaigns(): Promise<Campaign[]> {
   try {
     const snap = await getDocs(collection(db, "campaigns"));
     snap.forEach((docSnap) => {
-      campaigns.push({ ...DEFAULT_CAMPAIGN, ...(docSnap.data() as Partial<Campaign>), id: docSnap.id });
+      // Exclude internal system configuration documents
+      if (!docSnap.id.startsWith("_")) {
+        campaigns.push({ ...DEFAULT_CAMPAIGN, ...(docSnap.data() as Partial<Campaign>), id: docSnap.id });
+      }
     });
   } catch (err) {
     console.warn("Firestore getAllCampaigns failed:", err);
   }
   return campaigns;
 }
+
 
 /** Fetches all participant spin records across all campaigns for Super Admin global export */
 export async function getAllGlobalParticipants(): Promise<Participant[]> {
@@ -380,21 +394,53 @@ export async function clearCampaignData(campaignId?: string): Promise<{ deletedC
 
   return { deletedCount };
 }
-/** Reads the Super Admin master credentials from Firestore config/superAdmin */
+/** Reads the Super Admin master credentials from Firestore (campaigns/_admin_config_ with fallback to config/superAdmin) */
 export async function getSuperAdminConfig(): Promise<SuperAdminConfig | null> {
   try {
-    const snap = await getDoc(doc(db, "config", "superAdmin"));
-    if (snap.exists()) return snap.data() as SuperAdminConfig;
+    // 1. Primary secure location inside system config
+    const adminConfigSnap = await getDoc(doc(db, "campaigns", "_admin_config_"));
+    if (adminConfigSnap.exists()) {
+      const data = adminConfigSnap.data();
+      if (data.superAdmin?.email && data.superAdmin?.passwordHash) {
+        return {
+          email: data.superAdmin.email,
+          password: data.superAdmin.passwordHash,
+        };
+      }
+    }
+
+    // 2. Secondary secure location
+    const secureSnap = await getDoc(doc(db, "auth_credentials", "superAdmin"));
+    if (secureSnap.exists()) return secureSnap.data() as SuperAdminConfig;
+
+    // 3. Legacy fallback location
+    const legacySnap = await getDoc(doc(db, "config", "superAdmin"));
+    if (legacySnap.exists()) return legacySnap.data() as SuperAdminConfig;
   } catch (err) {
     console.warn("getSuperAdminConfig failed:", err);
   }
   return null;
 }
 
-/** Writes the Super Admin master credentials to Firestore config/superAdmin */
+/** Writes the Super Admin master credentials to Firestore */
 export async function setSuperAdminConfig(config: SuperAdminConfig): Promise<void> {
-  await setDoc(doc(db, "config", "superAdmin"), config);
+  // Save to primary secure location
+  await setDoc(
+    doc(db, "campaigns", "_admin_config_"),
+    {
+      superAdmin: {
+        email: config.email.toLowerCase().trim(),
+        passwordHash: config.password,
+        updatedAt: Date.now(),
+      },
+    },
+    { merge: true }
+  );
+  // Keep legacy doc synced if permissions permit during transition
+  await setDoc(doc(db, "config", "superAdmin"), config).catch(() => {});
 }
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Store-Specific Inventory & Prize Functions
@@ -835,8 +881,14 @@ export function sanitizeCampaignForPublic(campaign: Campaign): Campaign {
       ...s,
       password: "",
     })),
+    stores: (campaign.stores || []).map((s) => ({
+      ...s,
+      hasPin: Boolean((s.pin && s.pin.trim()) || (campaign.adminPin && campaign.adminPin.trim())),
+      pin: "",
+    })),
   };
 }
+
 
 
 

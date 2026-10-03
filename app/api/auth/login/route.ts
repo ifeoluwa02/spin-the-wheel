@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCampaign, authenticateCampaignAdmin, getSupervisorByCredentials } from "@/lib/campaign";
-import { createSignedSession } from "@/lib/auth-session";
+import { getCampaign } from "@/lib/campaign";
+import { createSignedSession, verifyPassword } from "@/lib/auth-session";
+import type { CampaignAdmin, Supervisor } from "@/types";
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,8 +25,26 @@ export async function POST(request: NextRequest) {
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanPassword = String(password);
 
-    // 1. Check if user is a Campaign Admin (primary or secondary)
-    const adminUser = authenticateCampaignAdmin(campaign, cleanEmail, cleanPassword);
+    // 1. Check if user is a Campaign Admin (primary or secondary) with dual-format verification
+    let adminUser: CampaignAdmin | null = null;
+    if (
+      campaign.adminEmail &&
+      campaign.adminEmail.toLowerCase() === cleanEmail &&
+      verifyPassword(cleanPassword, campaign.adminPassword || "")
+    ) {
+      adminUser = {
+        id: "primary-admin",
+        name: "Primary Admin",
+        email: campaign.adminEmail,
+        password: campaign.adminPassword || "",
+      };
+    } else if (campaign.admins?.length) {
+      const match = campaign.admins.find(
+        (a) => a.email.toLowerCase() === cleanEmail && Boolean(a.password && verifyPassword(cleanPassword, a.password))
+      );
+      if (match) adminUser = match;
+    }
+
     if (adminUser) {
       const token = createSignedSession({
         role: "admin",
@@ -42,6 +61,7 @@ export async function POST(request: NextRequest) {
           name: adminUser.name,
           email: adminUser.email,
         },
+        expiresAt: Date.now() + 60 * 60 * 1000,
       });
 
       response.cookies.set("campaign_session", token, {
@@ -49,14 +69,22 @@ export async function POST(request: NextRequest) {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
-        maxAge: 60 * 60 * 24, // 24 hours
+        maxAge: 60 * 60, // 1 hour (3600 seconds)
       });
 
       return response;
     }
 
-    // 2. Check if user is a Supervisor
-    const supervisorUser = await getSupervisorByCredentials(campaignId, cleanEmail, cleanPassword);
+    // 2. Check if user is a Supervisor with dual-format verification
+    let supervisorUser: Supervisor | null = null;
+    if (campaign.supervisors?.length) {
+      const match = campaign.supervisors.find(
+        (sv) =>
+          sv.email.toLowerCase() === cleanEmail &&
+          Boolean(sv.password && verifyPassword(cleanPassword, sv.password))
+      );
+      if (match) supervisorUser = match;
+    }
     if (supervisorUser) {
       const token = createSignedSession({
         role: "supervisor",
@@ -80,6 +108,7 @@ export async function POST(request: NextRequest) {
           state: supervisorUser.state,
           storeIds: supervisorUser.storeIds,
         },
+        expiresAt: Date.now() + 60 * 60 * 1000,
       });
 
       response.cookies.set("campaign_session", token, {
@@ -87,7 +116,7 @@ export async function POST(request: NextRequest) {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
-        maxAge: 60 * 60 * 24,
+        maxAge: 60 * 60, // 1 hour (3600 seconds)
       });
 
       return response;

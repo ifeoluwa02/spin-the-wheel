@@ -7,14 +7,9 @@ import {
   getCampaign,
   updateCampaign,
   getParticipants,
-  clearCampaignData,
   subscribeCampaign,
   subscribeParticipants,
-  getSuperAdminConfig,
-  getSupervisorByCredentials,
   getSupervisorStores,
-  authenticateCampaignAdmin,
-  getAllCampaignAdmins,
   pausePrizeGlobally,
   unpausePrizeGlobally,
   pausePrizeAtStore,
@@ -33,7 +28,7 @@ import {
   ExternalLink, Palette, Save, Activity, Target, Layers,
   ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
   UsersRound, PauseCircle, PlayCircle, Globe, Building2, Search, SlidersHorizontal,
-  Play, Pause, Package,
+  Play, Pause, Package, Clock, RefreshCw,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
@@ -49,6 +44,9 @@ export default function AdminDashboard() {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
+  const [refreshingToken, setRefreshingToken] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(Date.now());
   const [loginLoading, setLoginLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
@@ -102,6 +100,22 @@ export default function AdminDashboard() {
   const [storeToast, setStoreToast] = useState<string | null>(null);
   const [storeToggleLoading, setStoreToggleLoading] = useState<string | null>(null); // storeId being toggled
 
+  async function persistCampaign(updatedCampaign: Campaign) {
+    try {
+      const res = await fetch("/api/admin/campaign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign: updatedCampaign }),
+      });
+      if (!res.ok) {
+        await updateCampaign(updatedCampaign);
+      }
+    } catch {
+      await updateCampaign(updatedCampaign);
+    }
+    invalidateCampaignCache(updatedCampaign.id);
+  }
+
   async function handleAddStore(e: React.FormEvent) {
     e.preventDefault();
     if (!newStoreName.trim()) return;
@@ -125,8 +139,7 @@ export default function AdminDashboard() {
     setNewStorePin("1234");
 
     try {
-      await updateCampaign(updatedCampaign);
-      invalidateCampaignCache(updatedCampaign.id);
+      await persistCampaign(updatedCampaign);
       setStoreToast(`✅ "${newStore.name}" added and saved live!`);
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
@@ -140,11 +153,12 @@ export default function AdminDashboard() {
   async function handleToggleStoreActive(store: StoreLocation, makeActive: boolean) {
     setStoreToggleLoading(store.id);
     try {
-      await toggleStoreActive(campaign.id, store.id, makeActive);
       const updatedStores = (campaign.stores || []).map((s) =>
         s.id === store.id ? { ...s, active: makeActive } : s
       );
-      setCampaign((prev) => ({ ...prev, stores: updatedStores }));
+      const updatedCampaign = { ...campaign, stores: updatedStores };
+      setCampaign(updatedCampaign);
+      await persistCampaign(updatedCampaign);
       setStoreToast(
         makeActive
           ? `✅ "${store.name}" is now ACTIVE — spins allowed.`
@@ -168,12 +182,11 @@ export default function AdminDashboard() {
     setCampaign(updatedCampaign);
 
     try {
-      await updateCampaign(updatedCampaign);
-      invalidateCampaignCache(updatedCampaign.id);
+      await persistCampaign(updatedCampaign);
       setStoreToast("🗑️ Store account removed.");
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
-      console.error("Failed to delete store from Firestore:", err);
+      console.error("Failed to delete store:", err);
     }
   }
 
@@ -259,13 +272,16 @@ export default function AdminDashboard() {
       const slug = params.get("c") || process.env.NEXT_PUBLIC_CAMPAIGN_ID || "";
       setCampaignSlug(slug);
       setQrUrl(`${window.location.origin}/?c=${slug}`);
-      // Verify signed server session
+      // Verify signed server session (1-hour JWT token)
       fetch("/api/auth/session")
         .then((res) => res.json())
         .then((data) => {
           if (data.campaignSession && data.campaignSession.campaignId === slug) {
             setAuthenticated(true);
             setAdminRole(data.campaignSession.role);
+            if (data.expiresAt) {
+              setSessionExpiresAt(data.expiresAt);
+            }
             if (data.campaignSession.role === "supervisor") {
               setActiveSupervisor({
                 id: data.campaignSession.supervisorId || "",
@@ -276,26 +292,91 @@ export default function AdminDashboard() {
                 storeIds: data.campaignSession.storeIds,
               });
             }
-          } else if (sessionStorage.getItem("admin_authed") === "true") {
-            setAuthenticated(true);
+          } else {
+            // Session expired on server or not authenticated
+            setAuthenticated(false);
             setAdminRole("admin");
-          } else if (sessionStorage.getItem("supervisor_authed") === "true") {
-            const svRaw = sessionStorage.getItem("supervisor_data");
-            if (svRaw) {
-              try { setActiveSupervisor(JSON.parse(svRaw)); } catch {}
+            setActiveSupervisor(null);
+            setSessionExpiresAt(null);
+            sessionStorage.removeItem("admin_authed");
+            sessionStorage.removeItem("admin_data");
+            sessionStorage.removeItem("supervisor_authed");
+            sessionStorage.removeItem("supervisor_data");
+            if (data.expired) {
+              setLoginError("⚠️ Your session expired after 1 hour. Please log in again to continue.");
             }
-            setAuthenticated(true);
-            setAdminRole("supervisor");
           }
         })
         .catch(() => {
-          if (sessionStorage.getItem("admin_authed") === "true") {
-            setAuthenticated(true);
-            setAdminRole("admin");
-          }
+          setAuthenticated(false);
         });
     }
   }, []);
+
+  // Live timer tick for remaining session countdown
+  useEffect(() => {
+    if (!authenticated || !sessionExpiresAt) return;
+    const tick = setInterval(() => setCurrentTimeMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [authenticated, sessionExpiresAt]);
+
+  // Session monitor: checks /api/auth/session every 30s and on tab focus, logs out on 1-hour expiry
+  useEffect(() => {
+    if (!authenticated || !campaignSlug) return;
+
+    const checkSession = async () => {
+      try {
+        const res = await fetch("/api/auth/session");
+        const data = await res.json();
+        if (!data.authenticated || (data.campaignSession && data.campaignSession.campaignId !== campaignSlug)) {
+          // Token expired after 1 hour!
+          setAuthenticated(false);
+          setAdminRole("admin");
+          setActiveSupervisor(null);
+          setSessionExpiresAt(null);
+          sessionStorage.removeItem("admin_authed");
+          sessionStorage.removeItem("admin_data");
+          sessionStorage.removeItem("supervisor_authed");
+          sessionStorage.removeItem("supervisor_data");
+          setLoginError("⚠️ Your session expired after 1 hour. Please log in again to continue.");
+        } else if (data.expiresAt) {
+          setSessionExpiresAt(data.expiresAt);
+        }
+      } catch {
+        // network glitch, do not log out on transient disconnect
+      }
+    };
+
+    const interval = setInterval(checkSession, 20000);
+    const onFocus = () => { checkSession(); };
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [authenticated, campaignSlug]);
+
+  async function handleRefreshToken() {
+    setRefreshingToken(true);
+    try {
+      const res = await fetch("/api/auth/refresh", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success && data.expiresAt) {
+        setSessionExpiresAt(data.expiresAt);
+        setStoreToast("✅ Session token refreshed for another 1 hour.");
+        setTimeout(() => setStoreToast(null), 3000);
+      } else {
+        handleLogout();
+        setLoginError("⚠️ Your session expired after 1 hour. Please log in again.");
+      }
+    } catch {
+      setStoreToast("❌ Failed to refresh token. Check network.");
+      setTimeout(() => setStoreToast(null), 3000);
+    } finally {
+      setRefreshingToken(false);
+    }
+  }
 
   const [clearing, setClearing] = useState(false);
 
@@ -312,6 +393,17 @@ export default function AdminDashboard() {
     if (!authenticated || !campaignSlug) return;
 
     setLoading(true);
+    // Initial fetch via secure server API route
+    fetch(`/api/admin/participants?c=${campaignSlug}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.participants)) {
+          setParticipants(data.participants);
+        }
+        setLoading(false);
+      })
+      .catch(() => {});
+
     const unsubCampaign = subscribeCampaign(campaignSlug, (c) => setCampaign(c));
     const unsubParticipants = subscribeParticipants(campaignSlug, (p) => {
       setParticipants(p);
@@ -335,25 +427,28 @@ export default function AdminDashboard() {
     setClearError("");
     setClearing(true);
     try {
-      const superCfg = await getSuperAdminConfig();
-      const isSuperAdmin = superCfg && clearPasswordInput === superCfg.password;
-      const isCampaignAdmin =
-        (campaign.adminPassword && clearPasswordInput === campaign.adminPassword) ||
-        (campaign.admins?.some((a) => a.password === clearPasswordInput));
+      const res = await fetch("/api/admin/clear-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaignSlug,
+          password: clearPasswordInput,
+        }),
+      });
 
-      if (!isSuperAdmin && !isCampaignAdmin) {
-        setClearError("Incorrect admin password. Database reset denied.");
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setClearError(data.error || "Incorrect admin password. Database reset denied.");
         setClearing(false);
         return;
       }
 
-      const res = await clearCampaignData(campaignSlug);
       setParticipants([]);
       setShowClearModal(false);
       setClearPasswordInput("");
-      alert(`✅ Database cleared! Deleted ${res.deletedCount} participant record(s) and reset prize claimed stock counts in Firestore.`);
+      alert(`✅ Database cleared! Deleted ${data.deletedCount} participant record(s) and reset prize claimed stock counts in Firestore.`);
     } catch (err) {
-      setClearError("Failed to clear database. Check Firestore permissions.");
+      setClearError("Failed to clear database. Check network connection.");
     } finally {
       setClearing(false);
     }
@@ -384,6 +479,9 @@ export default function AdminDashboard() {
       if (c) setCampaign(c);
 
       setAuthenticated(true);
+      if (data.expiresAt) {
+        setSessionExpiresAt(data.expiresAt);
+      }
       if (data.user.role === "admin") {
         setAdminRole("admin");
         sessionStorage.setItem("admin_authed", "true");
@@ -412,6 +510,7 @@ export default function AdminDashboard() {
     setAuthenticated(false);
     setAdminRole("admin");
     setActiveSupervisor(null);
+    setSessionExpiresAt(null);
     sessionStorage.removeItem("admin_authed");
     sessionStorage.removeItem("admin_data");
     sessionStorage.removeItem("supervisor_authed");
@@ -420,8 +519,7 @@ export default function AdminDashboard() {
 
   async function handleSave() {
     setSaving(true);
-    await updateCampaign(campaign);
-    invalidateCampaignCache(campaign.id);
+    await persistCampaign(campaign);
     setSaving(false);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
@@ -781,6 +879,29 @@ export default function AdminDashboard() {
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span className="hidden md:inline">Clear DB</span>
+              </button>
+            )}
+            {sessionExpiresAt && (
+              <button
+                type="button"
+                onClick={handleRefreshToken}
+                disabled={refreshingToken}
+                title="Click to refresh 1-hour session token"
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-mono font-bold bg-white/5 border border-white/10 hover:border-teal-500/40 hover:bg-white/10 text-white/80 transition-all cursor-pointer"
+              >
+                <Clock className={`w-3.5 h-3.5 ${refreshingToken ? "animate-spin text-teal-400" : "text-teal-400"}`} />
+                <span>
+                  {(() => {
+                    const diff = Math.max(0, sessionExpiresAt - currentTimeMs);
+                    const mins = Math.floor(diff / 60000);
+                    const secs = Math.floor((diff % 60000) / 1000);
+                    if (mins > 0) return `${mins}m left`;
+                    return `${secs}s left`;
+                  })()}
+                </span>
+                <span className="text-[9px] font-sans uppercase font-bold text-teal-300 opacity-60">
+                  {refreshingToken ? "..." : "↻"}
+                </span>
               </button>
             )}
             <button onClick={handleLogout} className="p-2 rounded-xl text-xs transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.3)" }}>

@@ -18,7 +18,7 @@ import {
   isLightColor,
   getAmbientGlowOpacity,
 } from "@/lib/colors";
-import { Loader2, MapPin, ChevronRight, RotateCcw, Search, X, Lock, Eye, EyeOff } from "lucide-react";
+import { Loader2, MapPin, ChevronRight, RotateCcw, Search, X, Lock, Eye, EyeOff, Clock } from "lucide-react";
 import RegistrationForm, { RegistrationValues } from "@/components/RegistrationForm";
 import SpinWheel from "@/components/SpinWheel";
 import WinnerModal from "@/components/WinnerModal";
@@ -27,6 +27,7 @@ type KioskStep = "loading" | "not-found" | "pick-store" | "pin-entry" | "registe
 
 export default function KioskPage() {
   const [campaign, setCampaign] = useState<Campaign | null>(null);
+  const [campaignSlug, setCampaignSlug] = useState("");
   const [step, setStep] = useState<KioskStep>("loading");
 
   // Store chosen for this session — persists across spins
@@ -36,11 +37,15 @@ export default function KioskPage() {
   const [storeInventory, setStoreInventory] = useState<Record<string, number>>({});
 
   // PIN gate state — set when a store with a PIN is selected
-  const [pendingStore, setPendingStore] = useState<{ code: string; name: string; pin: string } | null>(null);
+  const [pendingStore, setPendingStore] = useState<{ code: string; name: string } | null>(null);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pinLoading, setPinLoading] = useState(false);
+
+  // BA 1-Hour Session state
+  const [baExpiresAt, setBaExpiresAt] = useState<number | null>(null);
+  const [baTimeRemaining, setBaTimeRemaining] = useState("");
 
   // Per-spin participant state
   const [participant, setParticipant] = useState<RegistrationValues | null>(null);
@@ -67,6 +72,7 @@ export default function KioskPage() {
       setStep("not-found");
       return;
     }
+    setCampaignSlug(campaignId);
 
     const unsub = subscribeCampaign(campaignId, (c) => {
       if (!c || !c.active || !c.prizes?.length) {
@@ -92,42 +98,171 @@ export default function KioskPage() {
     return () => unsub();
   }, [campaign?.id, storeCode]);
 
-  function handlePickStore(code: string, name: string, pin?: string) {
+  // Restore saved BA kiosk session from localStorage if still within 1 hour
+  useEffect(() => {
+    if (!campaignSlug) return;
+    try {
+      const raw = localStorage.getItem(`kiosk_ba_${campaignSlug}`);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (saved.expiresAt && Date.now() < saved.expiresAt && saved.code) {
+          setStoreCode(saved.code);
+          setStoreName(saved.name || saved.code);
+          setBaExpiresAt(saved.expiresAt);
+          setStep((curr) => (curr === "loading" || curr === "pick-store" ? "register" : curr));
+        } else {
+          localStorage.removeItem(`kiosk_ba_${campaignSlug}`);
+        }
+      }
+    } catch {}
+  }, [campaignSlug]);
+
+  // Watchdog timer: enforces 1-hour BA token expiration and updates countdown
+  useEffect(() => {
+    if (!storeCode || !baExpiresAt) return;
+
+    const checkTimer = () => {
+      const diff = baExpiresAt - Date.now();
+      if (diff <= 0) {
+        // BA Session has expired after 1 hour!
+        const expiredStoreCode = storeCode;
+        const expiredStoreName = storeName;
+        const storeObj = campaign?.stores?.find((s) => s.code === expiredStoreCode);
+
+        try {
+          localStorage.removeItem(`kiosk_ba_${campaignSlug}`);
+        } catch {}
+
+        setStoreCode("");
+        setStoreName("");
+        setBaExpiresAt(null);
+        setBaTimeRemaining("");
+        setIsSpinning(false);
+        setSpinningPrizes(null);
+        setParticipant(null);
+
+        const requiresPin = Boolean(storeObj?.hasPin || storeObj?.pin || campaign?.adminPin);
+        if (requiresPin) {
+          setPendingStore({
+            code: expiredStoreCode,
+            name: expiredStoreName || expiredStoreCode,
+          });
+          setPinInput("");
+          setPinError("⏱️ Your 1-hour BA session has expired. Please re-enter store PIN to resume.");
+          setStep("pin-entry");
+        } else {
+          setStep("pick-store");
+        }
+      } else {
+        const mins = Math.floor(diff / 60000);
+        const secs = Math.floor((diff % 60000) / 1000);
+        if (mins > 0) {
+          setBaTimeRemaining(`${mins}m left`);
+        } else {
+          setBaTimeRemaining(`${secs}s left`);
+        }
+      }
+    };
+
+    checkTimer();
+    const interval = setInterval(checkTimer, 1000);
+    return () => clearInterval(interval);
+  }, [storeCode, baExpiresAt, campaign, campaignSlug, storeName]);
+
+  async function handleRefreshBaSession() {
+    try {
+      const res = await fetch("/api/auth/refresh", { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.success && data.expiresAt) {
+        setBaExpiresAt(data.expiresAt);
+        try {
+          localStorage.setItem(
+            `kiosk_ba_${campaignSlug}`,
+            JSON.stringify({ code: storeCode, name: storeName, expiresAt: data.expiresAt })
+          );
+        } catch {}
+      }
+    } catch {
+      // Local fallback extension
+      const newExp = Date.now() + 60 * 60 * 1000;
+      setBaExpiresAt(newExp);
+      try {
+        localStorage.setItem(
+          `kiosk_ba_${campaignSlug}`,
+          JSON.stringify({ code: storeCode, name: storeName, expiresAt: newExp })
+        );
+      } catch {}
+    }
+  }
+
+  function handlePickStore(code: string, name: string, isProtected?: boolean) {
     setStoreSearch("");
-    if (pin) {
-      // Store has a PIN — show PIN entry gate first
-      setPendingStore({ code, name, pin });
+    if (isProtected) {
+      // Store has a dedicated PIN or campaign-wide PIN — show PIN entry gate first
+      setPendingStore({ code, name });
       setPinInput("");
       setPinError("");
       setShowPin(false);
       setStep("pin-entry");
     } else {
-      // No PIN — proceed directly to registration
+      // No PIN configured — proceed directly to registration with 1-hour session
+      const expiresAt = Date.now() + 60 * 60 * 1000;
       setStoreCode(code);
       setStoreName(name);
+      setBaExpiresAt(expiresAt);
+      try {
+        localStorage.setItem(
+          `kiosk_ba_${campaignSlug}`,
+          JSON.stringify({ code, name, expiresAt })
+        );
+      } catch {}
       setStep("register");
     }
   }
 
-  function handlePinSubmit(e: React.FormEvent) {
+  async function handlePinSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!pendingStore) return;
+    if (!pendingStore || !campaign) return;
     setPinLoading(true);
     setPinError("");
-    // Small artificial delay so it doesn't feel instant (prevents brute-force feel)
-    setTimeout(() => {
-      if (pinInput.trim() === pendingStore.pin.trim()) {
-        setStoreCode(pendingStore.code);
-        setStoreName(pendingStore.name);
-        setPendingStore(null);
+
+    try {
+      const res = await fetch("/api/auth/ba-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeCode: pendingStore.code,
+          pin: pinInput.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setPinError(data.error || "Incorrect PIN. Please try again.");
         setPinInput("");
-        setStep("register");
-      } else {
-        setPinError("Incorrect PIN. Please try again.");
-        setPinInput("");
+        setPinLoading(false);
+        return;
       }
+
+      const expiresAt = data.expiresAt || Date.now() + 60 * 60 * 1000;
+      setStoreCode(pendingStore.code);
+      setStoreName(pendingStore.name);
+      setBaExpiresAt(expiresAt);
+      try {
+        localStorage.setItem(
+          `kiosk_ba_${campaignSlug}`,
+          JSON.stringify({ code: pendingStore.code, name: pendingStore.name, expiresAt })
+        );
+      } catch {}
+      setPendingStore(null);
+      setPinInput("");
+      setStep("register");
+    } catch {
+      setPinError("Connection error. Could not verify PIN. Please try again.");
+    } finally {
       setPinLoading(false);
-    }, 350);
+    }
   }
 
   async function handleRegister(values: RegistrationValues) {
@@ -157,6 +292,10 @@ export default function KioskPage() {
 
   async function handleSpinClick() {
     if (!campaign || isSpinning || !participant) return;
+    if (baExpiresAt && Date.now() >= baExpiresAt) {
+      setSpinError("⏱️ Session expired after 1 hour. Please enter your PIN to continue.");
+      return;
+    }
     const effective = getEffectivePrizes(campaign, storeCode, storeInventory);
     if (!effective.length) {
       setSpinError("No prizes currently available for this store.");
@@ -300,6 +439,18 @@ export default function KioskPage() {
               )}
               <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{campaign.name}</h1>
               <p className="text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>Select your store to begin</p>
+              {storeCode && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setStep("register")}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all hover:bg-white/10 cursor-pointer"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.7)" }}
+                  >
+                    ✕ Cancel & return to <span style={{ color: gc }}>{storeName || storeCode}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Search input */}
@@ -354,10 +505,11 @@ export default function KioskPage() {
                     </span>
                   );
                 }
+                const isProtected = Boolean(s.hasPin || s.pin);
                 return (
                   <button
                     key={s.id || s.code}
-                    onClick={() => { handlePickStore(s.code, s.name, s.pin); }}
+                    onClick={() => { handlePickStore(s.code, s.name, isProtected); }}
                     className="w-full flex items-center justify-between px-5 py-4 rounded-2xl text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
                     style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${gc}30`, backdropFilter: "blur(16px)" }}
                   >
@@ -375,7 +527,7 @@ export default function KioskPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      {s.pin && (
+                      {isProtected && (
                         <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase" style={{ background: `${gc}20`, color: gc, border: `1px solid ${gc}35` }}>
                           <Lock className="w-2.5 h-2.5" /> PIN
                         </span>
@@ -523,8 +675,22 @@ export default function KioskPage() {
             )}
             <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{campaign.name}</h1>
             {storeName && (
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold" style={{ background: `${gc}18`, border: `1px solid ${gc}35`, color: gc }}>
-                <MapPin className="w-3 h-3" /> {storeName}
+              <div className="flex items-center justify-center gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold" style={{ background: `${gc}18`, border: `1px solid ${gc}35`, color: gc }}>
+                  <MapPin className="w-3 h-3" /> {storeName}
+                </div>
+                {baTimeRemaining && (
+                  <button
+                    type="button"
+                    onClick={handleRefreshBaSession}
+                    title="Click to refresh BA session for another 1 hour"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-white/5 border border-white/10 hover:border-teal-500/30 text-white/60 hover:text-teal-300 transition-all cursor-pointer"
+                  >
+                    <Clock className="w-2.5 h-2.5 text-teal-400" />
+                    <span>{baTimeRemaining}</span>
+                    <span className="text-[8px] opacity-60">↻</span>
+                  </button>
+                )}
               </div>
             )}
             <p className="text-xs" style={{ color: "rgba(255,255,255,0.5)" }}>{campaign.welcomeMessage}</p>
@@ -564,8 +730,22 @@ export default function KioskPage() {
               Welcome, <span style={{ color: nameHighlightColor }}>{participant.name}</span>! 👋
             </p>
             {storeName && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold" style={{ background: `${gc}18`, border: `1px solid ${gc}35`, color: gc }}>
-                <MapPin className="w-3 h-3" /> {storeName}
+              <div className="flex items-center justify-center gap-2 flex-wrap">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold" style={{ background: `${gc}18`, border: `1px solid ${gc}35`, color: gc }}>
+                  <MapPin className="w-3 h-3" /> {storeName}
+                </div>
+                {baTimeRemaining && (
+                  <button
+                    type="button"
+                    onClick={handleRefreshBaSession}
+                    title="Click to refresh BA session for another 1 hour"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-white/5 border border-white/10 hover:border-teal-500/30 text-white/60 hover:text-teal-300 transition-all cursor-pointer"
+                  >
+                    <Clock className="w-2.5 h-2.5 text-teal-400" />
+                    <span>{baTimeRemaining}</span>
+                    <span className="text-[8px] opacity-60">↻</span>
+                  </button>
+                )}
               </div>
             )}
             <p className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.5)" }}>

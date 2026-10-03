@@ -56,20 +56,19 @@ export default function SuperAdminDashboard() {
   const [wiping, setWiping] = useState(false);
 
   useEffect(() => {
-    // Check if already authenticated in server session or session storage
+    // Check if already authenticated in server session (1-hour expiry)
     fetch("/api/auth/session")
       .then((res) => res.json())
       .then((data) => {
         if (data.superAdminSession) {
           setAuthenticated(true);
-        } else if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
-          setAuthenticated(true);
+        } else {
+          setAuthenticated(false);
+          sessionStorage.removeItem("super_admin_authed");
         }
       })
       .catch(() => {
-        if (typeof window !== "undefined" && sessionStorage.getItem("super_admin_authed") === "true") {
-          setAuthenticated(true);
-        }
+        setAuthenticated(false);
       });
 
     // Always check if a Super Admin account has been configured
@@ -88,14 +87,31 @@ export default function SuperAdminDashboard() {
   async function loadData() {
     setLoading(true);
     try {
-      const [allC, allP] = await Promise.all([
-        getAllCampaigns(),
-        getAllGlobalParticipants(),
-      ]);
-      setCampaigns(allC);
-      setAllParticipants(allP);
+      const res = await fetch("/api/super-admin/data");
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCampaigns(data.campaigns || []);
+        setAllParticipants(data.participants || []);
+      } else {
+        // Fallback during transition
+        const [allC, allP] = await Promise.all([
+          getAllCampaigns(),
+          getAllGlobalParticipants(),
+        ]);
+        setCampaigns(allC);
+        setAllParticipants(allP);
+      }
     } catch (err) {
       console.error("Failed to load super admin data:", err);
+      // Fallback
+      try {
+        const [allC, allP] = await Promise.all([
+          getAllCampaigns(),
+          getAllGlobalParticipants(),
+        ]);
+        setCampaigns(allC);
+        setAllParticipants(allP);
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -118,24 +134,33 @@ export default function SuperAdminDashboard() {
     setWipeError("");
     setWiping(true);
     try {
-      const cfg = await getSuperAdminConfig();
-      if (!cfg || wipePasswordInput !== cfg.password) {
-        setWipeError("Incorrect Super Admin password. Global wipe denied.");
+      const res = await fetch("/api/admin/clear-data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: "all",
+          password: wipePasswordInput,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setWipeError(data.error || "Incorrect Super Admin password. Global wipe denied.");
         setWiping(false);
         return;
       }
 
-      const res = await clearCampaignData();
       await loadData();
       setShowWipeModal(false);
       setWipePasswordInput("");
-      alert(`✅ System database wiped! Cleared ${res.deletedCount} participant record(s) from Firestore.`);
+      alert(`✅ System database wiped! Cleared ${data.deletedCount} participant record(s) from Firestore.`);
     } catch (err) {
-      setWipeError("Failed to wipe database. Check Firestore permissions.");
+      setWipeError("Failed to wipe database. Check network connection.");
     } finally {
       setWiping(false);
     }
   }
+
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();

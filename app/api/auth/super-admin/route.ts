@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSuperAdminConfig } from "@/lib/campaign";
-import { createSignedSession } from "@/lib/auth-session";
+import { getSuperAdminConfig, setSuperAdminConfig } from "@/lib/campaign";
+import { createSignedSession, verifyPassword, hashPassword } from "@/lib/auth-session";
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,12 +24,23 @@ export async function POST(request: NextRequest) {
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanPassword = String(password);
 
-    if (cfg.email.toLowerCase() !== cleanEmail || cfg.password !== cleanPassword) {
+    if (cfg.email.toLowerCase() !== cleanEmail || !verifyPassword(cleanPassword, cfg.password)) {
       return NextResponse.json(
         { error: "Invalid master email or password." },
         { status: 401 }
       );
     }
+
+    // Auto-upgrade plain text password to cryptographically salted PBKDF2 hash
+    if (!cfg.password.includes(":")) {
+      await setSuperAdminConfig({
+        email: cfg.email,
+        password: hashPassword(cleanPassword),
+      }).catch((err) => {
+        console.warn("Failed to auto-upgrade super admin password hash:", err);
+      });
+    }
+
 
     // Authentication verified
     const token = createSignedSession({
@@ -45,6 +56,7 @@ export async function POST(request: NextRequest) {
         email: cfg.email,
         name: "Super Admin",
       },
+      expiresAt: Date.now() + 60 * 60 * 1000,
     });
 
     response.cookies.set("super_admin_session", token, {
@@ -52,7 +64,7 @@ export async function POST(request: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: 60 * 60 * 24, // 24 hours
+      maxAge: 60 * 60, // 1 hour (3600 seconds)
     });
 
     return response;

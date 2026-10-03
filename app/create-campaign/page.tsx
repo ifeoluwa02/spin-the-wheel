@@ -80,18 +80,21 @@ export default function CreateCampaignWizard() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       setBaseUrl(window.location.origin);
-      if (sessionStorage.getItem("super_admin_authed") === "true") {
-        setAuthenticated(true);
-        setConfigLoaded(true);
-        return;
-      }
-      getSuperAdminConfig().then(cfg => {
-        setConfigLoaded(true);
-        if (!cfg) {
-          // No config yet — redirect to super-admin for first-run setup
-          window.location.href = "/super-admin";
-        }
-      });
+      // Verify signed server session (1-hour session cookie)
+      fetch("/api/auth/session")
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.superAdminSession) {
+            setAuthenticated(true);
+          } else {
+            setAuthenticated(false);
+          }
+          setConfigLoaded(true);
+        })
+        .catch(() => {
+          setAuthenticated(false);
+          setConfigLoaded(true);
+        });
     }
   }, []);
 
@@ -100,19 +103,29 @@ export default function CreateCampaignWizard() {
     setAuthLoading(true);
     setAuthError("");
     try {
-      const cfg = await getSuperAdminConfig();
-      if (cfg && authEmail.trim().toLowerCase() === cfg.email.toLowerCase() && authPassword === cfg.password) {
-        setAuthenticated(true);
-        sessionStorage.setItem("super_admin_authed", "true");
-      } else {
-        setAuthError("Incorrect email or password.");
+      const res = await fetch("/api/auth/super-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authEmail,
+          password: authPassword,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || "Incorrect email or password.");
+        return;
       }
-    } catch (err) {
-      setAuthError("Login failed. Check your Firebase connection.");
+
+      setAuthenticated(true);
+    } catch {
+      setAuthError("Login failed. Check your network connection.");
     } finally {
       setAuthLoading(false);
     }
   }
+
 
   useEffect(() => {
     if (campaignTitle && !slugEdited) {
