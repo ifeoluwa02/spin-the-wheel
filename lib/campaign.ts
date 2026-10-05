@@ -436,8 +436,6 @@ export async function setSuperAdminConfig(config: SuperAdminConfig): Promise<voi
     },
     { merge: true }
   );
-  // Keep legacy doc synced if permissions permit during transition
-  await setDoc(doc(db, "config", "superAdmin"), config).catch(() => {});
 }
 
 
