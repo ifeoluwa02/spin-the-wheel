@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=Rubik:wght@500;600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Rubik:wght@500;600;700;800&family=Nunito:wght@400;500;600;700;800&display=swap");
 
 :root {
   /* Brand Color Palette */
@@ -14,7 +14,7 @@
 
   /* Typography */
   --font-heading: 'Rubik', system-ui, sans-serif;
-  --font-body: 'Nunito', system-ui, sans-serif;
+  --font-body: 'Inter', system-ui, sans-serif;
 
   /* UI Tokens */
   --bg-deep: #0D1B2A;

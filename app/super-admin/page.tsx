@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Campaign, Participant, SuperAdminConfig, CampaignAdmin } from "@/types";
+import type { Campaign, Participant, CampaignAdmin } from "@/types";
 import {
   getAllCampaigns,
   getAllGlobalParticipants,
   updateCampaign,
   clearCampaignData,
-  getSuperAdminConfig,
-  setSuperAdminConfig,
   getAllCampaignAdmins,
 } from "@/lib/campaign";
 import Link from "next/link";
@@ -21,19 +19,12 @@ import {
 
 export default function SuperAdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   // Login form state
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
   const [loginLoading, setLoginLoading] = useState(false);
-  // First-run setup state
-  const [configLoaded, setConfigLoaded] = useState(false);
-  const [hasConfig, setHasConfig] = useState<boolean | null>(null);
-  const [setupEmail, setSetupEmail] = useState("");
-  const [setupPassword, setSetupPassword] = useState("");
-  const [setupConfirm, setSetupConfirm] = useState("");
-  const [setupError, setSetupError] = useState("");
-  const [setupLoading, setSetupLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
@@ -69,13 +60,10 @@ export default function SuperAdminDashboard() {
       })
       .catch(() => {
         setAuthenticated(false);
+      })
+      .finally(() => {
+        setAuthChecking(false);
       });
-
-    // Always check if a Super Admin account has been configured
-    getSuperAdminConfig().then(cfg => {
-      setHasConfig(!!cfg);
-      setConfigLoaded(true);
-    });
   }, []);
 
   useEffect(() => {
@@ -191,22 +179,6 @@ export default function SuperAdminDashboard() {
     }
   }
 
-  async function handleFirstRunSetup(e: React.FormEvent) {
-    e.preventDefault();
-    if (setupPassword !== setupConfirm) { setSetupError("Passwords do not match."); return; }
-    if (setupPassword.length < 8) { setSetupError("Password must be at least 8 characters."); return; }
-    setSetupLoading(true);
-    setSetupError("");
-    try {
-      await setSuperAdminConfig({ email: setupEmail.trim().toLowerCase(), password: setupPassword });
-      setHasConfig(true);
-      setLoginError("");
-    } catch (err) {
-      setSetupError("Failed to create account. Check Firestore permissions.");
-    } finally {
-      setSetupLoading(false);
-    }
-  }
 
   async function handleLogout() {
     try {
@@ -345,65 +317,11 @@ export default function SuperAdminDashboard() {
   const globalWinRate = totalSpins ? Math.round((totalWinners / totalSpins) * 100) : 0;
   const recentWinners = allParticipants.filter(p => p.won).slice(0, 8);
 
-  // Show spinner while checking Firestore config
-  if (!configLoaded || (loading && authenticated)) {
+  // Show spinner while checking server session
+  if (authChecking || (loading && authenticated)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#070d14]">
         <div className="w-8 h-8 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
-      </div>
-    );
-  }
-
-  // ─── FIRST-RUN SETUP ────────────────────────────────────────────────────────
-  if (!hasConfig) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4" style={{
-        background: "radial-gradient(ellipse at 50% 30%, rgba(245,158,11,0.18) 0%, transparent 60%), #070d14",
-        fontFamily: "Nunito, sans-serif",
-      }}>
-        <form onSubmit={handleFirstRunSetup} className="w-full max-w-md">
-          <div className="rounded-3xl p-8 space-y-6" style={{
-            background: "rgba(255,255,255,0.03)", backdropFilter: "blur(24px)",
-            border: "1px solid rgba(255,255,255,0.08)", boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
-          }}>
-            <div className="text-center space-y-3">
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto" style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}>
-                <Shield className="w-8 h-8 text-white" />
-              </div>
-              <h2 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>Create Master Account</h2>
-              <p className="text-xs" style={{ color: "rgba(255,255,255,0.4)" }}>First-time setup — create your Super Admin credentials. Store these safely.</p>
-            </div>
-
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Master Email</label>
-                <input type="email" value={setupEmail} onChange={e => setSetupEmail(e.target.value)} placeholder="master@agency.com" required
-                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
-                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Master Password</label>
-                <input type="password" value={setupPassword} onChange={e => setSetupPassword(e.target.value)} placeholder="Min. 8 characters" required minLength={8}
-                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
-                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold uppercase tracking-wider" style={{ color: "rgba(255,255,255,0.4)" }}>Confirm Password</label>
-                <input type="password" value={setupConfirm} onChange={e => setSetupConfirm(e.target.value)} placeholder="Repeat password" required
-                  className="w-full rounded-xl px-4 py-3 text-sm text-white outline-none transition-all"
-                  style={{ background: "rgba(255,255,255,0.06)", border: "1.5px solid rgba(255,255,255,0.1)" }} />
-              </div>
-              {setupError && <p className="flex items-center gap-1.5 text-xs font-semibold text-red-400"><X className="w-3.5 h-3.5" /> {setupError}</p>}
-            </div>
-
-            <button type="submit" disabled={setupLoading}
-              className="w-full py-4 rounded-xl font-black text-white text-base flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-              style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", boxShadow: "0 8px 24px rgba(245,158,11,0.35)", fontFamily: "Rubik, sans-serif" }}>
-              {setupLoading ? "Creating Account..." : "Create Master Account"}
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </form>
       </div>
     );
   }

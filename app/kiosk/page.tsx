@@ -384,7 +384,7 @@ export default function KioskPage() {
       className="relative min-h-screen w-full flex flex-col items-center overflow-x-hidden"
       style={{
         background: `radial-gradient(circle at 15% 10%, ${gc}35 0%, transparent 45%), radial-gradient(circle at 85% 20%, ${g2}30 0%, transparent 45%), radial-gradient(circle at 50% 65%, ${gc}20 0%, transparent 50%), ${bgColor}`,
-        fontFamily: "Nunito, sans-serif",
+        fontFamily: "Inter, sans-serif",
       }}
     >
       {/* Ambient orbs */}
@@ -429,25 +429,25 @@ export default function KioskPage() {
             )
           : activeStores;
         return (
-          <div className="relative z-10 w-full max-w-md px-5 py-12 flex flex-col items-center gap-6">
+          <div className="relative z-10 w-full max-w-lg px-4 sm:px-6 py-10 flex flex-col items-center gap-6">
             {/* Brand header */}
             <div className="text-center space-y-3">
               {campaign.logoUrl ? (
-                <img src={campaign.logoUrl} alt={campaign.name} className="h-14 w-auto mx-auto object-contain" style={{ filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.5))" }} />
+                <img src={campaign.logoUrl} alt={campaign.name} className="h-16 w-auto mx-auto object-contain" style={{ filter: "drop-shadow(0 4px 16px rgba(0,0,0,0.5))" }} />
               ) : (
-                <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center text-3xl" style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}>🎯</div>
+                <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center text-3xl" style={{ background: `linear-gradient(135deg, ${gc}, ${g2})` }}>🎯</div>
               )}
-              <h1 className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{campaign.name}</h1>
-              <p className="text-sm" style={{ color: "rgba(255,255,255,0.45)" }}>Select your store to begin</p>
+              <h1 className="text-2xl sm:text-3xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>{campaign.name}</h1>
+              <p className="text-sm font-medium text-white/60">Select your assigned store to begin</p>
               {storeCode && (
                 <div className="pt-1">
                   <button
                     type="button"
                     onClick={() => setStep("register")}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all hover:bg-white/10 cursor-pointer"
-                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.7)" }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold transition-all hover:bg-white/10 cursor-pointer"
+                    style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)", color: "rgba(255,255,255,0.85)" }}
                   >
-                    ✕ Cancel & return to <span style={{ color: gc }}>{storeName || storeCode}</span>
+                    ✕ Cancel & return to <span className="font-extrabold" style={{ color: gc }}>{storeName || storeCode}</span>
                   </button>
                 </div>
               )}
@@ -456,7 +456,7 @@ export default function KioskPage() {
             {/* Search input */}
             <div className="w-full relative">
               <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                <Search className="w-4 h-4" style={{ color: storeSearch ? gc : "rgba(255,255,255,0.3)" }} />
+                <Search className="w-5 h-5" style={{ color: storeSearch ? gc : "rgba(255,255,255,0.4)" }} />
               </div>
               <input
                 type="text"
@@ -464,33 +464,33 @@ export default function KioskPage() {
                 value={storeSearch}
                 onChange={e => setStoreSearch(e.target.value)}
                 autoComplete="off"
-                className="w-full pl-10 pr-10 py-3.5 rounded-2xl text-sm text-white outline-none transition-all"
+                className="w-full pl-12 pr-11 py-4 rounded-2xl text-base text-white placeholder:text-white/35 outline-none transition-all"
                 style={{
-                  background: "rgba(255,255,255,0.06)",
-                  border: storeSearch ? `1px solid ${gc}60` : "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(255,255,255,0.07)",
+                  border: storeSearch ? `1.5px solid ${gc}` : "1.5px solid rgba(255,255,255,0.15)",
                   backdropFilter: "blur(16px)",
-                  boxShadow: storeSearch ? `0 0 0 3px ${gc}15` : "none",
+                  boxShadow: storeSearch ? `0 0 0 3px ${gc}25` : "none",
                 }}
               />
               {storeSearch && (
                 <button
                   onClick={() => setStoreSearch("")}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 rounded-full transition-all hover:opacity-70"
-                  style={{ color: "rgba(255,255,255,0.4)" }}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all hover:opacity-80"
+                  style={{ color: "rgba(255,255,255,0.6)" }}
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4" />
                 </button>
               )}
             </div>
 
             {/* Store list */}
-            <div className="w-full space-y-2 max-h-[60vh] overflow-y-auto pr-0.5">
+            <div className="w-full space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {visibleStores.length === 0 ? (
                 <div className="py-12 text-center space-y-2">
                   <div className="text-4xl">🔍</div>
-                  <p className="text-sm font-bold text-white">No stores found</p>
-                  <p className="text-xs" style={{ color: "rgba(255,255,255,0.35)" }}>Try a different search term</p>
-                  <button onClick={() => setStoreSearch("")} className="mt-2 text-xs font-bold transition-all hover:opacity-70" style={{ color: gc }}>Clear search</button>
+                  <p className="text-base font-bold text-white">No stores found</p>
+                  <p className="text-xs text-white/50">Try a different search term or check spelling</p>
+                  <button onClick={() => setStoreSearch("")} className="mt-2 text-xs font-bold transition-all hover:opacity-80 underline underline-offset-4" style={{ color: gc }}>Clear search</button>
                 </div>
               ) : visibleStores.map((s) => {
                 // Highlight matched text
@@ -500,7 +500,7 @@ export default function KioskPage() {
                   return (
                     <span>
                       {text.slice(0, idx)}
-                      <mark style={{ background: `${gc}40`, color: gc, borderRadius: "2px", padding: "0 1px" }}>{text.slice(idx, idx + query.length)}</mark>
+                      <mark style={{ background: `${gc}55`, color: "#ffffff", borderRadius: "3px", padding: "0 2px" }}>{text.slice(idx, idx + query.length)}</mark>
                       {text.slice(idx + query.length)}
                     </span>
                   );
@@ -510,29 +510,61 @@ export default function KioskPage() {
                   <button
                     key={s.id || s.code}
                     onClick={() => { handlePickStore(s.code, s.name, isProtected); }}
-                    className="w-full flex items-center justify-between px-5 py-4 rounded-2xl text-left transition-all hover:scale-[1.01] active:scale-[0.99]"
-                    style={{ background: "rgba(255,255,255,0.05)", border: `1px solid ${gc}30`, backdropFilter: "blur(16px)" }}
+                    className="w-full flex items-center justify-between p-4 sm:p-5 rounded-2xl text-left transition-all duration-200 hover:scale-[1.015] active:scale-[0.985] cursor-pointer"
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      border: "1.5px solid rgba(255,255,255,0.12)",
+                      backdropFilter: "blur(16px)",
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = `${gc}90`; e.currentTarget.style.background = "rgba(255,255,255,0.09)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `${gc}20`, border: `1px solid ${gc}40` }}>
-                        <MapPin className="w-4 h-4" style={{ color: gc }} />
+                    <div className="flex items-center gap-3.5 min-w-0 pr-2">
+                      <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 shadow-md" style={{ background: `${gc}25`, border: `1.5px solid ${gc}50` }}>
+                        <MapPin className="w-5 h-5" style={{ color: gc }} />
                       </div>
-                      <div>
-                        <p className="text-sm font-black text-white">{highlight(s.name)}</p>
-                        {(s.state || s.city) && (
-                          <p className="text-[11px] mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>
-                            {s.state ? highlight(s.state) : null}{s.city ? <span>, {highlight(s.city)}</span> : null}
-                          </p>
+                      <div className="min-w-0">
+                        <p className="text-base sm:text-[17px] font-bold text-white tracking-tight leading-snug truncate">{highlight(s.name)}</p>
+                        {(s.state || s.city || s.code) && (
+                          <div className="flex items-center flex-wrap gap-1.5 mt-1.5">
+                            {(s.state || s.city) && (
+                              <span
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold text-white tracking-wide"
+                                style={{
+                                  background: "rgba(255,255,255,0.12)",
+                                  border: "1px solid rgba(255,255,255,0.22)",
+                                }}
+                              >
+                                {s.city ? highlight(s.city) : null}
+                                {s.city && s.state ? <span className="opacity-40">•</span> : null}
+                                {s.state ? <span className="font-extrabold">{highlight(s.state)}</span> : null}
+                              </span>
+                            )}
+                            {s.code && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-mono font-bold tracking-wider uppercase text-white/80"
+                                style={{
+                                  background: "rgba(0,0,0,0.35)",
+                                  border: "1px solid rgba(255,255,255,0.15)",
+                                }}
+                              >
+                                #{highlight(s.code)}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
                       {isProtected && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase" style={{ background: `${gc}20`, color: gc, border: `1px solid ${gc}35` }}>
-                          <Lock className="w-2.5 h-2.5" /> PIN
+                        <span
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider text-white"
+                          style={{ background: `${gc}25`, border: `1px solid ${gc}60` }}
+                        >
+                          <Lock className="w-3 h-3 text-amber-300" /> PIN
                         </span>
                       )}
-                      <ChevronRight className="w-4 h-4" style={{ color: "rgba(255,255,255,0.3)" }} />
+                      <ChevronRight className="w-5 h-5 text-white/40" />
                     </div>
                   </button>
                 );
@@ -541,7 +573,7 @@ export default function KioskPage() {
 
             {/* Result count hint */}
             {query && visibleStores.length > 0 && (
-              <p className="text-[11px] font-bold" style={{ color: "rgba(255,255,255,0.25)" }}>
+              <p className="text-xs font-bold text-white/40">
                 {visibleStores.length} store{visibleStores.length !== 1 ? "s" : ""} match
               </p>
             )}
