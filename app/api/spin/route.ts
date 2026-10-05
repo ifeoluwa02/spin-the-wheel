@@ -74,7 +74,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Validate & Normalize Phone Number
+    // 2. Validate Participant Name (Enforce 2-60 chars, letters only, no numbers, reject PHP/HTML/script code injection)
+    const rawName = typeof participant.name === "string" ? participant.name.trim() : "";
+    if (!rawName || rawName.length < 2 || rawName.length > 60) {
+      return NextResponse.json(
+        { error: "Please enter a valid full name between 2 and 60 characters." },
+        { status: 400 }
+      );
+    }
+
+    if (/\d/.test(rawName)) {
+      return NextResponse.json(
+        { error: "Name must not contain numbers." },
+        { status: 400 }
+      );
+    }
+
+    if (/[<>{}\[\]\\\/;`$#%^*+=~|]/.test(rawName) || /<\?php/i.test(rawName)) {
+      return NextResponse.json(
+        { error: "Name contains invalid special or executable characters." },
+        { status: 400 }
+      );
+    }
+
+    // Normalize sanitized name
+    participant.name = rawName.replace(/\s+/g, " ");
+
+    // 3. Validate & Normalize Phone Number
     const rawPhone = String(participant.phone || "");
     const normalizedPhone = normalizeNigerianPhone(rawPhone);
     if (!normalizedPhone) {
