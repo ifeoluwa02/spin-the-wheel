@@ -36,7 +36,11 @@ export default function RegistrationForm({
 
   const btnTextColor = getGradientContrastColor(accentColor, secondaryColor || accentColor);
 
-  const nameValid = name.trim().length >= 2;
+  const nameTrimmed = name.trim();
+  const hasNoNumbers = !/\d/.test(nameTrimmed);
+  const hasNoInjectionChars = !/[<>{}\[\]\\\/;`$#%^*+=~|]/.test(nameTrimmed);
+  const nameValid = nameTrimmed.length >= 2 && nameTrimmed.length <= 60 && hasNoNumbers && hasNoInjectionChars;
+
   const phoneValid = isValidNigerianPhone(phone);
   const ageValid = Boolean(ageRange);
   const genderValid = Boolean(gender);
@@ -48,7 +52,7 @@ export default function RegistrationForm({
     const normalizedPhone = normalizeNigerianPhone(phone);
     if (!canSubmit || !normalizedPhone) return;
     onSubmit({
-      name: name.trim(),
+      name: nameTrimmed.replace(/\s+/g, " "),
       phone: normalizedPhone,
       email: email.trim() || undefined,
       ageRange: ageRange || undefined,
@@ -60,8 +64,9 @@ export default function RegistrationForm({
     <form onSubmit={handleSubmit} noValidate className="w-full space-y-3.5">
       {/* Full Name */}
       <div className="space-y-1">
-        <label htmlFor="name" className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.45)" }}>
-          Full Name
+        <label htmlFor="name" className="flex items-center justify-between text-xs font-bold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.45)" }}>
+          <span>Full Name</span>
+          <span className="text-[10px] font-medium normal-case tracking-normal text-white/30">Letters only (2–60 chars)</span>
         </label>
         <div className="relative">
           <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: touched && !nameValid ? "rgba(248,113,113,0.7)" : "rgba(255,255,255,0.25)" }}>
@@ -71,6 +76,7 @@ export default function RegistrationForm({
             id="name"
             type="text"
             value={name}
+            maxLength={60}
             onChange={e => setName(e.target.value)}
             placeholder="e.g. Akin Omisakin"
             autoComplete="name"
@@ -87,7 +93,13 @@ export default function RegistrationForm({
         {touched && !nameValid && (
           <p className="flex items-center gap-1.5 text-[11px] font-semibold text-red-400">
             <AlertCircle className="w-3 h-3 flex-shrink-0" />
-            Please enter your full name.
+            {nameTrimmed.length < 2
+              ? "Please enter your full name (at least 2 characters)."
+              : /\d/.test(nameTrimmed)
+              ? "Name must not contain numbers."
+              : !hasNoInjectionChars
+              ? "Name contains invalid special characters."
+              : "Name must be 60 characters or less."}
           </p>
         )}
       </div>
