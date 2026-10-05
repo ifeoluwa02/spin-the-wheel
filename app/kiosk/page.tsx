@@ -714,7 +714,23 @@ export default function KioskPage() {
               />
             </div>
             {campaign.stores && campaign.stores.length > 0 && (
-              <button onClick={() => setStep("pick-store")} className="mt-4 w-full text-center text-xs font-bold transition-all hover:opacity-80" style={{ color: "rgba(255,255,255,0.3)" }}>
+              <button
+                onClick={() => {
+                  try {
+                    localStorage.removeItem(`kiosk_ba_${campaignSlug}`);
+                  } catch {}
+                  setStoreCode("");
+                  setStoreName("");
+                  setBaExpiresAt(null);
+                  setBaTimeRemaining("");
+                  setPendingStore(null);
+                  setPinInput("");
+                  setPinError("");
+                  setStep("pick-store");
+                }}
+                className="mt-4 w-full text-center text-xs font-bold transition-all hover:opacity-80 cursor-pointer"
+                style={{ color: "rgba(255,255,255,0.3)" }}
+              >
                 ← Change store
               </button>
             )}
