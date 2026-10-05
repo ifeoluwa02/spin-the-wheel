@@ -44,6 +44,8 @@ export interface StoreLocation {
    * If not specified, stock is divided equally across all stores: floor(prize.quantity / totalStores)
    */
   customAllocations?: Record<string, number>;
+  /** Timestamp when the store PIN was last rotated */
+  pinRotatedAt?: number;
 }
 
 export interface StoreInventoryRecord {

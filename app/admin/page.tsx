@@ -28,7 +28,7 @@ import {
   ExternalLink, Palette, Save, Activity, Target, Layers,
   ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
   UsersRound, PauseCircle, PlayCircle, Globe, Building2, Search, SlidersHorizontal,
-  Play, Pause, Package, Clock, RefreshCw,
+  Play, Pause, Package, Clock, RefreshCw, Key, FileSpreadsheet,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
@@ -59,6 +59,32 @@ export default function AdminDashboard() {
   const [showClearModal, setShowClearModal] = useState(false);
   const [clearPasswordInput, setClearPasswordInput] = useState("");
   const [clearError, setClearError] = useState("");
+
+  // Bulk Store PIN Rotation state
+  const [showRotatePinsModal, setShowRotatePinsModal] = useState(false);
+  const [rotateScopeState, setRotateScopeState] = useState<string>("all");
+  const [rotateOnlyActive, setRotateOnlyActive] = useState<boolean>(false);
+  const [rotatePinLength, setRotatePinLength] = useState<number>(4);
+  const [rotatePasswordInput, setRotatePasswordInput] = useState<string>("");
+  const [rotateLoading, setRotateLoading] = useState<boolean>(false);
+  const [rotateError, setRotateError] = useState<string>("");
+  const [copiedPinStoreId, setCopiedPinStoreId] = useState<string | null>(null);
+  const [rotatedResult, setRotatedResult] = useState<{
+    rotatedCount: number;
+    stores: Array<{
+      id: string;
+      name: string;
+      code: string;
+      city?: string;
+      state?: string;
+      oldPin?: string;
+      newPin: string;
+      rotatedAt: string;
+    }>;
+    csvContent: string;
+    filename: string;
+  } | null>(null);
+
   const [qrUrl, setQrUrl] = useState("");
   const [campaignSlug, setCampaignSlug] = useState("");
   const [luckyWinner, setLuckyWinner] = useState<Participant | null>(null);
@@ -451,6 +477,85 @@ export default function AdminDashboard() {
       setClearError("Failed to clear database. Check network connection.");
     } finally {
       setClearing(false);
+    }
+  }
+
+  function handleOpenRotatePinsModal() {
+    setRotateScopeState("all");
+    setRotateOnlyActive(false);
+    setRotatePinLength(4);
+    setRotatePasswordInput("");
+    setRotateError("");
+    setRotatedResult(null);
+    setShowRotatePinsModal(true);
+  }
+
+  function handleDownloadRotatedCsv(csvContent?: string, filename?: string) {
+    const content = csvContent || rotatedResult?.csvContent;
+    const name = filename || rotatedResult?.filename || "store_pins.csv";
+    if (!content) return;
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", name);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleConfirmRotatePins(e: React.FormEvent) {
+    e.preventDefault();
+    if (!rotatePasswordInput.trim()) {
+      setRotateError("Please enter your admin password to authorize PIN rotation.");
+      return;
+    }
+    setRotateLoading(true);
+    setRotateError("");
+
+    try {
+      const res = await fetch("/api/admin/rotate-pins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaignSlug,
+          password: rotatePasswordInput,
+          scopeState: rotateScopeState,
+          onlyActive: rotateOnlyActive,
+          pinLength: rotatePinLength,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setRotateError(data.error || "Failed to rotate store PINs.");
+        setRotateLoading(false);
+        return;
+      }
+
+      setRotatedResult(data);
+      // Auto-trigger CSV download
+      handleDownloadRotatedCsv(data.csvContent, data.filename);
+
+      // Immediately update local campaign.stores state
+      if (Array.isArray(data.stores) && campaign.stores) {
+        const pinMap = new Map<string, string>(
+          data.stores.map((s: { id?: string; code?: string; newPin: string }) => [
+            s.id || s.code || "",
+            String(s.newPin),
+          ])
+        );
+        const updatedStores: StoreLocation[] = campaign.stores.map((st): StoreLocation => {
+          const newPin = pinMap.get(st.id) || pinMap.get(st.code);
+          return newPin ? { ...st, pin: newPin, hasPin: true, pinRotatedAt: Date.now() } : st;
+        });
+        setCampaign({ ...campaign, stores: updatedStores });
+      }
+    } catch (err) {
+      setRotateError("Network error while rotating PINs. Please try again.");
+    } finally {
+      setRotateLoading(false);
     }
   }
 
@@ -1845,7 +1950,7 @@ export default function AdminDashboard() {
                     Real-time activation performance, TV links, QR codes & access control.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-semibold px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white/60">
                     {inactiveStoresCount > 0 ? (
                       <span className="text-amber-300 font-bold">⏸️ {inactiveStoresCount} store(s) paused</span>
@@ -1853,6 +1958,17 @@ export default function AdminDashboard() {
                       <span className="text-emerald-400 font-bold">✅ All {allCampaignStores.length} stores active</span>
                     )}
                   </span>
+                  {allCampaignStores.length > 0 && adminRole === "admin" && (
+                    <button
+                      type="button"
+                      onClick={handleOpenRotatePinsModal}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 hover:border-amber-500/50 transition-all cursor-pointer shadow-sm"
+                      title="Bulk rotate PINs across stores and export an audit spreadsheet"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      <span>Rotate Store PINs</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -2029,6 +2145,14 @@ export default function AdminDashboard() {
                                 {s.pin && (
                                   <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
                                     PIN: {s.pin}
+                                  </span>
+                                )}
+                                {s.pinRotatedAt && (
+                                  <span
+                                    className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-teal-500/15 text-teal-300 border border-teal-500/25"
+                                    title={`PIN rotated: ${new Date(s.pinRotatedAt).toLocaleString()}`}
+                                  >
+                                    🔄 {new Date(s.pinRotatedAt).toLocaleDateString()}
                                   </span>
                                 )}
                               </div>
@@ -2521,6 +2645,327 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk Store PIN Rotation Security Modal ── */}
+      {showRotatePinsModal && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50 animate-fadeIn"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={() => {
+            if (!rotateLoading) {
+              setShowRotatePinsModal(false);
+              setRotateError("");
+            }
+          }}
+        >
+          <div
+            className="rounded-3xl p-6 sm:p-7 max-w-xl w-full space-y-5 bg-[#0b131e] border border-amber-500/30 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/10 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0 ${
+                    rotatedResult
+                      ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                      : "bg-amber-500/15 border border-amber-500/30 text-amber-400"
+                  }`}
+                >
+                  {rotatedResult ? <CheckCircle className="w-5 h-5" /> : <Key className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    {rotatedResult ? "PINs Rotated Successfully" : "Bulk Rotate Store & BA PINs"}
+                  </h3>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    {rotatedResult
+                      ? `Updated ${rotatedResult.rotatedCount} store(s) · Spreadsheet generated`
+                      : "Regenerate store access PINs & export distribution spreadsheet"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={rotateLoading}
+                onClick={() => {
+                  setShowRotatePinsModal(false);
+                  setRotateError("");
+                }}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-white/40 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            {!rotatedResult ? (
+              <form onSubmit={handleConfirmRotatePins} className="space-y-4 overflow-y-auto flex-1 pr-1">
+                {/* Notice Card */}
+                <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-3 text-xs text-amber-200/90 leading-relaxed">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-amber-300">Security & Operational Notice:</span>
+                    <p className="mt-0.5 text-white/70">
+                      Rotating PINs updates access passwords in real-time. Brand Ambassadors with active sessions can complete their 1-hour shift uninterrupted, but will require the new PIN on their next login. A clean CSV spreadsheet will automatically download for field supervisor distribution.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Scope Selection */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-white/70 uppercase tracking-wider">
+                    Rotation Scope (Region / State)
+                  </label>
+                  <select
+                    value={rotateScopeState}
+                    onChange={(e) => setRotateScopeState(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-xl text-xs text-white outline-none cursor-pointer"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)" }}
+                  >
+                    <option value="all" style={{ background: "#070d14", color: "#ffffff" }}>
+                      🌐 All Stores Nationwide ({allCampaignStores.length} stores)
+                    </option>
+                    {Array.from(new Set(allCampaignStores.map((s) => s.state?.trim()).filter(Boolean))).map((st) => {
+                      const count = allCampaignStores.filter(
+                        (s) => s.state?.toLowerCase() === (st as string).toLowerCase()
+                      ).length;
+                      return (
+                        <option key={st as string} value={st as string} style={{ background: "#070d14", color: "#ffffff" }}>
+                          📍 {st as string} ({count} store{count > 1 ? "s" : ""})
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
+                {/* Active Stores Only Toggle */}
+                {inactiveStoresCount > 0 && (
+                  <label className="flex items-center gap-2.5 p-3 rounded-xl bg-white/[0.03] border border-white/10 cursor-pointer hover:bg-white/[0.05] transition-all">
+                    <input
+                      type="checkbox"
+                      checked={rotateOnlyActive}
+                      onChange={(e) => setRotateOnlyActive(e.target.checked)}
+                      className="w-4 h-4 rounded text-amber-500 bg-black/40 border-white/20 focus:ring-0 cursor-pointer"
+                    />
+                    <div className="text-xs">
+                      <span className="font-bold text-white">Only rotate currently active stores</span>
+                      <span className="text-white/40 block text-[11px]">
+                        Skip the {inactiveStoresCount} currently paused store(s)
+                      </span>
+                    </div>
+                  </label>
+                )}
+
+                {/* PIN Configuration */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-white/70 uppercase tracking-wider">
+                    PIN Format
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRotatePinLength(4)}
+                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                        rotatePinLength === 4
+                          ? "bg-amber-500/20 border-amber-500/50 text-white"
+                          : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
+                      }`}
+                    >
+                      <div className="font-bold text-xs flex items-center justify-between">
+                        <span>4 Digits (e.g. 7482)</span>
+                        {rotatePinLength === 4 && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                      </div>
+                      <p className="text-[10px] text-white/40 mt-1">Recommended for kiosk touchscreens</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRotatePinLength(6)}
+                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
+                        rotatePinLength === 6
+                          ? "bg-amber-500/20 border-amber-500/50 text-white"
+                          : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
+                      }`}
+                    >
+                      <div className="font-bold text-xs flex items-center justify-between">
+                        <span>6 Digits (e.g. 849201)</span>
+                        {rotatePinLength === 6 && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                      </div>
+                      <p className="text-[10px] text-white/40 mt-1">Higher entropy & security</p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Scope Summary Preview */}
+                <div className="p-3 rounded-xl bg-white/[0.02] border border-white/10 flex items-center justify-between">
+                  <span className="text-xs text-white/60">Stores matching this scope:</span>
+                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    {
+                      allCampaignStores.filter((s) => {
+                        if (rotateScopeState !== "all" && s.state?.toLowerCase() !== rotateScopeState.toLowerCase())
+                          return false;
+                        if (rotateOnlyActive && s.active === false) return false;
+                        return true;
+                      }).length
+                    }{" "}
+                    store(s)
+                  </span>
+                </div>
+
+                {/* Password Authorization */}
+                <div className="space-y-1.5 pt-2 border-t border-white/10">
+                  <label className="block text-xs font-bold text-white/70 uppercase tracking-wider">
+                    Enter Admin Password to Authorize *
+                  </label>
+                  <input
+                    type="password"
+                    value={rotatePasswordInput}
+                    onChange={(e) => {
+                      setRotatePasswordInput(e.target.value);
+                      setRotateError("");
+                    }}
+                    placeholder="Admin password"
+                    required
+                    autoFocus
+                    className="w-full rounded-xl px-4 py-2.5 bg-black/50 border border-white/15 text-white text-sm outline-none focus:border-amber-500 transition-all font-mono"
+                  />
+                  {rotateError && (
+                    <p className="text-xs text-red-400 font-bold mt-2 flex items-center gap-1.5">
+                      <X className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{rotateError}</span>
+                    </p>
+                  )}
+                </div>
+
+                {/* Modal Actions */}
+                <div className="flex items-center gap-3 pt-3">
+                  <button
+                    type="button"
+                    disabled={rotateLoading}
+                    onClick={() => {
+                      setShowRotatePinsModal(false);
+                      setRotateError("");
+                    }}
+                    className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white/60 hover:text-white bg-white/5 border border-white/10 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={rotateLoading || !rotatePasswordInput.trim()}
+                    className="flex-1 py-2.5 rounded-xl text-xs font-black text-black bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 disabled:opacity-50 transition-all shadow-lg shadow-amber-950/40 cursor-pointer flex items-center justify-center gap-1.5"
+                    style={{ fontFamily: "Rubik, sans-serif" }}
+                  >
+                    {rotateLoading ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Rotating PINs…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Key className="w-3.5 h-3.5" />
+                        <span>Confirm & Rotate PINs</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* Success View with CSV Re-download and Stores Preview Table */
+              <div className="space-y-4 overflow-y-auto flex-1 pr-1">
+                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-bold text-sm text-emerald-300 flex items-center gap-1.5">
+                      <CheckCircle className="w-4 h-4 text-emerald-400" />
+                      {rotatedResult.rotatedCount} Store PIN(s) Successfully Rotated!
+                    </h4>
+                    <p className="text-xs text-white/60 mt-0.5">
+                      The CSV spreadsheet <span className="font-mono text-teal-300 text-[11px]">{rotatedResult.filename}</span> has been downloaded.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadRotatedCsv()}
+                    className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download CSV Again</span>
+                  </button>
+                </div>
+
+                {/* Rotated Stores List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-white/50 px-1">
+                    <span className="font-bold uppercase tracking-wider text-[10px]">Rotated Store PINs Preview</span>
+                    <span className="text-[10px] font-mono">{rotatedResult.stores.length} records</span>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/40 overflow-hidden max-h-56 overflow-y-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 bg-[#0f1722] text-white/50 border-b border-white/10 text-[10px] uppercase font-mono">
+                        <tr>
+                          <th className="py-2 px-3">Store Name</th>
+                          <th className="py-2 px-3">Location</th>
+                          <th className="py-2 px-3">Store Code</th>
+                          <th className="py-2 px-3 text-right">New PIN</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5 text-white/80">
+                        {rotatedResult.stores.map((st) => (
+                          <tr key={st.id || st.code} className="hover:bg-white/[0.02]">
+                            <td className="py-2 px-3 font-semibold text-white">{st.name}</td>
+                            <td className="py-2 px-3 text-white/50 text-[11px]">
+                              {st.city ? `${st.city}, ` : ""}
+                              {st.state || "—"}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-teal-400 text-[11px]">{st.code}</td>
+                            <td className="py-2 px-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (typeof navigator !== "undefined" && navigator.clipboard) {
+                                    navigator.clipboard.writeText(st.newPin);
+                                    setCopiedPinStoreId(st.id);
+                                    setTimeout(() => setCopiedPinStoreId(null), 2000);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono font-bold hover:bg-amber-500/25 transition-all cursor-pointer"
+                                title="Click to copy PIN"
+                              >
+                                <span>{st.newPin}</span>
+                                {copiedPinStoreId === st.id ? (
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3 h-3 text-amber-400/60" />
+                                )}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Close Button */}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRotatePinsModal(false);
+                      setRotatedResult(null);
+                      setRotateError("");
+                    }}
+                    className="w-full py-2.5 rounded-xl text-xs font-bold text-white bg-white/10 hover:bg-white/15 border border-white/10 transition-all cursor-pointer"
+                  >
+                    Done & Close
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
