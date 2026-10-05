@@ -7,9 +7,16 @@ export async function POST(request: NextRequest) {
   try {
     const { campaignId, email, password } = await request.json();
 
-    if (!campaignId || !email || !password) {
+    if (
+      !campaignId ||
+      !email ||
+      !password ||
+      typeof campaignId !== "string" ||
+      typeof email !== "string" ||
+      typeof password !== "string"
+    ) {
       return NextResponse.json(
-        { error: "Campaign ID, email, and password are required." },
+        { error: "Campaign ID, email, and password are required strings." },
         { status: 400 }
       );
     }

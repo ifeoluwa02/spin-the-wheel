@@ -40,30 +40,19 @@ setInterval(() => {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { campaignId, storeCode, isKiosk, participant } = body;
-
-    if (!campaignId || !participant || !participant.phone) {
-      return NextResponse.json(
-        { error: "Missing required spin parameters." },
-        { status: 400 }
-      );
+    let body: any = null;
+    try {
+      body = await request.json();
+    } catch {
+      // Body will be caught by validation below
     }
 
-    // 1. Validate & Normalize Phone Number
-    const rawPhone = String(participant.phone || "");
-    const normalizedPhone = normalizeNigerianPhone(rawPhone);
-    if (!normalizedPhone) {
-      return NextResponse.json(
-        { error: "Please enter a valid Nigerian mobile phone number (e.g. 08012345678)." },
-        { status: 400 }
-      );
-    }
+    const isKiosk = Boolean(body?.isKiosk);
+    const ipCeiling = isKiosk ? 120 : 60;
 
-    // 2. Volumetric Rate Limiting per IP (60 req/min for attendees, 120 req/min for kiosks)
+    // 1. Volumetric Rate Limiting per IP (Defense-in-depth: enforces ceiling before processing)
     const rawIp = request.headers.get("x-forwarded-for") || "";
     const clientIp = rawIp ? rawIp.split(",")[0].trim() : "unknown";
-    const ipCeiling = isKiosk ? 120 : 60;
 
     const now = Date.now();
     const ipTimestamps = (ipVolumetricHistory.get(clientIp) || []).filter((t) => now - t < 60000);
@@ -75,6 +64,25 @@ export async function POST(request: NextRequest) {
     }
     ipTimestamps.push(now);
     ipVolumetricHistory.set(clientIp, ipTimestamps);
+
+    const { campaignId, storeCode, participant } = body || {};
+
+    if (!campaignId || !participant || !participant.phone) {
+      return NextResponse.json(
+        { error: "Missing required spin parameters." },
+        { status: 400 }
+      );
+    }
+
+    // 2. Validate & Normalize Phone Number
+    const rawPhone = String(participant.phone || "");
+    const normalizedPhone = normalizeNigerianPhone(rawPhone);
+    if (!normalizedPhone) {
+      return NextResponse.json(
+        { error: "Please enter a valid Nigerian mobile phone number (e.g. 08012345678)." },
+        { status: 400 }
+      );
+    }
 
 
     // 3. Per-Phone Concurrency & Replay Lock

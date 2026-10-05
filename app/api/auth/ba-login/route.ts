@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
   try {
     const { campaignId, storeCode, pin } = await request.json();
 
-    if (!campaignId || !storeCode) {
+    if (!campaignId || !storeCode || typeof campaignId !== "string" || typeof storeCode !== "string") {
       return NextResponse.json(
         { error: "Campaign ID and Store Code are required." },
         { status: 400 }
