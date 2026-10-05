@@ -40,8 +40,32 @@ setInterval(() => {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { campaignId, storeCode, isKiosk, participant } = body;
+    let body: any = null;
+    try {
+      body = await request.json();
+    } catch {
+      // Body will be caught by validation below
+    }
+
+    const isKiosk = Boolean(body?.isKiosk);
+    const ipCeiling = isKiosk ? 120 : 60;
+
+    // 1. Volumetric Rate Limiting per IP (Defense-in-depth: enforces ceiling before processing)
+    const rawIp = request.headers.get("x-forwarded-for") || "";
+    const clientIp = rawIp ? rawIp.split(",")[0].trim() : "unknown";
+
+    const now = Date.now();
+    const ipTimestamps = (ipVolumetricHistory.get(clientIp) || []).filter((t) => now - t < 60000);
+    if (ipTimestamps.length >= ipCeiling) {
+      return NextResponse.json(
+        { error: "Too many requests from this network. Please wait a moment." },
+        { status: 429 }
+      );
+    }
+    ipTimestamps.push(now);
+    ipVolumetricHistory.set(clientIp, ipTimestamps);
+
+    const { campaignId, storeCode, participant } = body || {};
 
     if (!campaignId || !participant || !participant.phone) {
       return NextResponse.json(
@@ -50,7 +74,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 1. Validate & Normalize Phone Number
+    // 2. Validate & Normalize Phone Number
     const rawPhone = String(participant.phone || "");
     const normalizedPhone = normalizeNigerianPhone(rawPhone);
     if (!normalizedPhone) {
@@ -60,20 +84,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2. Volumetric DoS Safety Check (Only triggers for abnormal traffic > 120 req/min/IP)
-    const clientIp = request.headers.get("x-forwarded-for") || "unknown";
-    if (!isKiosk) {
-      const now = Date.now();
-      const ipTimestamps = (ipVolumetricHistory.get(clientIp) || []).filter((t) => now - t < 60000);
-      if (ipTimestamps.length >= 120) {
-        return NextResponse.json(
-          { error: "Too many requests from this network. Please wait a moment." },
-          { status: 429 }
-        );
-      }
-      ipTimestamps.push(now);
-      ipVolumetricHistory.set(clientIp, ipTimestamps);
-    }
 
     // 3. Per-Phone Concurrency & Replay Lock
     if (activePhoneLocks.has(normalizedPhone)) {
@@ -83,10 +93,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const now = Date.now();
     const phoneTimestamps = (phoneAttemptHistory.get(normalizedPhone) || []).filter(
       (t) => now - t < 30000
     );
+
     if (phoneTimestamps.length >= 2) {
       return NextResponse.json(
         { error: "Please wait a few seconds before trying again." },
@@ -181,12 +191,17 @@ export async function POST(request: NextRequest) {
         (cleanStoreCode ? cleanStoreCode : "General Stage");
 
       // 9. Atomic Recording & Inventory Decrement Server-Side
+      const safeName = String(participant.name || "Anonymous").trim().slice(0, 100);
+      const safeEmail = String(participant.email || "").trim().slice(0, 120);
+      const safeAge = String(participant.ageRange || "").trim().slice(0, 30);
+      const safeGender = String(participant.gender || "").trim().slice(0, 30);
+
       const participantId = await recordParticipant({
-        name: participant.name || "Anonymous",
+        name: safeName || "Anonymous",
         phone: normalizedPhone,
-        email: participant.email || "",
-        ageRange: participant.ageRange || "",
-        gender: participant.gender || "",
+        email: safeEmail,
+        ageRange: safeAge,
+        gender: safeGender,
         campaignId: campaign.id,
         prizeId: wonPrize.id,
         prizeLabel: wonPrize.label,
@@ -196,6 +211,7 @@ export async function POST(request: NextRequest) {
         storeCode: cleanStoreCode,
         storeName: storeName,
       });
+
 
       // Return server-verified result to the frontend
       return NextResponse.json({

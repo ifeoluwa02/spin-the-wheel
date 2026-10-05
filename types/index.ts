@@ -24,6 +24,7 @@ export interface StoreLocation {
   name: string; // e.g. "Shoprite Ikeja" or "BA - Mary Johnson"
   code: string; // e.g. "shoprite-ikeja" or "ba-mary"
   pin?: string; // Optional access PIN for this store/BA
+  hasPin?: boolean; // Indicates if this store/BA is protected by a PIN or campaign master PIN
   city?: string;
   /** State/region this store belongs to — used to scope supervisors by state */
   state?: string;
