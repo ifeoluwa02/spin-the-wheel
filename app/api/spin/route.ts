@@ -205,16 +205,27 @@ export async function POST(request: NextRequest) {
         ? generateVoucherCode(wonPrize.voucherPrefix || "SPIN")
         : "";
 
-      // 8. Resolve Store Name
-      const resolvedStore = campaign.stores?.find(
+      // 8. Resolve Authoritative Store Information
+      let resolvedStore = campaign.stores?.find(
         (s) =>
-          (s.code && s.code.toLowerCase() === cleanStoreCode) ||
-          (s.id && s.id.toLowerCase() === cleanStoreCode)
+          (cleanStoreCode && s.code && s.code.toLowerCase() === cleanStoreCode) ||
+          (cleanStoreCode && s.id && s.id.toLowerCase() === cleanStoreCode)
       );
-      const storeName =
-        participant.storeName ||
+
+      // Fallback: If cleanStoreCode didn't match, attempt resolving by storeName
+      if (!resolvedStore && participant.storeName && participant.storeName !== "Kiosk") {
+        const cleanName = participant.storeName.trim().toLowerCase();
+        resolvedStore = campaign.stores?.find(
+          (s) => s.name && s.name.trim().toLowerCase() === cleanName
+        );
+      }
+
+      // Authoritative store code & name: prefer campaign store record
+      const finalStoreCode = resolvedStore?.code || cleanStoreCode || "";
+      const finalStoreName =
         resolvedStore?.name ||
-        (cleanStoreCode ? cleanStoreCode : "General Stage");
+        (participant.storeName && participant.storeName !== "Kiosk" ? participant.storeName : "") ||
+        (finalStoreCode ? finalStoreCode : "General Stage");
 
       // 9. Atomic Recording & Inventory Decrement Server-Side
       const safeName = String(participant.name || "Anonymous").trim().slice(0, 100);
@@ -234,8 +245,8 @@ export async function POST(request: NextRequest) {
         voucherCode: voucherCode,
         won: isWinner,
         createdAt: Date.now(),
-        storeCode: cleanStoreCode,
-        storeName: storeName,
+        storeCode: finalStoreCode,
+        storeName: finalStoreName,
       });
 
 

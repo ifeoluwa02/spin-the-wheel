@@ -37,6 +37,85 @@ import TeamTab from "@/components/TeamTab";
 
 type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw" | "team";
 
+/**
+ * Robust matcher checking if a participant belongs to a given store.
+ * Handles:
+ * - Direct code match (case-insensitive & trimmed)
+ * - Normalized alphanumeric slug match (e.g. "ikeja-mall", "ikeja_mall", "ikeja mall")
+/**
+ * Branch-Specific Store Attribution Matcher:
+ * - If the participant record has a storeCode, we MUST match only against the branch
+ *   storeCode or store ID. We NEVER fall back to comparing generic supermarket names
+ *   (e.g. "Jendol", "Justrite", "Spar") because chains have dozens of physical branches
+ *   sharing the exact same chain name.
+ * - Uses exact string equality followed by alphanumeric normalization to safely handle
+ *   trailing hyphens or slug variances (e.g. "jendol-ijede-ikorodu-").
+ * - Fallback: only if participant has NO storeCode at all, match by unique store name,
+ *   excluding generic non-store values like "General Stage" or "Kiosk".
+ */
+function isParticipantInStore(p: Participant, s: StoreLocation): boolean {
+  if (!p || !s) return false;
+
+  const normalize = (v?: string) => (v ? v.trim().toLowerCase().replace(/[^a-z0-9]/g, "") : "");
+
+  const pCode = (p.storeCode || "").trim().toLowerCase();
+  const sCode = (s.code || "").trim().toLowerCase();
+  const sId = (s.id || "").trim().toLowerCase();
+
+  // 1. If participant has a storeCode, strictly match storeCode or storeId
+  if (pCode) {
+    if (sCode && pCode === sCode) return true;
+    if (sId && pCode === sId) return true;
+
+    const normPCode = normalize(pCode);
+    const normSCode = normalize(sCode);
+    const normId = normalize(sId);
+
+    if (normSCode && normPCode === normSCode) return true;
+    if (normId && normPCode === normId) return true;
+
+    return false;
+  }
+
+  // 2. Fallback only when participant has NO storeCode at all
+  const pName = (p.storeName || "").trim().toLowerCase();
+  if (!pName || pName === "general stage" || pName === "kiosk" || pName === "web") return false;
+
+  const sName = (s.name || "").trim().toLowerCase();
+  if (pName === sName) return true;
+
+  const normPName = normalize(pName);
+  const normSName = normalize(sName);
+  if (normPName && normSName && normPName === normSName) return true;
+
+  return false;
+}
+
+
+/**
+ * Robust winner detector.
+ * Handles boolean true, string "true", string "Winner", and falls back to prize definition if p.won is absent.
+ */
+function isParticipantWinner(p: Participant, prizes: Prize[] = []): boolean {
+  const rawWon: any = p.won;
+  if (rawWon === true || rawWon === "true" || rawWon === "Winner" || rawWon === 1) return true;
+  if (rawWon === false || rawWon === "false" || rawWon === "Non-Winner" || rawWon === 0) return false;
+
+  // Fallback to prize lookup if p.won was omitted in legacy records
+  if (p.prizeId && prizes.length) {
+    const matchedPrize = prizes.find(pr => pr.id === p.prizeId);
+    if (matchedPrize) return !matchedPrize.isLosing;
+  }
+  if (p.prizeLabel) {
+    const lbl = p.prizeLabel.toLowerCase();
+    if (lbl.includes("try again") || lbl.includes("no prize") || lbl.includes("better luck")) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
   const [adminRole, setAdminRole] = useState<AdminRole>("admin");
@@ -649,11 +728,7 @@ export default function AdminDashboard() {
 
   function exportToCSV() {
     // Export only what is currently visible (date range + store + search applied)
-    const exportRows = filtered.filter(p =>
-      storeFilter === "all" ||
-      p.storeCode === storeFilter ||
-      p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id
-    );
+    const exportRows = storeFiltered;
     const headers = ["Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
     const rows = exportRows.map(p => [
       `"${p.name}"`,
@@ -752,6 +827,13 @@ export default function AdminDashboard() {
     (p.storeCode && p.storeCode.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (p.voucherCode && p.voucherCode.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const selectedStoreForFilter = storeFilter !== "all"
+    ? (campaign.stores || []).find(s => s.code === storeFilter || s.id === storeFilter)
+    : null;
+  const storeFiltered = selectedStoreForFilter
+    ? filtered.filter(p => isParticipantInStore(p, selectedStoreForFilter))
+    : (storeFilter === "all" ? filtered : filtered.filter(p => p.storeCode === storeFilter));
 
   // ─── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (!authenticated) {
@@ -891,8 +973,8 @@ export default function AdminDashboard() {
   const storesWithPausedCount = storesToDisplay.filter(s => (s.pausedPrizes || []).length > 0).length;
   const allFilteredExpanded = filteredStorePrizes.length > 0 && filteredStorePrizes.every(s => expandedStores[s.id] ?? (storePrizeSearch.trim().length > 0));
 
-  // Filter calculation for Stores & BAs Tab
-  const allCampaignStores = campaign.stores || [];
+  // Filter calculation for Stores & BAs Tab (scoped to supervisor assigned stores if supervisor)
+  const allCampaignStores = storesToDisplay;
   const activeStoresCount = allCampaignStores.filter(s => s.active !== false).length;
   const inactiveStoresCount = allCampaignStores.filter(s => s.active === false).length;
 
@@ -2082,12 +2164,8 @@ export default function AdminDashboard() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredStoresTab.map((s) => {
-                    const storeSpins = participants.filter(p =>
-                      (p.storeCode && s.code && p.storeCode.toLowerCase() === s.code.toLowerCase()) ||
-                      p.storeCode === s.id ||
-                      (p.storeName && s.name && p.storeName.toLowerCase() === s.name.toLowerCase())
-                    );
-                    const storeWinners = storeSpins.filter(p => p.won).length;
+                    const storeSpins = participants.filter((p) => isParticipantInStore(p, s));
+                    const storeWinners = storeSpins.filter((p) => isParticipantWinner(p, campaign.prizes)).length;
                     const storeWinRate = storeSpins.length ? Math.round((storeWinners / storeSpins.length) * 100) : 0;
                     const storeTvUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/tv?c=${campaignSlug}&store=${s.code}`;
                     const storeWheelUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${s.code}`;
@@ -2285,7 +2363,7 @@ export default function AdminDashboard() {
               <div>
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
                   Participant Registrations ·{" "}
-                  <span style={{ color: "#00BFA6" }}>{filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id).length}</span>
+                  <span style={{ color: "#00BFA6" }}>{storeFiltered.length}</span>
                   {dateRangeFilter !== "all" || storeFilter !== "all" ? (
                     <span className="text-[11px] ml-1.5 font-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
                       (filtered from {participants.length} total)
@@ -2415,7 +2493,7 @@ export default function AdminDashboard() {
                   {customFrom && customTo ? (
                     <div className="space-y-0.5">
                       <p className="text-xs font-black" style={{ color: "#FFD700" }}>
-                        {filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s => s.code === storeFilter)?.id).length} records
+                        {storeFiltered.length} records
                       </p>
                       <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>
                         {customFrom} → {customTo}
@@ -2443,9 +2521,9 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.length === 0 ? (
+                  {storeFiltered.length === 0 ? (
                     <tr><td colSpan={8} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
-                  ) : filtered.filter(p => storeFilter === "all" || p.storeCode === storeFilter || p.storeCode === campaign.stores?.find(s=>s.code===storeFilter)?.id).map((p, i) => (
+                  ) : storeFiltered.map((p, i) => (
                     <tr key={p.id || i} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td className="py-3 px-2 font-bold text-white">{p.name}</td>
                       <td className="py-3 px-2 font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{p.phone}</td>
