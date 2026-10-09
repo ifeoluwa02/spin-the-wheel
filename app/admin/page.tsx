@@ -2296,56 +2296,46 @@ export default function AdminDashboard() {
                           }`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div
-                              className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${isStoreActive
-                                ? "bg-teal-500/15 border border-teal-500/30 text-teal-300"
-                                : "bg-red-500/15 border border-red-500/30 text-red-400"
-                                }`}
-                            >
-                              <MapPin className="w-5 h-5" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
-                                  {s.name}
-                                </h4>
-                                {isStoreActive ? (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex-shrink-0">
-                                    ● Active
-                                  </span>
-                                ) : (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse flex-shrink-0">
-                                    ○ Inactive
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-2 flex-wrap mt-1">
-                                <span className="text-[11px] font-mono text-teal-400 font-semibold">
-                                  {s.code}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-black text-white text-base truncate leading-tight" style={{ fontFamily: "Rubik, sans-serif" }}>
+                                {s.name}
+                              </h4>
+                              {isStoreActive ? (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex-shrink-0">
+                                  ● Active
                                 </span>
-                                {s.city && (
-                                  <span className="text-[10px] text-white/50">· {s.city}</span>
-                                )}
-                                {s.state && (
-                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
-                                    {s.state}
-                                  </span>
-                                )}
-                                {s.pin && (
-                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
-                                    PIN: {s.pin}
-                                  </span>
-                                )}
-                                {s.pinRotatedAt && (
-                                  <span
-                                    className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-500/15 text-teal-300 border border-teal-500/25"
-                                    title={`PIN rotated: ${new Date(s.pinRotatedAt).toLocaleString()}`}
-                                  >
-                                    🔄 {new Date(s.pinRotatedAt).toLocaleDateString()}
-                                  </span>
-                                )}
-                              </div>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse flex-shrink-0">
+                                  ○ Inactive
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap mt-1.5">
+                              <span className="text-[11px] font-mono text-teal-400 font-bold">
+                                {s.code}
+                              </span>
+                              {s.city && (
+                                <span className="text-[10px] text-white/50">· {s.city}</span>
+                              )}
+                              {s.state && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                                  {s.state}
+                                </span>
+                              )}
+                              {s.pin && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
+                                  PIN: {s.pin}
+                                </span>
+                              )}
+                              {s.pinRotatedAt && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-500/15 text-teal-300 border border-teal-500/25"
+                                  title={`PIN rotated: ${new Date(s.pinRotatedAt).toLocaleString()}`}
+                                >
+                                  🔄 {new Date(s.pinRotatedAt).toLocaleDateString()}
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 flex-shrink-0">
