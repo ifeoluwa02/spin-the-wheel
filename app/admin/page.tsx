@@ -28,7 +28,7 @@ import {
   ExternalLink, Palette, Save, Activity, Target, Layers,
   ChevronRight, ChevronDown, ChevronUp, ChevronsUpDown, Shield, X, Check, Store, MapPin, UserCheck, Copy, AlertTriangle,
   UsersRound, PauseCircle, PlayCircle, Globe, Building2, Search, SlidersHorizontal,
-  Play, Pause, Package, Clock, RefreshCw, Key, FileSpreadsheet,
+  Play, Pause, Package, Clock, RefreshCw, Key, FileSpreadsheet, Edit3,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
@@ -205,6 +205,83 @@ export default function AdminDashboard() {
   const [storeToast, setStoreToast] = useState<string | null>(null);
   const [storeToggleLoading, setStoreToggleLoading] = useState<string | null>(null); // storeId being toggled
 
+  // Edit Store modal state
+  const [editingStore, setEditingStore] = useState<StoreLocation | null>(null);
+  const [editStoreName, setEditStoreName] = useState("");
+  const [editStoreCode, setEditStoreCode] = useState("");
+  const [editStoreCity, setEditStoreCity] = useState("");
+  const [editStoreState, setEditStoreState] = useState("");
+  const [editStorePin, setEditStorePin] = useState("1234");
+  const [editStoreActive, setEditStoreActive] = useState(true);
+  const [editStoreSaving, setEditStoreSaving] = useState(false);
+  const [editStoreError, setEditStoreError] = useState("");
+
+  function handleOpenEditStore(store: StoreLocation) {
+    setEditingStore(store);
+    setEditStoreName(store.name || "");
+    setEditStoreCode(store.code || "");
+    setEditStoreCity(store.city || "");
+    setEditStoreState(store.state || "");
+    setEditStorePin(store.pin || "1234");
+    setEditStoreActive(store.active !== false);
+    setEditStoreError("");
+  }
+
+  function handleCloseEditStore() {
+    if (!editStoreSaving) {
+      setEditingStore(null);
+      setEditStoreError("");
+    }
+  }
+
+  async function handleSaveEditedStore(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingStore || !editStoreName.trim()) return;
+    setEditStoreSaving(true);
+    setEditStoreError("");
+
+    try {
+      const res = await fetch("/api/admin/store", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeId: editingStore.id,
+          store: {
+            name: editStoreName.trim(),
+            code: editStoreCode.trim() || undefined,
+            city: editStoreCity.trim() || undefined,
+            state: editStoreState.trim() || undefined,
+            pin: editStorePin.trim() || undefined,
+            active: editStoreActive,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setEditStoreError(data.error || "Failed to update store details.");
+        setEditStoreSaving(false);
+        return;
+      }
+
+      // Update local campaign stores with response from server
+      setCampaign((prev) => ({
+        ...prev,
+        stores: data.stores || (prev.stores || []).map((s) => (s.id === editingStore.id ? data.store : s)),
+      }));
+
+      setStoreToast(`✅ Store "${data.store.name}" updated successfully!`);
+      setTimeout(() => setStoreToast(null), 3500);
+      setEditingStore(null);
+    } catch (err) {
+      console.error("Failed to save edited store:", err);
+      setEditStoreError("Network error. Could not reach server.");
+    } finally {
+      setEditStoreSaving(false);
+    }
+  }
+
   async function persistCampaign(updatedCampaign: Campaign) {
     try {
       const res = await fetch("/api/admin/campaign", {
@@ -225,31 +302,46 @@ export default function AdminDashboard() {
     e.preventDefault();
     if (!newStoreName.trim()) return;
     setStoreSaving(true);
-    const code = newStoreCode.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || `store-${Date.now().toString(36)}`;
-    const newStore: StoreLocation = {
-      id: `store-${Date.now()}`,
-      name: newStoreName.trim(),
-      code,
-      city: newStoreCity.trim() || undefined,
-      state: newStoreState.trim() || undefined,
-      pin: newStorePin.trim() || undefined,
-    };
-    const updatedStores = [...(campaign.stores || []), newStore];
-    const updatedCampaign = { ...campaign, stores: updatedStores };
-    setCampaign(updatedCampaign);
-    setNewStoreName("");
-    setNewStoreCode("");
-    setNewStoreCity("");
-    setNewStoreState("");
-    setNewStorePin("1234");
 
     try {
-      await persistCampaign(updatedCampaign);
-      setStoreToast(`✅ "${newStore.name}" added and saved live!`);
+      const res = await fetch("/api/admin/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          store: {
+            name: newStoreName.trim(),
+            code: newStoreCode.trim() || undefined,
+            city: newStoreCity.trim() || undefined,
+            state: newStoreState.trim() || undefined,
+            pin: newStorePin.trim() || "1234",
+            active: true,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "Failed to add store.");
+        setStoreSaving(false);
+        return;
+      }
+
+      setCampaign((prev) => ({
+        ...prev,
+        stores: data.stores || [...(prev.stores || []), data.store],
+      }));
+
+      setNewStoreName("");
+      setNewStoreCode("");
+      setNewStoreCity("");
+      setNewStoreState("");
+      setNewStorePin("1234");
+      setStoreToast(`✅ "${data.store.name}" added and saved live!`);
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
-      console.error("Failed to persist store to Firestore:", err);
-      alert("❌ Could not save store to database. Please check connection.");
+      console.error("Failed to add store:", err);
+      alert("❌ Could not save store. Please check connection.");
     } finally {
       setStoreSaving(false);
     }
@@ -258,12 +350,28 @@ export default function AdminDashboard() {
   async function handleToggleStoreActive(store: StoreLocation, makeActive: boolean) {
     setStoreToggleLoading(store.id);
     try {
-      const updatedStores = (campaign.stores || []).map((s) =>
-        s.id === store.id ? { ...s, active: makeActive } : s
-      );
-      const updatedCampaign = { ...campaign, stores: updatedStores };
-      setCampaign(updatedCampaign);
-      await persistCampaign(updatedCampaign);
+      const res = await fetch("/api/admin/store", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeId: store.id,
+          active: makeActive,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setStoreToast(`❌ ${data.error || "Failed to update store status."}`);
+        setTimeout(() => setStoreToast(null), 3000);
+        return;
+      }
+
+      setCampaign((prev) => ({
+        ...prev,
+        stores: data.stores || (prev.stores || []).map((s) => (s.id === store.id ? { ...s, active: makeActive } : s)),
+      }));
+
       setStoreToast(
         makeActive
           ? `✅ "${store.name}" is now ACTIVE — spins allowed.`
@@ -280,18 +388,35 @@ export default function AdminDashboard() {
   }
 
   async function handleDeleteStore(storeId: string) {
-    const target = (campaign.stores || []).find(s => s.id === storeId || s.code === storeId);
+    const target = (campaign.stores || []).find((s) => s.id === storeId || s.code === storeId);
     if (!window.confirm(`Delete store / BA account "${target?.name || storeId}"?`)) return;
-    const updatedStores = (campaign.stores || []).filter(s => s.id !== storeId && s.code !== storeId);
-    const updatedCampaign = { ...campaign, stores: updatedStores };
-    setCampaign(updatedCampaign);
 
     try {
-      await persistCampaign(updatedCampaign);
+      const res = await fetch("/api/admin/store", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          storeId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.error || "Failed to delete store.");
+        return;
+      }
+
+      setCampaign((prev) => ({
+        ...prev,
+        stores: data.stores || (prev.stores || []).filter((s) => s.id !== storeId && s.code !== storeId),
+      }));
+
       setStoreToast("🗑️ Store account removed.");
       setTimeout(() => setStoreToast(null), 3000);
     } catch (err) {
       console.error("Failed to delete store:", err);
+      alert("❌ Could not delete store. Please check connection.");
     }
   }
 
@@ -2257,6 +2382,14 @@ export default function AdminDashboard() {
                                 <><Play className="w-3 h-3" /><span>Activate</span></>
                               )}
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditStore(s)}
+                              className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:text-teal-300 hover:bg-white/5 transition-all cursor-pointer"
+                              title="Edit Store Details"
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </button>
                             <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all cursor-pointer" title="Delete Store">
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -3228,6 +3361,197 @@ export default function AdminDashboard() {
                 Done
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Edit Store Location / BA Modal ── */}
+      {editingStore && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50 animate-fadeIn"
+          style={{ background: "rgba(0,0,0,0.85)", backdropFilter: "blur(14px)" }}
+          onClick={handleCloseEditStore}
+        >
+          <div
+            className="rounded-3xl p-6 sm:p-7 max-w-lg w-full space-y-5 bg-[#0b131e] border border-teal-500/30 shadow-2xl overflow-hidden max-h-[92vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/10 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0 bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                  <Edit3 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    Edit Store Location
+                  </h3>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    Update branch details, code, and BA access credentials.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={editStoreSaving}
+                onClick={handleCloseEditStore}
+                className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10 transition-all cursor-pointer disabled:opacity-40"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body / Form */}
+            <form onSubmit={handleSaveEditedStore} className="space-y-4 overflow-y-auto pr-1 flex-1">
+              {editStoreError && (
+                <div className="p-3 rounded-xl text-xs font-semibold bg-red-500/15 border border-red-500/30 text-red-300 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{editStoreError}</span>
+                </div>
+              )}
+
+              {/* Store Name */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                  Store / Chain Name <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editStoreName}
+                  onChange={(e) => setEditStoreName(e.target.value)}
+                  placeholder="e.g. Jendol, Justrite, Spar"
+                  className="w-full px-3.5 py-2.5 rounded-xl text-sm text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none transition-all"
+                />
+              </div>
+
+              {/* Store Code */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                  Store Code / URL Slug <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editStoreCode}
+                  onChange={(e) => setEditStoreCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, ""))}
+                  placeholder="e.g. jendol-lekki"
+                  className="w-full px-3.5 py-2.5 rounded-xl text-sm font-mono text-teal-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none transition-all"
+                />
+                <p className="text-[11px] text-white/40 mt-1">
+                  Unique identifier used in kiosk and TV links: <span className="font-mono text-white/60">?store={editStoreCode || "..."}</span>
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* City / Branch Area */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    City / Branch Area
+                  </label>
+                  <input
+                    type="text"
+                    value={editStoreCity}
+                    onChange={(e) => setEditStoreCity(e.target.value)}
+                    placeholder="e.g. Lekki, Egbeda, Ikeja"
+                    className="w-full px-3.5 py-2.5 rounded-xl text-sm text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none transition-all"
+                  />
+                </div>
+
+                {/* State */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    State / Region
+                  </label>
+                  <select
+                    value={editStoreState}
+                    onChange={(e) => setEditStoreState(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl text-sm text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none transition-all"
+                  >
+                    <option value="">(No State Assigned)</option>
+                    {NIGERIAN_STATES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* PIN & Active Status */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center pt-1">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    BA Access PIN
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={8}
+                    value={editStorePin}
+                    onChange={(e) => setEditStorePin(e.target.value)}
+                    placeholder="e.g. 1234"
+                    className="w-full px-3.5 py-2.5 rounded-xl text-sm font-mono tracking-widest text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none transition-all"
+                  />
+                  <p className="text-[10px] text-white/40 mt-1">Used by field BAs to unlock kiosk mode.</p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    Store Activation Status
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setEditStoreActive(!editStoreActive)}
+                    className={`w-full py-2.5 px-3.5 rounded-xl text-xs font-black flex items-center justify-center gap-2 border transition-all cursor-pointer ${
+                      editStoreActive
+                        ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25"
+                        : "bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25"
+                    }`}
+                  >
+                    {editStoreActive ? (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                        <span>Active (Spins Allowed)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="w-4 h-4 text-red-400" />
+                        <span>Inactive (Spins Blocked)</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-4 border-t border-white/10 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={editStoreSaving}
+                  onClick={handleCloseEditStore}
+                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-white/60 hover:text-white bg-white/5 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={editStoreSaving || !editStoreName.trim()}
+                  className="px-5 py-2.5 rounded-xl text-xs font-black text-white bg-teal-500 hover:bg-teal-400 transition-all shadow-lg shadow-teal-500/20 disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                >
+                  {editStoreSaving ? (
+                    <>
+                      <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full" />
+                      <span>Saving Changes...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Save Changes</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
