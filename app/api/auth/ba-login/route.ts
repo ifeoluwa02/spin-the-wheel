@@ -22,11 +22,31 @@ export async function POST(request: NextRequest) {
     }
 
     const cleanCode = String(storeCode).trim().toLowerCase();
-    const store = campaign.stores?.find(
-      (s) =>
-        (s.code && s.code.toLowerCase() === cleanCode) ||
-        (s.id && s.id.toLowerCase() === cleanCode)
-    );
+    const normCode = cleanCode.replace(/[^a-z0-9]/g, "");
+
+    const store = campaign.stores?.find((s) => {
+      const sCode = (s.code || "").trim().toLowerCase();
+      const sId = (s.id || "").trim().toLowerCase();
+      const sName = (s.name || "").trim().toLowerCase();
+
+      // 1. Direct trimmed case-insensitive match on code or id
+      if (sCode === cleanCode || sId === cleanCode) return true;
+
+      // 2. Match against raw untrimmed code/id
+      if (s.code && s.code.toLowerCase() === storeCode.toLowerCase()) return true;
+
+      // 3. Normalized alphanumeric match (ignores spaces, hyphens, underscores)
+      if (normCode) {
+        if (sCode.replace(/[^a-z0-9]/g, "") === normCode) return true;
+        if (sId.replace(/[^a-z0-9]/g, "") === normCode) return true;
+        if (sName.replace(/[^a-z0-9]/g, "") === normCode) return true;
+      }
+
+      // 4. Store name direct match fallback
+      if (sName === cleanCode) return true;
+
+      return false;
+    });
 
     if (!store) {
       return NextResponse.json(
