@@ -179,8 +179,8 @@ export default function AdminDashboard() {
   const [selectedStoreIdForPrizes, setSelectedStoreIdForPrizes] = useState<string | null>(null);
   const selectedStoreForPrizes = selectedStoreIdForPrizes
     ? (campaign.stores || []).find(
-        (s) => s.id === selectedStoreIdForPrizes || s.code === selectedStoreIdForPrizes
-      ) || null
+      (s) => s.id === selectedStoreIdForPrizes || s.code === selectedStoreIdForPrizes
+    ) || null
     : null;
   const setSelectedStoreForPrizes = (store: StoreLocation | null) => setSelectedStoreIdForPrizes(store ? store.id : null);
 
@@ -632,7 +632,7 @@ export default function AdminDashboard() {
         }
         setLoading(false);
       })
-      .catch(() => {});
+      .catch(() => { });
 
     const unsubCampaign = subscribeCampaign(campaignSlug, (c) => setCampaign(c));
     const unsubParticipants = subscribeParticipants(campaignSlug, (p) => {
@@ -815,7 +815,7 @@ export default function AdminDashboard() {
   async function handleLogout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-    } catch {}
+    } catch { }
     setAuthenticated(false);
     setAdminRole("admin");
     setActiveSupervisor(null);
@@ -873,8 +873,8 @@ export default function AdminDashboard() {
       dateRangeFilter === "custom" && customFrom && customTo
         ? `${customFrom}_to_${customTo}`
         : dateRangeFilter !== "all"
-        ? dateRangeFilter
-        : "all_time";
+          ? dateRangeFilter
+          : "all_time";
     const storeLabel =
       storeFilter !== "all"
         ? `_${storeFilter}`
@@ -910,24 +910,24 @@ export default function AdminDashboard() {
     const now = new Date();
     const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     switch (range) {
-      case "today":    return todayMidnight;
-      case "2days":    return todayMidnight - 1 * 24 * 60 * 60 * 1000;
-      case "week":     return todayMidnight - 6 * 24 * 60 * 60 * 1000;
-      case "month":    return todayMidnight - 29 * 24 * 60 * 60 * 1000;
-      case "3months":  return todayMidnight - 89 * 24 * 60 * 60 * 1000;
-      case "custom":   return customFrom ? new Date(customFrom + "T00:00:00").getTime() : 0;
-      default:         return 0;
+      case "today": return todayMidnight;
+      case "2days": return todayMidnight - 1 * 24 * 60 * 60 * 1000;
+      case "week": return todayMidnight - 6 * 24 * 60 * 60 * 1000;
+      case "month": return todayMidnight - 29 * 24 * 60 * 60 * 1000;
+      case "3months": return todayMidnight - 89 * 24 * 60 * 60 * 1000;
+      case "custom": return customFrom ? new Date(customFrom + "T00:00:00").getTime() : 0;
+      default: return 0;
     }
   }
 
   const DATE_RANGE_OPTIONS = [
-    { key: "all",     label: "All Time" },
-    { key: "today",   label: "Today" },
-    { key: "2days",   label: "Last 2 Days" },
-    { key: "week",    label: "This Week" },
-    { key: "month",   label: "This Month" },
+    { key: "all", label: "All Time" },
+    { key: "today", label: "Today" },
+    { key: "2days", label: "Last 2 Days" },
+    { key: "week", label: "This Week" },
+    { key: "month", label: "This Month" },
     { key: "3months", label: "Last 3 Months" },
-    { key: "custom",  label: "Custom Range" },
+    { key: "custom", label: "Custom Range" },
   ];
 
   const cutoff = getDateRangeCutoff(dateRangeFilter);
@@ -938,9 +938,9 @@ export default function AdminDashboard() {
 
   const dateFiltered = cutoff > 0
     ? participants.filter(p => {
-        const ts = p.createdAt || 0;
-        return ts >= cutoff && ts <= customToCeiling;
-      })
+      const ts = p.createdAt || 0;
+      return ts >= cutoff && ts <= customToCeiling;
+    })
     : participants;
 
   const filtered = dateFiltered.filter(p =>
@@ -1090,8 +1090,8 @@ export default function AdminDashboard() {
     const pausedCount = (store.pausedPrizes || []).length;
     const matchesStatus =
       storePrizeStatusFilter === "all" ? true :
-      storePrizeStatusFilter === "paused" ? pausedCount > 0 :
-      pausedCount === 0;
+        storePrizeStatusFilter === "paused" ? pausedCount > 0 :
+          pausedCount === 0;
     return matchesSearch && matchesState && matchesStatus;
   });
 
@@ -1116,8 +1116,8 @@ export default function AdminDashboard() {
     const isStoreActive = store.active !== false;
     const matchesStatus =
       storeTabStatusFilter === "all" ? true :
-      storeTabStatusFilter === "paused" ? !isStoreActive :
-      isStoreActive;
+        storeTabStatusFilter === "paused" ? !isStoreActive :
+          isStoreActive;
     return matchesSearch && matchesState && matchesStatus;
   });
 
@@ -1727,9 +1727,8 @@ export default function AdminDashboard() {
                 {/* Search and Filters Bar */}
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
                   <div className="sm:col-span-5 relative">
-                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
-                      storePrizeSearch ? "text-teal-400" : "text-white/40"
-                    }`} />
+                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${storePrizeSearch ? "text-teal-400" : "text-white/40"
+                      }`} />
                     <input
                       type="text"
                       placeholder="Search stores (name, code, city) or prize item..."
@@ -1775,33 +1774,30 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setStorePrizeStatusFilter("all")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storePrizeStatusFilter === "all"
-                          ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storePrizeStatusFilter === "all"
+                        ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       All ({storesToDisplay.length})
                     </button>
                     <button
                       type="button"
                       onClick={() => setStorePrizeStatusFilter("paused")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storePrizeStatusFilter === "paused"
-                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storePrizeStatusFilter === "paused"
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       Paused ({storesWithPausedCount})
                     </button>
                     <button
                       type="button"
                       onClick={() => setStorePrizeStatusFilter("active")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storePrizeStatusFilter === "active"
-                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storePrizeStatusFilter === "active"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       Active ({storesToDisplay.length - storesWithPausedCount})
                     </button>
@@ -1853,11 +1849,10 @@ export default function AdminDashboard() {
                             className="flex items-center justify-between gap-3 p-4 cursor-pointer hover:bg-white/[0.04] transition-colors select-none"
                           >
                             <div className="flex items-center gap-3 min-w-0">
-                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${
-                                hasPaused
-                                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-300"
-                                  : "bg-teal-500/15 border border-teal-500/30 text-teal-300"
-                              }`}>
+                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors ${hasPaused
+                                ? "bg-amber-500/15 border border-amber-500/30 text-amber-300"
+                                : "bg-teal-500/15 border border-teal-500/30 text-teal-300"
+                                }`}>
                                 <Building2 className="w-4 h-4" />
                               </div>
                               <div className="min-w-0">
@@ -1935,15 +1930,14 @@ export default function AdminDashboard() {
                                 return (
                                   <div
                                     key={prize.id}
-                                    className={`flex items-center justify-between py-2 px-3 rounded-xl transition-all ${
-                                      isPaused
-                                        ? "bg-amber-500/10 border border-amber-500/20"
-                                        : isGloballyPaused
+                                    className={`flex items-center justify-between py-2 px-3 rounded-xl transition-all ${isPaused
+                                      ? "bg-amber-500/10 border border-amber-500/20"
+                                      : isGloballyPaused
                                         ? "bg-red-500/5 border border-red-500/15 opacity-60"
                                         : isStoreOutOfStock
-                                        ? "bg-red-950/20 border border-red-500/20 opacity-80"
-                                        : "bg-white/[0.02] border border-white/5"
-                                    }`}
+                                          ? "bg-red-950/20 border border-red-500/20 opacity-80"
+                                          : "bg-white/[0.02] border border-white/5"
+                                      }`}
                                   >
                                     <div className="flex items-center gap-2.5 min-w-0 pr-2">
                                       <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: prize.color }} />
@@ -2011,9 +2005,8 @@ export default function AdminDashboard() {
                                       <button
                                         disabled={isGloballyPaused || pauseLoading === `${store.id}-${prize.id}`}
                                         onClick={() => handleToggleStorePrize(store, prize, !isPaused)}
-                                        className={`relative w-10 h-5 rounded-full transition-all flex-shrink-0 ${
-                                          isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
-                                        }`}
+                                        className={`relative w-10 h-5 rounded-full transition-all flex-shrink-0 ${isGloballyPaused ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
+                                          }`}
                                         style={{
                                           background: (!isPaused && !isGloballyPaused)
                                             ? "linear-gradient(135deg, #00BFA6, #0D9488)"
@@ -2183,9 +2176,8 @@ export default function AdminDashboard() {
               {allCampaignStores.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 p-3 rounded-2xl bg-white/[0.02] border border-white/5">
                   <div className="sm:col-span-5 relative">
-                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${
-                      storeTabSearch ? "text-teal-400" : "text-white/40"
-                    }`} />
+                    <Search className={`w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 transition-colors pointer-events-none ${storeTabSearch ? "text-teal-400" : "text-white/40"
+                      }`} />
                     <input
                       type="text"
                       placeholder="Search stores (name, code, city)..."
@@ -2229,33 +2221,30 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setStoreTabStatusFilter("all")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storeTabStatusFilter === "all"
-                          ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storeTabStatusFilter === "all"
+                        ? "bg-teal-500/20 text-teal-300 border border-teal-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       All ({allCampaignStores.length})
                     </button>
                     <button
                       type="button"
                       onClick={() => setStoreTabStatusFilter("paused")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storeTabStatusFilter === "paused"
-                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storeTabStatusFilter === "paused"
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       Paused ({inactiveStoresCount})
                     </button>
                     <button
                       type="button"
                       onClick={() => setStoreTabStatusFilter("active")}
-                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                        storeTabStatusFilter === "active"
-                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                          : "bg-white/5 text-white/40 hover:text-white border border-transparent"
-                      }`}
+                      className={`px-3 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${storeTabStatusFilter === "active"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                        : "bg-white/5 text-white/40 hover:text-white border border-transparent"
+                        }`}
                     >
                       Active ({activeStoresCount})
                     </button>
@@ -2301,20 +2290,18 @@ export default function AdminDashboard() {
                     return (
                       <div
                         key={s.id || s.code}
-                        className={`rounded-2xl p-5 space-y-4 relative group transition-all ${
-                          isStoreActive
-                            ? "bg-white/[0.03] border border-white/10 hover:border-teal-500/40"
-                            : "bg-red-950/20 border border-red-500/25 hover:border-red-500/50"
-                        }`}
+                        className={`rounded-2xl p-5 space-y-4 relative group transition-all ${isStoreActive
+                          ? "bg-white/[0.03] border border-white/10 hover:border-teal-500/40"
+                          : "bg-red-950/20 border border-red-500/25 hover:border-red-500/50"
+                          }`}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
                             <div
-                              className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                                isStoreActive
-                                  ? "bg-teal-500/15 border border-teal-500/30 text-teal-300"
-                                  : "bg-red-500/15 border border-red-500/30 text-red-400"
-                              }`}
+                              className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${isStoreActive
+                                ? "bg-teal-500/15 border border-teal-500/30 text-teal-300"
+                                : "bg-red-500/15 border border-red-500/30 text-red-400"
+                                }`}
                             >
                               <MapPin className="w-5 h-5" />
                             </div>
@@ -2324,35 +2311,35 @@ export default function AdminDashboard() {
                                   {s.name}
                                 </h4>
                                 {isStoreActive ? (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex-shrink-0">
                                     ● Active
                                   </span>
                                 ) : (
-                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse">
+                                  <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse flex-shrink-0">
                                     ○ Inactive
                                   </span>
                                 )}
                               </div>
-                              <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                                <span className="text-[11px] font-mono text-teal-400">
+                              <div className="flex items-center gap-2 flex-wrap mt-1">
+                                <span className="text-[11px] font-mono text-teal-400 font-semibold">
                                   {s.code}
                                 </span>
                                 {s.city && (
                                   <span className="text-[10px] text-white/50">· {s.city}</span>
                                 )}
                                 {s.state && (
-                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
                                     {s.state}
                                   </span>
                                 )}
                                 {s.pin && (
-                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-white/10 text-white/80 border border-white/10">
                                     PIN: {s.pin}
                                   </span>
                                 )}
                                 {s.pinRotatedAt && (
                                   <span
-                                    className="px-1.5 py-0.2 rounded text-[9px] font-mono bg-teal-500/15 text-teal-300 border border-teal-500/25"
+                                    className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-teal-500/15 text-teal-300 border border-teal-500/25"
                                     title={`PIN rotated: ${new Date(s.pinRotatedAt).toLocaleString()}`}
                                   >
                                     🔄 {new Date(s.pinRotatedAt).toLocaleDateString()}
@@ -2368,11 +2355,10 @@ export default function AdminDashboard() {
                               disabled={isTogglingThisStore}
                               onClick={() => handleToggleStoreActive(s, !isStoreActive)}
                               title={isStoreActive ? "Deactivate store — blocks all spins" : "Activate store — allow spins"}
-                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer disabled:opacity-50 ${
-                                isStoreActive
-                                  ? "bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25"
-                                  : "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25"
-                              }`}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-black transition-all cursor-pointer disabled:opacity-50 ${isStoreActive
+                                ? "bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25"
+                                : "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25"
+                                }`}
                             >
                               {isTogglingThisStore ? (
                                 <span className="animate-spin inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full" />
@@ -2885,11 +2871,10 @@ export default function AdminDashboard() {
             <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/10 flex-shrink-0">
               <div className="flex items-center gap-3">
                 <div
-                  className={`w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0 ${
-                    rotatedResult
-                      ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
-                      : "bg-amber-500/15 border border-amber-500/30 text-amber-400"
-                  }`}
+                  className={`w-11 h-11 rounded-2xl flex items-center justify-center text-xl flex-shrink-0 ${rotatedResult
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                    : "bg-amber-500/15 border border-amber-500/30 text-amber-400"
+                    }`}
                 >
                   {rotatedResult ? <CheckCircle className="w-5 h-5" /> : <Key className="w-5 h-5" />}
                 </div>
@@ -2985,11 +2970,10 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setRotatePinLength(4)}
-                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
-                        rotatePinLength === 4
-                          ? "bg-amber-500/20 border-amber-500/50 text-white"
-                          : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
-                      }`}
+                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${rotatePinLength === 4
+                        ? "bg-amber-500/20 border-amber-500/50 text-white"
+                        : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
+                        }`}
                     >
                       <div className="font-bold text-xs flex items-center justify-between">
                         <span>4 Digits (e.g. 7482)</span>
@@ -3000,11 +2984,10 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setRotatePinLength(6)}
-                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${
-                        rotatePinLength === 6
-                          ? "bg-amber-500/20 border-amber-500/50 text-white"
-                          : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
-                      }`}
+                      className={`p-3 rounded-xl text-left border transition-all cursor-pointer ${rotatePinLength === 6
+                        ? "bg-amber-500/20 border-amber-500/50 text-white"
+                        : "bg-white/[0.03] border-white/10 text-white/50 hover:text-white"
+                        }`}
                     >
                       <div className="font-bold text-xs flex items-center justify-between">
                         <span>6 Digits (e.g. 849201)</span>
@@ -3278,15 +3261,14 @@ export default function AdminDashboard() {
                 return (
                   <div
                     key={prize.id}
-                    className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
-                      isPaused
-                        ? "bg-amber-500/[0.03] border-amber-500/20"
-                        : isGloballyPaused
+                    className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${isPaused
+                      ? "bg-amber-500/[0.03] border-amber-500/20"
+                      : isGloballyPaused
                         ? "bg-red-500/[0.03] border-red-500/20 opacity-60"
                         : isStoreOutOfStock
-                        ? "bg-red-950/20 border-red-500/20 opacity-80"
-                        : "bg-white/[0.02] border-white/10"
-                    }`}
+                          ? "bg-red-950/20 border-red-500/20 opacity-80"
+                          : "bg-white/[0.02] border-white/10"
+                      }`}
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -3507,11 +3489,10 @@ export default function AdminDashboard() {
                   <button
                     type="button"
                     onClick={() => setEditStoreActive(!editStoreActive)}
-                    className={`w-full py-2.5 px-3.5 rounded-xl text-xs font-black flex items-center justify-center gap-2 border transition-all cursor-pointer ${
-                      editStoreActive
-                        ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25"
-                        : "bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25"
-                    }`}
+                    className={`w-full py-2.5 px-3.5 rounded-xl text-xs font-black flex items-center justify-center gap-2 border transition-all cursor-pointer ${editStoreActive
+                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25"
+                      : "bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25"
+                      }`}
                   >
                     {editStoreActive ? (
                       <>
