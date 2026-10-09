@@ -2385,12 +2385,17 @@ export default function AdminDashboard() {
                             <button
                               type="button"
                               onClick={() => handleOpenEditStore(s)}
-                              className="p-1.5 rounded-lg opacity-60 hover:opacity-100 hover:text-teal-300 hover:bg-white/5 transition-all cursor-pointer"
-                              title="Edit Store Details"
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-black bg-teal-500/20 border border-teal-500/40 text-teal-300 hover:bg-teal-500/30 hover:border-teal-400 transition-all cursor-pointer shadow-sm shadow-teal-500/10"
+                              title="Edit Store Details (Name, Code, PIN, Location)"
                             >
-                              <Edit3 className="w-4 h-4" />
+                              <Edit3 className="w-3.5 h-3.5 text-teal-300" />
+                              <span>Edit</span>
                             </button>
-                            <button onClick={() => handleDeleteStore(s.id)} className="p-1.5 rounded-lg opacity-40 hover:opacity-100 hover:text-red-400 transition-all cursor-pointer" title="Delete Store">
+                            <button
+                              onClick={() => handleDeleteStore(s.id)}
+                              className="p-1.5 rounded-xl text-white/40 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
+                              title="Delete Store"
+                            >
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
