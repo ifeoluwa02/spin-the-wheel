@@ -2311,7 +2311,7 @@ export default function AdminDashboard() {
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-2 flex-wrap mt-1.5">
+                            <div className="flex items-center gap-2 flex-wrap w-max mt-1.5">
                               <span className="text-[11px] font-mono text-teal-400 font-bold">
                                 {s.code}
                               </span>
