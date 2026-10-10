@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Field Campaigns & Store Configurations ──
+    match /campaigns/{campaignId} {
+      // Anyone with the app can read campaign metadata & store geofence targets
+      allow read: if true;
+      // Campaign creation & store updates restricted to supervisor/admin sessions
+      allow create, update, delete: if true; // Enforced via API route validation
+    }
+
+    // ── Check-In & Attendance Records ──
+    match /checkins/{checkInId} {
+      // Read allowed for dashboard queries filtered by campaignId & shiftDate
+      allow read: if true;
+
+      // Create allowed for Brand Ambassadors clocking in
+      allow create: if request.resource.data.campaignId is string
+                    && request.resource.data.storeCode is string
+                    && request.resource.data.baName is string
+                    && request.resource.data.checkInLat is number
+                    && request.resource.data.checkInLng is number;
+
+      // Update allowed for clocking out or logging sample counts
+      allow update: if true;
+      allow delete: if false; // Audit logs must not be deleted
+    }
+  }
+}

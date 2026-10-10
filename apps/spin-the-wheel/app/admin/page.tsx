@@ -213,6 +213,11 @@ export default function AdminDashboard() {
   const [editStoreState, setEditStoreState] = useState("");
   const [editStorePin, setEditStorePin] = useState("1234");
   const [editStoreActive, setEditStoreActive] = useState(true);
+  const [editStoreLat, setEditStoreLat] = useState("");
+  const [editStoreLng, setEditStoreLng] = useState("");
+  const [editStoreRadius, setEditStoreRadius] = useState("100");
+  const [detectingLocation, setDetectingLocation] = useState(false);
+  const [locationToast, setLocationToast] = useState<string | null>(null);
   const [editStoreSaving, setEditStoreSaving] = useState(false);
   const [editStoreError, setEditStoreError] = useState("");
 
@@ -224,6 +229,10 @@ export default function AdminDashboard() {
     setEditStoreState(store.state || "");
     setEditStorePin(store.pin || "1234");
     setEditStoreActive(store.active !== false);
+    setEditStoreLat(store.lat !== undefined ? String(store.lat) : "");
+    setEditStoreLng(store.lng !== undefined ? String(store.lng) : "");
+    setEditStoreRadius(store.geofenceRadius ? String(store.geofenceRadius) : "100");
+    setLocationToast(null);
     setEditStoreError("");
   }
 
@@ -231,7 +240,36 @@ export default function AdminDashboard() {
     if (!editStoreSaving) {
       setEditingStore(null);
       setEditStoreError("");
+      setLocationToast(null);
     }
+  }
+
+  function handleDetectCurrentLocation() {
+    if (typeof window === "undefined" || !navigator.geolocation) {
+      setLocationToast("❌ Geolocation is not supported by your browser.");
+      setTimeout(() => setLocationToast(null), 4000);
+      return;
+    }
+    setDetectingLocation(true);
+    setLocationToast(null);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setEditStoreLat(lat.toFixed(6));
+        setEditStoreLng(lng.toFixed(6));
+        setDetectingLocation(false);
+        setLocationToast(`📍 Coordinates locked! (Accuracy: ±${Math.round(pos.coords.accuracy)}m)`);
+        setTimeout(() => setLocationToast(null), 3500);
+      },
+      (err) => {
+        setDetectingLocation(false);
+        setLocationToast(`❌ GPS Error: ${err.message || "Could not retrieve location."}`);
+        setTimeout(() => setLocationToast(null), 4500);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
   }
 
   async function handleSaveEditedStore(e: React.FormEvent) {
@@ -241,6 +279,10 @@ export default function AdminDashboard() {
     setEditStoreError("");
 
     try {
+      const parsedLat = editStoreLat.trim() ? Number(editStoreLat.trim()) : null;
+      const parsedLng = editStoreLng.trim() ? Number(editStoreLng.trim()) : null;
+      const parsedRadius = editStoreRadius.trim() ? Number(editStoreRadius.trim()) : 100;
+
       const res = await fetch("/api/admin/store", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -254,6 +296,9 @@ export default function AdminDashboard() {
             state: editStoreState.trim() || undefined,
             pin: editStorePin.trim() || undefined,
             active: editStoreActive,
+            lat: parsedLat,
+            lng: parsedLng,
+            geofenceRadius: parsedRadius,
           },
         }),
       });
@@ -2336,6 +2381,14 @@ export default function AdminDashboard() {
                                   🔄 {new Date(s.pinRotatedAt).toLocaleDateString()}
                                 </span>
                               )}
+                              {s.lat !== undefined && s.lng !== undefined && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/25"
+                                  title={`GPS: ${s.lat.toFixed(4)}, ${s.lng.toFixed(4)} · Radius: ${s.geofenceRadius || 100}m`}
+                                >
+                                  📍 Geofence ({s.geofenceRadius || 100}m)
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -3452,6 +3505,78 @@ export default function AdminDashboard() {
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              {/* Geofence & Location Coordinates */}
+              <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5" />
+                      Geofence & GPS Target
+                    </span>
+                    <p className="text-[11px] text-white/40">Target coordinates used for on-site BA check-in verification.</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={detectingLocation}
+                    onClick={handleDetectCurrentLocation}
+                    className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold bg-teal-500/15 text-teal-300 border border-teal-500/30 hover:bg-teal-500/25 transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {detectingLocation ? (
+                      <>
+                        <span className="animate-spin inline-block w-2.5 h-2.5 border-2 border-current border-t-transparent rounded-full" />
+                        <span>Detecting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <MapPin className="w-3 h-3" />
+                        <span>📍 Use Current Location</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {locationToast && (
+                  <p className="text-[11px] font-mono text-teal-300">{locationToast}</p>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div>
+                    <label className="block text-[10px] font-mono uppercase text-white/50 mb-1">Latitude</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editStoreLat}
+                      onChange={(e) => setEditStoreLat(e.target.value)}
+                      placeholder="e.g. 6.435800"
+                      className="w-full px-3 py-2 rounded-xl text-xs font-mono text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono uppercase text-white/50 mb-1">Longitude</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editStoreLng}
+                      onChange={(e) => setEditStoreLng(e.target.value)}
+                      placeholder="e.g. 3.483100"
+                      className="w-full px-3 py-2 rounded-xl text-xs font-mono text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono uppercase text-white/50 mb-1">Radius (Meters)</label>
+                    <input
+                      type="number"
+                      min={30}
+                      max={1000}
+                      value={editStoreRadius}
+                      onChange={(e) => setEditStoreRadius(e.target.value)}
+                      placeholder="100"
+                      className="w-full px-3 py-2 rounded-xl text-xs font-mono text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -83,6 +83,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const parsedLat = typeof store.lat === "number" && !isNaN(store.lat)
+      ? store.lat
+      : (typeof store.lat === "string" && store.lat.trim() !== "" && !isNaN(Number(store.lat)) ? Number(store.lat) : undefined);
+
+    const parsedLng = typeof store.lng === "number" && !isNaN(store.lng)
+      ? store.lng
+      : (typeof store.lng === "string" && store.lng.trim() !== "" && !isNaN(Number(store.lng)) ? Number(store.lng) : undefined);
+
+    const parsedRadius = typeof store.geofenceRadius === "number" && !isNaN(store.geofenceRadius)
+      ? store.geofenceRadius
+      : (typeof store.geofenceRadius === "string" && store.geofenceRadius.trim() !== "" && !isNaN(Number(store.geofenceRadius)) ? Number(store.geofenceRadius) : undefined);
+
     const newStore: StoreLocation = {
       id: `store-${Date.now()}`,
       name: store.name.trim(),
@@ -93,6 +105,9 @@ export async function POST(request: NextRequest) {
       active: store.active !== false,
       pausedPrizes: Array.isArray(store.pausedPrizes) ? store.pausedPrizes : [],
       customAllocations: store.customAllocations || undefined,
+      lat: parsedLat,
+      lng: parsedLng,
+      geofenceRadius: parsedRadius,
     };
 
     const updatedStores = [...stores, newStore];
@@ -114,7 +129,7 @@ export async function POST(request: NextRequest) {
 
 /**
  * PUT /api/admin/store
- * Updates an existing store's details (Name, Code, City, State, PIN, Active status).
+ * Updates an existing store's details (Name, Code, City, State, PIN, Active status, Coordinates).
  */
 export async function PUT(request: NextRequest) {
   try {
@@ -163,6 +178,18 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const putLat = typeof store.lat === "number" && !isNaN(store.lat)
+      ? store.lat
+      : (typeof store.lat === "string" && store.lat.trim() !== "" && !isNaN(Number(store.lat)) ? Number(store.lat) : undefined);
+
+    const putLng = typeof store.lng === "number" && !isNaN(store.lng)
+      ? store.lng
+      : (typeof store.lng === "string" && store.lng.trim() !== "" && !isNaN(Number(store.lng)) ? Number(store.lng) : undefined);
+
+    const putRadius = typeof store.geofenceRadius === "number" && !isNaN(store.geofenceRadius)
+      ? store.geofenceRadius
+      : (typeof store.geofenceRadius === "string" && store.geofenceRadius.trim() !== "" && !isNaN(Number(store.geofenceRadius)) ? Number(store.geofenceRadius) : undefined);
+
     const updatedStore: StoreLocation = {
       ...currentStore,
       name: store.name.trim(),
@@ -173,6 +200,9 @@ export async function PUT(request: NextRequest) {
       active: store.active !== undefined ? Boolean(store.active) : currentStore.active !== false,
       pausedPrizes: Array.isArray(store.pausedPrizes) ? store.pausedPrizes : currentStore.pausedPrizes || [],
       customAllocations: store.customAllocations ?? currentStore.customAllocations,
+      lat: putLat !== undefined ? putLat : (store.lat === null || store.lat === "" ? undefined : currentStore.lat),
+      lng: putLng !== undefined ? putLng : (store.lng === null || store.lng === "" ? undefined : currentStore.lng),
+      geofenceRadius: putRadius !== undefined ? putRadius : currentStore.geofenceRadius || 100,
     };
 
     const updatedStores = [...stores];

@@ -46,6 +46,12 @@ export interface StoreLocation {
   customAllocations?: Record<string, number>;
   /** Timestamp when the store PIN was last rotated */
   pinRotatedAt?: number;
+  /** Target GPS latitude for geofenced field check-in */
+  lat?: number;
+  /** Target GPS longitude for geofenced field check-in */
+  lng?: number;
+  /** Allowed geofence boundary radius in meters (defaults to 100m) */
+  geofenceRadius?: number;
 }
 
 export interface StoreInventoryRecord {

@@ -1,36 +1,20 @@
 {
-  "name": "spin-wheel-campaign",
+  "name": "brand-activation-monorepo",
   "version": "1.0.0",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "predev": "rm -rf .next",
-    "dev": "./node_modules/.bin/next dev",
-    "prebuild": "rm -rf .next",
-    "build": "./node_modules/.bin/next build",
-    "start": "./node_modules/.bin/next start",
-    "presentation": "rm -rf .next && ./node_modules/.bin/next build && ./node_modules/.bin/next start",
-    "lint": "./node_modules/.bin/next lint",
-    "clean": "rm -rf .next"
-  },
-  "dependencies": {
-    "@vercel/analytics": "^2.0.1",
-    "canvas-confetti": "^1.9.4",
-    "firebase": "^10.13.0",
-    "lucide-react": "^0.469.0",
-    "next": "^14.2.24",
-    "qrcode.react": "^4.2.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@types/canvas-confetti": "^1.9.0",
-    "@types/node": "^20.14.0",
-    "@types/qrcode.react": "^1.0.5",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
-    "autoprefixer": "^10.5.4",
-    "postcss": "^8.5.23",
-    "tailwindcss": "^3.4.19",
-    "typescript": "^5.5.0"
+    "dev": "npm run dev:spin",
+    "dev:spin": "npm run dev --workspace=@activation/spin-the-wheel",
+    "dev:checkin": "npm run dev --workspace=@activation/field-checkin",
+    "build": "npm run build --workspaces",
+    "build:spin": "npm run build --workspace=@activation/spin-the-wheel",
+    "build:checkin": "npm run build --workspace=@activation/field-checkin",
+    "start:spin": "npm run start --workspace=@activation/spin-the-wheel",
+    "start:checkin": "npm run start --workspace=@activation/field-checkin",
+    "lint": "npm run lint --workspaces"
   }
 }
