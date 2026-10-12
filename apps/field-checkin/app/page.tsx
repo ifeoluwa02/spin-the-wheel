@@ -195,7 +195,7 @@ function CheckInContent() {
         body: JSON.stringify({
           action: "check_in",
           campaignId: campaignSlug,
-          storeCode: selectedStore.code,
+          storeCode: selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "",
           baName: baName.trim(),
           baPhone: baPhone.trim(),
           pin: baPin.trim(),
@@ -473,19 +473,26 @@ function CheckInContent() {
                 </label>
                 <select
                   required
-                  value={selectedStore?.code || ""}
+                  value={selectedStore ? (selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "") : ""}
                   onChange={(e) => {
-                    const st = stores.find((s) => s.code === e.target.value);
+                    const val = e.target.value;
+                    const st = stores.find((s) => (s.storeCode || (s as any).code || s.id || "") === val);
                     setSelectedStore(st || null);
+                    if (st?.baName && !baName) setBaName(st.baName);
+                    if (st?.baPhone && !baPhone) setBaPhone(st.baPhone);
                   }}
                   className="w-full px-3.5 py-3 rounded-2xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none transition-all cursor-pointer"
                 >
                   <option value="">-- Choose your store location --</option>
-                  {stores.map((s) => (
-                    <option key={s.id || s.code} value={s.code}>
-                      {s.name} {s.city ? `· ${s.city}` : ""} ({s.code})
-                    </option>
-                  ))}
+                  {stores.map((s) => {
+                    const code = s.storeCode || (s as any).code || s.id || "";
+                    const locationLabel = s.state || (s as any).city || "";
+                    return (
+                      <option key={s.id || code} value={code} className="bg-slate-900 text-white py-1">
+                        {s.name} {locationLabel ? `· ${locationLabel}` : ""} ({code})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
