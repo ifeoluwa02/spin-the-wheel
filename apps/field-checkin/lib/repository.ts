@@ -48,11 +48,19 @@ export async function recordCheckIn(
   data: Omit<CheckInRecord, "id" | "createdAt" | "updatedAt">
 ): Promise<CheckInRecord> {
   const now = Date.now();
-  const cleanData = {
+  const raw = {
     ...data,
     createdAt: now,
     updatedAt: now,
   };
+
+  // Strip undefined values which Firestore rejects
+  const cleanData: Record<string, any> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v !== undefined) {
+      cleanData[k] = v;
+    }
+  }
 
   const colRef = collection(db, COLLECTION_NAME);
   const docRef = await addDoc(colRef, cleanData);
@@ -60,7 +68,7 @@ export async function recordCheckIn(
   return {
     ...cleanData,
     id: docRef.id,
-  };
+  } as CheckInRecord;
 }
 
 /**
@@ -87,15 +95,16 @@ export async function recordCheckOut(
     hoursWorked = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
   }
 
-  const updates: Partial<CheckInRecord> = {
+  const updates: Record<string, any> = {
     checkOutTime: nowIso,
-    checkOutLat: payload.latitude,
-    checkOutLng: payload.longitude,
     status: "checked_out",
     hoursWorked,
-    notes: payload.notes || existing.notes,
     updatedAt: nowTs,
   };
+
+  if (payload.latitude !== undefined) updates.checkOutLat = payload.latitude;
+  if (payload.longitude !== undefined) updates.checkOutLng = payload.longitude;
+  if (payload.notes !== undefined) updates.notes = payload.notes;
 
   await updateDoc(docRef, updates);
 
