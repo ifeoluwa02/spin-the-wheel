@@ -223,6 +223,20 @@ export async function saveCampaign(campaign: Campaign): Promise<void> {
  */
 export const DEFAULT_DEMO_STORES: StoreLocation[] = [
   {
+    id: "exp-marketing-ikeja",
+    name: "EXP Marketing HQ",
+    storeCode: "exp-marketing-ikeja",
+    state: "Lagos",
+    address: "10 Adekunle Fajuyi Way, GRA Ikeja, Lagos",
+    pin: "1234",
+    baName: "Ifeoluwa Olawoore",
+    baPhone: "08030001234",
+    isActive: true,
+    lat: 6.5702,
+    lng: 3.3496,
+    geofenceRadius: 100,
+  },
+  {
     id: "spar-ilupeju",
     name: "Spar Supermarket Ilupeju",
     storeCode: "spar-ilupeju",

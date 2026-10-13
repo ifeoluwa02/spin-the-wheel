@@ -36,9 +36,13 @@ function CheckInContent() {
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsError, setGpsError] = useState("");
 
-  // Selfie / Photo state
+  // Selfie Camera state (In-App Camera Capture, No File Picker)
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   // Active shift state (persisted to localStorage)
   const [activeShift, setActiveShift] = useState<CheckInRecord | null>(null);
@@ -158,17 +162,102 @@ function CheckInContent() {
     }
   }, [selectedStore, demoMode]);
 
-  // Handle Photo capture
-  function handlePhotoCapture(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // ── Camera Selfie Handlers (Real webcam snap, zero file picker) ──
+  async function startCamera() {
+    setCameraError("");
+    setCameraStarting(true);
+    setIsCameraOpen(true);
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPhotoDataUrl(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Camera API is not supported in this browser.");
+      }
+
+      // Stop any stale stream first
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "user",
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
+        audio: false,
+      });
+
+      mediaStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(() => {});
+      }
+    } catch (err: any) {
+      console.error("Camera access error:", err);
+      let msg = "Could not access camera. Please allow camera permissions.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        msg = "Camera permission was denied. Please allow camera access in your browser address bar.";
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        msg = "No camera hardware detected on this device.";
+      }
+      setCameraError(msg);
+    } finally {
+      setCameraStarting(false);
+    }
   }
+
+  function stopCamera() {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+    setCameraError("");
+  }
+
+  function snapSelfie() {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Mirror image horizontally to match the front-camera mirror viewfinder
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, 0, 0, width, height);
+
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    setPhotoDataUrl(dataUrl);
+    setSubmitError("");
+    stopCamera();
+  }
+
+  // Ensure camera stream attaches when camera opens
+  useEffect(() => {
+    if (isCameraOpen && mediaStreamRef.current && videoRef.current) {
+      videoRef.current.srcObject = mediaStreamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isCameraOpen]);
+
+  // Ensure camera stream is stopped if component unmounts
+  useEffect(() => {
+    return () => {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, []);
 
   // ── Geofence Evaluation ──
   const storeTarget: GeoPoint = {
@@ -184,6 +273,12 @@ function CheckInContent() {
   async function handleCheckInSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedStore || !baName.trim() || !coords) return;
+
+    if (!photoDataUrl) {
+      setSubmitError("📸 A live selfie snapshot is required for verification before check-in.");
+      if (!isCameraOpen) startCamera();
+      return;
+    }
 
     setSubmitting(true);
     setSubmitError("");
@@ -601,56 +696,182 @@ function CheckInContent() {
                 </div>
               )}
 
-              {/* 4. Morning Photo Proof (Selfie / Storefront) */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1.5">
-                  Arrival Photo Proof (Selfie or Storefront)
-                </label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="user"
-                  ref={fileInputRef}
-                  onChange={handlePhotoCapture}
-                  className="hidden"
-                />
+              {/* 4. Morning In-App Live Selfie (Strictly Live Camera Snap, No Uploads) */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60">
+                    Live Selfie Verification <span className="text-red-400">*</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded-full border border-teal-500/20">
+                    Live Camera Only · No Upload
+                  </span>
+                </div>
 
+                {/* State 1: Photo already snapped */}
                 {photoDataUrl ? (
-                  <div className="relative rounded-2xl overflow-hidden border border-teal-500/30 bg-black/40 p-2 flex items-center gap-3">
-                    <img
-                      src={photoDataUrl}
-                      alt="Arrival Proof"
-                      className="w-14 h-14 object-cover rounded-xl border border-white/20"
-                    />
-                    <div className="flex-1 min-w-0 text-xs">
-                      <p className="font-bold text-white flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Photo Captured
-                      </p>
+                  <div className="rounded-2xl border border-emerald-500/40 bg-emerald-950/20 p-3 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="relative">
+                        <img
+                          src={photoDataUrl}
+                          alt="BA Verified Selfie"
+                          className="w-16 h-16 rounded-xl object-cover border-2 border-emerald-400 shadow-md"
+                        />
+                        <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-black p-0.5 rounded-full">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>Live Selfie Captured</span>
+                        </div>
+                        <p className="text-[11px] text-white/60 mt-0.5">
+                          Verified from device camera. Ready for check-in.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
                       <button
                         type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="text-[11px] text-teal-300 hover:underline mt-0.5"
+                        onClick={() => {
+                          setPhotoDataUrl(null);
+                          startCamera();
+                        }}
+                        className="flex-1 py-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/15 text-white flex items-center justify-center gap-1.5 transition-all cursor-pointer"
                       >
-                        Retake Photo
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Retake Selfie</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPhotoDataUrl(null)}
+                        className="px-3 py-2 rounded-xl text-xs font-bold bg-red-500/15 hover:bg-red-500/25 text-red-300 flex items-center justify-center transition-all cursor-pointer"
+                        title="Remove photo"
+                      >
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setPhotoDataUrl(null)}
-                      className="p-1 rounded-full text-white/40 hover:text-white"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                  </div>
+                ) : isCameraOpen ? (
+                  /* State 2: Active In-App Camera Viewfinder */
+                  <div className="rounded-2xl border border-teal-500/40 bg-black/60 p-3 space-y-3 animate-fadeIn">
+                    <div className="flex items-center justify-between text-xs pb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                        <span className="font-bold text-white tracking-wide">Live Camera Viewfinder</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        className="text-white/50 hover:text-white p-1 rounded-lg"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Camera Video Viewfinder with Face Alignment Overlay */}
+                    <div className="relative aspect-[4/3] w-full max-w-sm mx-auto overflow-hidden rounded-2xl bg-black border border-white/20 flex items-center justify-center shadow-inner">
+                      {cameraStarting && (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/80 gap-2">
+                          <span className="w-6 h-6 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                          <p className="text-xs text-white/70">Connecting device camera...</p>
+                        </div>
+                      )}
+
+                      <video
+                        ref={(node) => {
+                          (videoRef as any).current = node;
+                          if (node && mediaStreamRef.current && node.srcObject !== mediaStreamRef.current) {
+                            node.srcObject = mediaStreamRef.current;
+                            node.play().catch(() => {});
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                        style={{ transform: "scaleX(-1)" }}
+                      />
+
+                      {/* Face Alignment Frame */}
+                      <div className="absolute inset-0 z-10 pointer-events-none flex flex-col items-center justify-center">
+                        <div className="w-36 h-44 sm:w-44 sm:h-52 border-2 border-dashed border-teal-400/70 rounded-[50%] shadow-[0_0_20px_rgba(45,212,191,0.25)] flex items-center justify-center">
+                          <span className="text-[10px] uppercase font-mono text-teal-300/80 bg-black/40 px-2 py-0.5 rounded-full">
+                            Center Face Here
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Camera Error (if any) */}
+                    {cameraError && (
+                      <div className="p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs space-y-1">
+                        <p className="font-bold flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5" /> Camera Access Issue
+                        </p>
+                        <p className="text-[11px] text-red-200/80">{cameraError}</p>
+                        <button
+                          type="button"
+                          onClick={startCamera}
+                          className="mt-1 text-[11px] underline text-teal-300"
+                        >
+                          Retry Permission
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Snap & Cancel Actions */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        className="px-4 py-2.5 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/15 text-white/70 hover:text-white transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={snapSelfie}
+                        disabled={cameraStarting}
+                        className="flex-1 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-teal-400 to-emerald-400 hover:from-teal-300 hover:to-emerald-300 text-black flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4 stroke-[2.5]" />
+                        <span>📸 Snap Selfie Now</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full py-3 rounded-2xl border border-dashed border-white/20 hover:border-teal-400/50 bg-white/[0.02] text-white/60 hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer"
-                  >
-                    <Camera className="w-4 h-4 text-teal-400" />
-                    <span>Take Morning Arrival Photo</span>
-                  </button>
+                  /* State 3: Camera Not Started (Prompt to Snap) */
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={startCamera}
+                      className="w-full py-4 px-4 rounded-2xl border-2 border-dashed border-teal-500/30 hover:border-teal-400 bg-teal-500/[0.04] hover:bg-teal-500/[0.08] text-white flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer group shadow-sm"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400 group-hover:scale-110 transition-transform">
+                        <Camera className="w-5 h-5" />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-xs font-black text-white group-hover:text-teal-300 transition-colors">
+                          📸 Open Camera to Snap Arrival Selfie
+                        </p>
+                        <p className="text-[11px] text-white/50 mt-0.5">
+                          Tap to activate laptop webcam or mobile front camera
+                        </p>
+                      </div>
+                    </button>
+
+                    {cameraError && (
+                      <div className="p-2.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs">
+                        <p className="font-bold flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5" /> Camera Access Issue
+                        </p>
+                        <p className="text-[11px] text-red-200/80 mt-0.5">{cameraError}</p>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -664,6 +885,11 @@ function CheckInContent() {
                   <>
                     <span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
                     <span>Verifying On-Site Attendance...</span>
+                  </>
+                ) : !photoDataUrl ? (
+                  <>
+                    <Camera className="w-4 h-4 stroke-[2.5]" />
+                    <span>Snap Selfie & Check In</span>
                   </>
                 ) : (
                   <>
