@@ -3,8 +3,8 @@ import "./globals.css";
 import { Navbar } from "@/components/Navbar";
 
 export const metadata: Metadata = {
-  title: "EventPass Pro | Instant Event Registration & Zero-Click Admission",
-  description: "High-speed event registration, automated branded email ticketing with dynamic QR codes, and zero-click continuous camera check-in.",
+  title: "Passflow | Event Registration & Passes",
+  description: "Fast-track event registration, automated branded email ticketing with dynamic QR codes, and zero-click admission.",
 };
 
 export default function RootLayout({
@@ -13,12 +13,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+    <html lang="en">
+      <body className="bg-white text-slate-900 min-h-screen flex flex-col selection:bg-blue-600 selection:text-white">
         <Navbar />
         <main className="flex-1">{children}</main>
-        <footer className="border-t border-slate-900 bg-slate-950/80 py-6 text-center text-xs text-slate-500">
-          <p>EventPass Pro &bull; Brand Activation &amp; Event Operations Monorepo</p>
+        <footer className="border-t border-slate-100 bg-white py-6 text-center text-xs text-slate-400">
+          <p>&copy; {new Date().getFullYear()} Passflow &bull; Event Attendance &amp; Operations</p>
         </footer>
       </body>
     </html>

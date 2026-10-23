@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { QRCodeSVG } from "qrcode.react";
 import confetti from "canvas-confetti";
 import {
@@ -11,14 +13,13 @@ import {
   Mail,
   User,
   Phone,
-  Briefcase,
   Building,
   CheckCircle2,
   Sparkles,
   Download,
   ExternalLink,
-  ChevronRight,
   Eye,
+  ChevronRight,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration } from "@/lib/types";
 import { INITIAL_EVENTS } from "@/lib/repository";
@@ -34,7 +35,6 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [organization, setOrganization] = useState("");
-  const [jobTitle, setJobTitle] = useState("");
   const [ticketType, setTicketType] = useState<AttendeeRegistration["ticketType"]>("General Admission");
 
   // Registration Result
@@ -82,7 +82,6 @@ export default function RegisterPage() {
           email,
           phone,
           organization,
-          jobTitle,
           ticketType,
         }),
       });
@@ -95,10 +94,9 @@ export default function RegisterPage() {
       setRegisteredAttendee(data.attendee);
       setEmailPreviewHtml(data.emailPreviewHtml || null);
 
-      // Trigger celebration confetti
       confetti({
-        particleCount: 100,
-        spread: 70,
+        particleCount: 80,
+        spread: 60,
         origin: { y: 0.6 },
       });
     } catch (err: unknown) {
@@ -113,394 +111,347 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12">
-      {/* Event Selector pill bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-800">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">
-            <span>Event Registration &amp; Pass</span>
-            <span className="text-xs px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-medium">
-              Live Gateway
-            </span>
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Register to receive your unique admission QR code instantly via email and download.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            Select Event:
-          </label>
-          <select
-            value={selectedEventId}
-            onChange={(e) => {
-              setSelectedEventId(e.target.value);
-              setRegisteredAttendee(null);
-            }}
-            className="bg-slate-900 border border-slate-700 text-white text-xs sm:text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-          >
-            {events.map((evt) => (
-              <option key={evt.id} value={evt.id}>
-                {evt.title} ({evt.city})
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left Column: Event Overview Card */}
-        <div className="lg:col-span-5 space-y-6">
-          <div className="glass-card rounded-2xl overflow-hidden shadow-2xl border border-slate-800">
-            {/* Gradient Banner */}
-            <div className={`p-6 sm:p-8 bg-gradient-to-br ${activeEvent.bannerGradient || "from-indigo-600 to-purple-800"} text-white relative`}>
-              <div className="inline-block bg-black/25 backdrop-blur-md px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider mb-3">
-                {activeEvent.category}
+    <div className="min-h-[calc(100vh-4rem)] bg-white flex flex-col justify-center">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:py-12 w-full">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-16 items-center">
+          
+          {/* Left Column: Zedda-style Editorial & 3D Illustration */}
+          <div className="lg:col-span-6 space-y-6">
+            {/* Top brand header & carousel indicator pill */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="w-1.5 h-6 bg-blue-600 rounded-sm transform -skew-x-12" />
+                <span className="w-1.5 h-6 bg-sky-400 rounded-sm transform -skew-x-12" />
+                <span className="text-lg font-black tracking-tight text-slate-900">
+                  Passflow
+                </span>
               </div>
-              <h2 className="text-2xl sm:text-3xl font-black leading-tight mb-2">
-                {activeEvent.title}
-              </h2>
-              <p className="text-xs sm:text-sm text-white/90">
-                Organized by <span className="font-semibold">{activeEvent.organizer}</span>
+
+              {/* Zedda-style indicator pills (••—) */}
+              <div className="flex items-center space-x-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-200" />
+                <span className="w-2 h-2 rounded-full bg-blue-400" />
+                <span className="w-6 h-2 rounded-full bg-blue-700" />
+              </div>
+            </div>
+
+            {/* Bold Headline matching screenshot */}
+            <div className="space-y-3 pt-2">
+              <h1 className="text-4xl sm:text-5xl font-black text-slate-900 leading-[1.12] tracking-tight">
+                Seamless Check-In &amp; Real-Time Passes
+              </h1>
+              <p className="text-base text-slate-500 leading-relaxed max-w-lg">
+                Every attendee, fully verified. Trade long registration queues for zero-click QR check-ins. Your official pass is delivered straight to your email.
               </p>
             </div>
 
-            {/* Event Key Info */}
-            <div className="p-6 space-y-4 text-sm">
-              <p className="text-slate-300 leading-relaxed text-xs sm:text-sm">
-                {activeEvent.description}
-              </p>
+            {/* Event Quick Details Badge */}
+            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-100 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+              <div className="flex items-center gap-1.5">
+                <Calendar className="w-4 h-4 text-blue-600" />
+                <span>
+                  {new Date(activeEvent.startDate).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-blue-600" />
+                <span>
+                  {new Date(activeEvent.startDate).toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <MapPin className="w-4 h-4 text-blue-600" />
+                <span className="truncate max-w-[200px]">{activeEvent.venueName}</span>
+              </div>
+            </div>
 
-              <div className="pt-4 border-t border-slate-800/80 space-y-3">
-                <div className="flex items-start gap-3 text-slate-300">
-                  <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
-                    <Calendar className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-white">Date</div>
-                    <div className="text-xs text-slate-400">
-                      {new Date(activeEvent.startDate).toLocaleDateString("en-US", {
-                        weekday: "long",
-                        year: "numeric",
-                        month: "long",
-                        day: "numeric",
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 text-slate-300">
-                  <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
-                    <Clock className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-white">Time</div>
-                    <div className="text-xs text-slate-400">
-                      {new Date(activeEvent.startDate).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}{" "}
-                      -{" "}
-                      {new Date(activeEvent.endDate).toLocaleTimeString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3 text-slate-300">
-                  <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400 shrink-0">
-                    <MapPin className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-white">{activeEvent.venueName}</div>
-                    <div className="text-xs text-slate-400">{activeEvent.venueAddress}, {activeEvent.city}</div>
-                  </div>
-                </div>
+            {/* 3D Clay Illustration matching the Zedda 3D safe asset */}
+            <div className="relative w-full max-w-md mx-auto lg:mx-0 pt-2 flex items-center justify-center">
+              <div className="relative w-[340px] h-[340px] sm:w-[380px] sm:h-[380px]">
+                <Image
+                  src="/hero-ticket-3d.jpg"
+                  alt="3D Event Ticket Pass Illustration"
+                  fill
+                  className="object-contain drop-shadow-2xl"
+                  priority
+                />
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Right Column: Form or Confirmation Pass */}
-        <div className="lg:col-span-7">
-          {!registeredAttendee ? (
-            /* Registration Form */
-            <div className="glass-card rounded-2xl p-6 sm:p-8 shadow-2xl border border-slate-800">
-              <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
-                <div>
-                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                    <Ticket className="w-5 h-5 text-indigo-400" />
-                    <span>Claim Your Entry Pass</span>
-                  </h2>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Fill in your credentials to generate your zero-click admission QR badge.
-                  </p>
-                </div>
-              </div>
-
-              {errorMsg && (
-                <div className="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm">
-                  {errorMsg}
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Full Name <span className="text-indigo-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                      <User className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. Babatunde Adeleke"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                    />
+          {/* Right Column: Clean, Minimalist Zedda-style Form or Pass */}
+          <div className="lg:col-span-6 flex justify-center">
+            <div className="w-full max-w-md">
+              {!registeredAttendee ? (
+                /* Registration Form */
+                <div className="space-y-6">
+                  {/* Title & Celebration Emoji */}
+                  <div className="text-center space-y-1">
+                    <h2 className="text-2xl sm:text-3xl font-extrabold text-blue-950 tracking-tight">
+                      Register for your Pass
+                    </h2>
+                    <div className="text-2xl pt-0.5">🎉</div>
+                    <p className="text-sm text-slate-500">
+                      Enter your details to generate your official pass
+                    </p>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Email Address <span className="text-indigo-400">*</span>
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                        <Mail className="w-4 h-4" />
-                      </div>
+                  {/* Event Selector Pill */}
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-2 flex items-center justify-between text-xs">
+                    <span className="text-slate-500 font-medium pl-1">Event:</span>
+                    <select
+                      value={selectedEventId}
+                      onChange={(e) => setSelectedEventId(e.target.value)}
+                      className="bg-white border border-slate-200 text-slate-900 rounded-lg px-2.5 py-1 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[240px] truncate"
+                    >
+                      {events.map((evt) => (
+                        <option key={evt.id} value={evt.id}>
+                          {evt.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {errorMsg && (
+                    <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-medium">
+                      {errorMsg}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleSubmit} className="space-y-4">
+                    {/* Full Name */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Full Name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="Enter your full name"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-50 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    {/* Email */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Email
+                      </label>
                       <input
                         type="email"
                         required
-                        placeholder="you@domain.com"
+                        placeholder="Enter your email address"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-50 focus:outline-none transition-all"
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Phone Number
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                        <Phone className="w-4 h-4" />
+                    {/* Phone & Organization Row */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                          Phone Number
+                        </label>
+                        <input
+                          type="tel"
+                          placeholder="e.g. 08012345678"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-50 focus:outline-none transition-all"
+                        />
                       </div>
-                      <input
-                        type="tel"
-                        placeholder="080 1234 5678"
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Organization / Company
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                        <Building className="w-4 h-4" />
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                          Organization
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Company name"
+                          value={organization}
+                          onChange={(e) => setOrganization(e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:ring-4 focus:ring-blue-50 focus:outline-none transition-all"
+                        />
                       </div>
-                      <input
-                        type="text"
-                        placeholder="Company name"
-                        value={organization}
-                        onChange={(e) => setOrganization(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      />
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Job Title / Role
-                    </label>
-                    <div className="relative">
-                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                        <Briefcase className="w-4 h-4" />
+                    {/* Pass Type Selector */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                        Pass Tier
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["General Admission", "VIP"] as const).map((type) => (
+                          <button
+                            type="button"
+                            key={type}
+                            onClick={() => setTicketType(type)}
+                            className={`py-2 px-3 rounded-xl text-xs font-semibold border transition-all ${
+                              ticketType === type
+                                ? "bg-blue-50 border-blue-600 text-blue-700 shadow-sm"
+                                : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
+                            }`}
+                          >
+                            {type}
+                          </button>
+                        ))}
                       </div>
-                      <input
-                        type="text"
-                        placeholder="e.g. Field Supervisor"
-                        value={jobTitle}
-                        onChange={(e) => setJobTitle(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                      />
                     </div>
-                  </div>
-                </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Pass Category
-                  </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {(["General Admission", "VIP", "Speaker", "Exhibitor"] as const).map((type) => (
+                    {/* Primary Button matching Zedda electric blue gradient */}
+                    <div className="pt-2">
                       <button
-                        type="button"
-                        key={type}
-                        onClick={() => setTicketType(type)}
-                        className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-all text-center ${
-                          ticketType === type
-                            ? "bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30"
-                            : "bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-slate-200"
-                        }`}
+                        type="submit"
+                        disabled={isLoading}
+                        className="w-full py-3.5 px-6 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-700 hover:to-sky-600 shadow-lg shadow-blue-500/25 active:scale-[0.99] transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
                       >
-                        {type}
+                        {isLoading ? (
+                          <span>Generating your Pass...</span>
+                        ) : (
+                          <span>Claim Admission Pass</span>
+                        )}
                       </button>
-                    ))}
+                    </div>
+
+                    {/* Subtext Link */}
+                    <div className="text-center pt-2">
+                      <p className="text-xs text-slate-500">
+                        Event staff or gate admin?{" "}
+                        <Link href="/scan" className="text-blue-600 font-semibold hover:underline">
+                          Open Gate Scanner
+                        </Link>
+                      </p>
+                    </div>
+                  </form>
+                </div>
+              ) : (
+                /* Registration Success & Instant Digital Pass View in Clean Light Theme */
+                <div className="light-card rounded-3xl p-6 sm:p-8 space-y-6">
+                  <div className="text-center space-y-1">
+                    <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-2 border border-emerald-100">
+                      <CheckCircle2 className="w-6 h-6" />
+                    </div>
+                    <h2 className="text-2xl font-black text-slate-900">
+                      You&apos;re All Set!
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Your admission ticket is confirmed and sent to <strong>{registeredAttendee.email}</strong>
+                    </p>
+                  </div>
+
+                  {/* Ticket Card */}
+                  <div className="bg-slate-50 rounded-2xl border border-slate-200 p-6 text-center space-y-4">
+                    <div className="flex items-center justify-between text-xs pb-3 border-b border-slate-200">
+                      <span className="font-mono text-blue-700 font-bold text-sm">
+                        {registeredAttendee.id}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-[10px] uppercase">
+                        {registeredAttendee.ticketType}
+                      </span>
+                    </div>
+
+                    {/* Clean QR code */}
+                    <div className="bg-white p-4 rounded-2xl inline-block shadow-sm border border-slate-200">
+                      <QRCodeSVG
+                        value={registeredAttendee.qrHash || registeredAttendee.id}
+                        size={210}
+                        level="H"
+                        includeMargin={false}
+                      />
+                    </div>
+
+                    <div>
+                      <div className="text-base font-bold text-slate-900">{registeredAttendee.fullName}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">{activeEvent.title}</div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">
+                      Zero-Click Fast-Track Entry &bull; Scan at Gate
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <a
+                      href={`/ticket/${registeredAttendee.id}`}
+                      target="_blank"
+                      className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs transition-colors shadow-sm"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>Mobile Pass</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={handlePrint}
+                      className="flex items-center justify-center gap-1.5 py-2.5 px-4 rounded-xl bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs border border-slate-200 transition-colors"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>Print Pass</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setShowEmailModal(true)}
+                      className="text-blue-600 hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Preview Email</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRegisteredAttendee(null);
+                        setFullName("");
+                        setEmail("");
+                        setPhone("");
+                      }}
+                      className="text-slate-400 hover:text-slate-600 font-medium"
+                    >
+                      &larr; Register another
+                    </button>
                   </div>
                 </div>
-
-                <div className="pt-4">
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="w-full py-3.5 px-6 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-indigo-600 via-indigo-500 to-pink-600 hover:from-indigo-500 hover:to-pink-500 shadow-lg shadow-indigo-500/25 transition-all flex items-center justify-center space-x-2 disabled:opacity-50"
-                  >
-                    {isLoading ? (
-                      <span>Generating Pass &amp; Sending Email...</span>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" />
-                        <span>Confirm Registration &amp; Get QR Ticket</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
+              )}
             </div>
-          ) : (
-            /* Registration Success & Instant Digital Pass View */
-            <div className="glass-card rounded-2xl p-6 sm:p-8 shadow-2xl border border-emerald-500/30">
-              <div className="flex items-center gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 mb-6">
-                <CheckCircle2 className="w-6 h-6 shrink-0 text-emerald-400" />
-                <div>
-                  <div className="font-bold text-sm">Registration Confirmed!</div>
-                  <div className="text-xs text-emerald-400/90">
-                    A confirmation email with your QR code has been prepared for <strong>{registeredAttendee.email}</strong>.
-                  </div>
-                </div>
-              </div>
-
-              {/* Physical / Digital Ticket Preview */}
-              <div className="bg-slate-900 rounded-2xl border-2 border-dashed border-slate-700 p-6 text-center space-y-4">
-                <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-3">
-                  <span className="font-mono text-indigo-400 font-bold text-sm tracking-wider">
-                    {registeredAttendee.id}
-                  </span>
-                  <span className="px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-300 font-semibold uppercase text-[10px] border border-indigo-500/30">
-                    {registeredAttendee.ticketType}
-                  </span>
-                </div>
-
-                {/* High Contrast QR Code */}
-                <div className="bg-white p-4 rounded-xl inline-block shadow-xl">
-                  <QRCodeSVG
-                    value={registeredAttendee.qrHash || registeredAttendee.id}
-                    size={220}
-                    level="H"
-                    includeMargin={false}
-                  />
-                </div>
-
-                <div>
-                  <div className="text-lg font-bold text-white">{registeredAttendee.fullName}</div>
-                  <div className="text-xs text-slate-400">
-                    {registeredAttendee.organization ? `${registeredAttendee.organization} • ` : ""}
-                    {activeEvent.title}
-                  </div>
-                </div>
-
-                <p className="text-[11px] text-slate-500 uppercase tracking-widest font-mono">
-                  Zero-Click Continuous Scanner Pass &bull; Scan at Entrance
-                </p>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-6">
-                <a
-                  href={`/ticket/${registeredAttendee.id}`}
-                  target="_blank"
-                  className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/30"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  <span>Mobile Pass</span>
-                </a>
-
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition-all"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Print / PDF</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowEmailModal(true)}
-                  className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 transition-all"
-                >
-                  <Eye className="w-4 h-4" />
-                  <span>Preview Email</span>
-                </button>
-              </div>
-
-              <div className="text-center pt-6">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRegisteredAttendee(null);
-                    setFullName("");
-                    setEmail("");
-                    setPhone("");
-                  }}
-                  className="text-xs text-slate-400 hover:text-white underline underline-offset-4"
-                >
-                  &larr; Register another attendee
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
       </div>
 
       {/* Email Preview Modal */}
       {showEmailModal && emailPreviewHtml && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden shadow-2xl">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Mail className="w-4 h-4 text-indigo-400" />
-                <span className="font-bold text-sm text-white">Automated Branded Ticket Email</span>
+                <Mail className="w-4 h-4 text-blue-600" />
+                <span className="font-bold text-sm text-slate-900">Delivered Admission Ticket Email</span>
               </div>
               <button
                 onClick={() => setShowEmailModal(false)}
-                className="text-slate-400 hover:text-white text-xs px-2.5 py-1 rounded-lg bg-slate-800"
+                className="text-slate-400 hover:text-slate-700 text-xs px-2.5 py-1 rounded-lg bg-slate-100"
               >
                 Close
               </button>
             </div>
-            <div className="flex-1 overflow-auto p-4 bg-slate-950">
+            <div className="flex-1 overflow-auto p-4 bg-slate-50">
               <iframe
                 title="Email Preview"
                 srcDoc={emailPreviewHtml}
-                className="w-full h-[600px] rounded-xl border border-slate-800 bg-white"
+                className="w-full h-[600px] rounded-xl border border-slate-200 bg-white"
               />
             </div>
           </div>
