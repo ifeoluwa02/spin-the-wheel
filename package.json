@@ -10,11 +10,14 @@
     "dev": "npm run dev:spin",
     "dev:spin": "npm run dev --workspace=@activation/spin-the-wheel",
     "dev:checkin": "npm run dev --workspace=@activation/field-checkin",
+    "dev:attendance": "npm run dev --workspace=@activation/event-attendance",
     "build": "npm run build --workspaces",
     "build:spin": "npm run build --workspace=@activation/spin-the-wheel",
     "build:checkin": "npm run build --workspace=@activation/field-checkin",
+    "build:attendance": "npm run build --workspace=@activation/event-attendance",
     "start:spin": "npm run start --workspace=@activation/spin-the-wheel",
     "start:checkin": "npm run start --workspace=@activation/field-checkin",
+    "start:attendance": "npm run start --workspace=@activation/event-attendance",
     "lint": "npm run lint --workspaces"
   }
 }
