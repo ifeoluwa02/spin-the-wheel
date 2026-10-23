@@ -9,8 +9,10 @@ import {
   Smartphone, Award, User, Phone, LogOut, Plus, Minus,
 } from "lucide-react";
 import type { Campaign, StoreLocation, CheckInRecord, GeoPoint } from "@/lib/types";
-import { getCampaign } from "@/lib/repository";
+import { getCampaign, updateStoreCoordinates } from "@/lib/repository";
 import { evaluateGeofence, formatDistance } from "@/lib/geo";
+import { drawGpsWatermark } from "@/lib/watermark";
+import GeofenceMap from "@/components/GeofenceMap";
 
 type DemoMode = "real" | "on_site" | "out_of_bounds";
 
@@ -41,6 +43,8 @@ function CheckInContent() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [watermarking, setWatermarking] = useState(false);
+  const [calibratingPin, setCalibratingPin] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
@@ -109,8 +113,8 @@ function CheckInContent() {
 
     if (mode === "on_site") {
       // Simulate on-site: 25 meters offset from store target
-      const lat = store?.lat ?? 6.4358;
-      const lng = store?.lng ?? 3.4831;
+      const lat = store?.lat ?? 6.7148;
+      const lng = store?.lng ?? 3.4025;
       setCoords({
         latitude: lat + 0.00015,
         longitude: lng + 0.00012,
@@ -121,8 +125,8 @@ function CheckInContent() {
 
     if (mode === "out_of_bounds") {
       // Simulate 600m away
-      const lat = store?.lat ?? 6.4358;
-      const lng = store?.lng ?? 3.4831;
+      const lat = store?.lat ?? 6.7148;
+      const lng = store?.lng ?? 3.4025;
       setCoords({
         latitude: lat + 0.0055,
         longitude: lng + 0.0048,
@@ -161,6 +165,28 @@ function CheckInContent() {
       acquireLocation(demoMode, selectedStore);
     }
   }, [selectedStore, demoMode]);
+
+  // Live GPS stream (Real GPS mode only) — keeps the blue dot moving on the map
+  useEffect(() => {
+    if (demoMode !== "real" || !selectedStore || activeShift) return;
+    if (typeof navigator === "undefined" || !navigator.geolocation) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        setCoords({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: Math.round(pos.coords.accuracy),
+        });
+        setGpsError("");
+      },
+      () => {
+        /* one-shot acquireLocation already surfaces errors */
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [demoMode, selectedStore, activeShift]);
 
   // ── Camera Selfie Handlers (Real webcam snap, zero file picker) ──
   async function startCamera() {
@@ -218,12 +244,16 @@ function CheckInContent() {
     setCameraError("");
   }
 
-  function snapSelfie() {
+  async function snapSelfie() {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || watermarking) return;
 
-    const width = video.videoWidth || 640;
-    const height = video.videoHeight || 480;
+    // Cap resolution so the base64 JPEG stays well under Firestore's 1MB doc limit
+    const srcW = video.videoWidth || 640;
+    const srcH = video.videoHeight || 480;
+    const scale = Math.min(1, 960 / srcW);
+    const width = Math.round(srcW * scale);
+    const height = Math.round(srcH * scale);
 
     const canvas = document.createElement("canvas");
     canvas.width = width;
@@ -236,10 +266,39 @@ function CheckInContent() {
     ctx.scale(-1, 1);
     ctx.drawImage(video, 0, 0, width, height);
 
+    // Frame is now frozen on the canvas — release camera hardware immediately
+    const snapTime = new Date();
+    stopCamera();
+    setWatermarking(true);
+
+    try {
+      // Burn the GPS Map Camera evidence banner (transform is reset inside)
+      await drawGpsWatermark(canvas, {
+        locationName: selectedStore?.name || "Unassigned Location",
+        address: [selectedStore?.address, selectedStore?.city || selectedStore?.state]
+          .filter(Boolean)
+          .join(", ") || undefined,
+        baName: baName.trim() || undefined,
+        userLat: coords?.latitude,
+        userLng: coords?.longitude,
+        accuracy: coords?.accuracy,
+        targetLat: selectedStore?.lat,
+        targetLng: selectedStore?.lng,
+        geofenceRadius: selectedStore?.geofenceRadius || 100,
+        distanceMeters: geofence?.distance,
+        status: geofence?.status ?? "pending",
+        timestamp: snapTime,
+        isSimulated: demoMode !== "real",
+      });
+    } catch (err) {
+      // Never block check-in because of a watermark failure — keep the raw frame
+      console.error("Watermark render failed:", err);
+    }
+
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
     setPhotoDataUrl(dataUrl);
     setSubmitError("");
-    stopCamera();
+    setWatermarking(false);
   }
 
   // Ensure camera stream attaches when camera opens
@@ -261,13 +320,37 @@ function CheckInContent() {
 
   // ── Geofence Evaluation ──
   const storeTarget: GeoPoint = {
-    latitude: selectedStore?.lat ?? (coords?.latitude || 6.4358),
-    longitude: selectedStore?.lng ?? (coords?.longitude || 3.4831),
+    latitude: selectedStore?.lat ?? (coords?.latitude || 6.7148),
+    longitude: selectedStore?.lng ?? (coords?.longitude || 3.4025),
   };
 
   const geofence = coords
     ? evaluateGeofence(coords, storeTarget, selectedStore?.geofenceRadius || 100)
     : null;
+
+  // Ground-truthing: calibrate store pin to exact current device GPS
+  async function handleCalibratePin() {
+    if (!selectedStore || !coords) return;
+    const storeCode = selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "";
+    setCalibratingPin(true);
+    try {
+      const ok = await updateStoreCoordinates(campaignSlug, storeCode, coords.latitude, coords.longitude);
+      if (ok) {
+        const updatedStore = { ...selectedStore, lat: coords.latitude, lng: coords.longitude };
+        setSelectedStore(updatedStore);
+        if (campaign) {
+          const updatedStores = (campaign.stores || []).map((s) =>
+            (s.storeCode || (s as any).code || s.id) === storeCode ? updatedStore : s
+          );
+          setCampaign({ ...campaign, stores: updatedStores });
+        }
+      }
+    } catch (err) {
+      console.error("Calibrate pin error:", err);
+    } finally {
+      setCalibratingPin(false);
+    }
+  }
 
   // ── Submit Check-In ──
   async function handleCheckInSubmit(e: React.FormEvent) {
@@ -573,6 +656,7 @@ function CheckInContent() {
                     const val = e.target.value;
                     const st = stores.find((s) => (s.storeCode || (s as any).code || s.id || "") === val);
                     setSelectedStore(st || null);
+                    setPhotoDataUrl(null); // watermark is location-bound; force a fresh snap
                     if (st?.baName && !baName) setBaName(st.baName);
                     if (st?.baPhone && !baPhone) setBaPhone(st.baPhone);
                   }}
@@ -663,6 +747,19 @@ function CheckInContent() {
                     <p className="text-xs text-red-400">{gpsError}</p>
                   ) : geofence ? (
                     <div className="space-y-1.5">
+                      {typeof selectedStore.lat === "number" && typeof selectedStore.lng === "number" && (
+                        <GeofenceMap
+                          className="h-48 mb-2"
+                          targetLat={selectedStore.lat}
+                          targetLng={selectedStore.lng}
+                          radius={selectedStore.geofenceRadius || 100}
+                          targetLabel={selectedStore.name}
+                          userLat={coords?.latitude}
+                          userLng={coords?.longitude}
+                          accuracy={coords?.accuracy}
+                          status={geofence.status}
+                        />
+                      )}
                       <div className="flex items-center justify-between text-xs font-mono">
                         <span className="text-white/60">Distance to Store:</span>
                         <span className="font-bold text-white">{formatDistance(geofence.distance)}</span>
@@ -671,6 +768,22 @@ function CheckInContent() {
                         <span className="text-white/60">Accuracy Tolerance:</span>
                         <span className="text-white/70">±{coords?.accuracy || 10}m</span>
                       </div>
+
+                      {/* Ground-truthing action when testing on real GPS */}
+                      {demoMode === "real" && coords && selectedStore && (
+                        <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px]">
+                          <span className="text-white/50">At this location now?</span>
+                          <button
+                            type="button"
+                            disabled={calibratingPin}
+                            onClick={handleCalibratePin}
+                            className="font-mono font-bold text-teal-300 hover:text-white bg-teal-500/15 hover:bg-teal-500/25 px-2.5 py-1 rounded-lg border border-teal-500/30 transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            title="Lock store pin to your phone's exact GPS coordinates"
+                          >
+                            <span>🎯 {calibratingPin ? "Pinning..." : "Pin Store to My Exact GPS"}</span>
+                          </button>
+                        </div>
+                      )}
 
                       {/* Evaluation Badge */}
                       <div className="pt-1">
@@ -708,28 +821,28 @@ function CheckInContent() {
                 </div>
 
                 {/* State 1: Photo already snapped */}
-                {photoDataUrl ? (
+                {watermarking ? (
+                  <div className="rounded-2xl border border-teal-500/40 bg-black/60 p-6 flex flex-col items-center justify-center gap-2">
+                    <span className="w-6 h-6 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs text-white/70">Stamping GPS Map Camera watermark…</p>
+                  </div>
+                ) : photoDataUrl ? (
                   <div className="rounded-2xl border border-emerald-500/40 bg-emerald-950/20 p-3 space-y-3">
-                    <div className="flex items-center gap-3">
-                      <div className="relative">
-                        <img
-                          src={photoDataUrl}
-                          alt="BA Verified Selfie"
-                          className="w-16 h-16 rounded-xl object-cover border-2 border-emerald-400 shadow-md"
-                        />
-                        <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-black p-0.5 rounded-full">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                        </div>
+                    <div className="relative">
+                      <img
+                        id="ba-selfie-preview"
+                        src={photoDataUrl}
+                        alt="BA selfie with GPS Map Camera watermark"
+                        className="w-full rounded-xl border-2 border-emerald-400/70 shadow-md"
+                      />
+                      <div className="absolute top-2 left-2 bg-emerald-500 text-black px-2 py-0.5 rounded-full text-[10px] font-black flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>GPS STAMPED</span>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
-                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                          <span>Live Selfie Captured</span>
-                        </div>
-                        <p className="text-[11px] text-white/60 mt-0.5">
-                          Verified from device camera. Ready for check-in.
-                        </p>
-                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>Live Selfie Captured · Location watermark burned in</span>
                     </div>
 
                     <div className="flex items-center gap-2 pt-1">
@@ -833,8 +946,9 @@ function CheckInContent() {
                       </button>
                       <button
                         type="button"
+                        id="snap-selfie-btn"
                         onClick={snapSelfie}
-                        disabled={cameraStarting}
+                        disabled={cameraStarting || watermarking}
                         className="flex-1 py-2.5 rounded-xl text-xs font-black bg-gradient-to-r from-teal-400 to-emerald-400 hover:from-teal-300 hover:to-emerald-300 text-black flex items-center justify-center gap-2 shadow-lg shadow-teal-500/25 active:scale-95 transition-all cursor-pointer"
                       >
                         <Camera className="w-4 h-4 stroke-[2.5]" />
@@ -878,7 +992,8 @@ function CheckInContent() {
               {/* Submit Check-In Button */}
               <button
                 type="submit"
-                disabled={submitting || !selectedStore || !baName.trim() || !coords}
+                id="checkin-submit-btn"
+                disabled={submitting || watermarking || !selectedStore || !baName.trim() || !coords}
                 className="w-full py-3.5 rounded-2xl bg-teal-500 hover:bg-teal-400 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl shadow-teal-500/20 disabled:opacity-40 cursor-pointer active:scale-[0.99]"
               >
                 {submitting ? (

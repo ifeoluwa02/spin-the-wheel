@@ -207,9 +207,6 @@ export async function updateShiftSampleCounter(
   return (updatedSnap.data()?.samplesLogged as number) || 0;
 }
 
-/**
- * Saves or updates a campaign in Firestore "campaigns" collection.
- */
 export async function saveCampaign(campaign: Campaign): Promise<void> {
   const docRef = doc(db, "campaigns", campaign.id || "golden-morn");
   await updateDoc(docRef, { ...campaign, updatedAt: Date.now() }).catch(async () => {
@@ -219,9 +216,52 @@ export async function saveCampaign(campaign: Campaign): Promise<void> {
 }
 
 /**
+ * Ground-truthing: updates the lat/lng coordinates for a store in a campaign.
+ */
+export async function updateStoreCoordinates(
+  campaignId: string,
+  storeCode: string,
+  lat: number,
+  lng: number
+): Promise<boolean> {
+  try {
+    const docRef = doc(db, "campaigns", campaignId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) return false;
+    const campaign = snap.data() as Campaign;
+    const stores = (campaign.stores || []).map((s) => {
+      const code = s.storeCode || (s as any).code || s.id;
+      if (code === storeCode) {
+        return { ...s, lat, lng };
+      }
+      return s;
+    });
+    await updateDoc(docRef, { stores, updatedAt: Date.now() });
+    return true;
+  } catch (err) {
+    console.error("Failed to update store coordinates:", err);
+    return false;
+  }
+}
+
+/**
  * Pre-configured realistic Nigerian stores with GPS geofence coordinates.
  */
 export const DEFAULT_DEMO_STORES: StoreLocation[] = [
+  {
+    id: "magboro-island-estate",
+    name: "Field Ops Hub - Island Estate",
+    storeCode: "magboro-island-estate",
+    state: "Ogun",
+    address: "10 Balegi Avenue, Island Estate, Magboro, Ogun State",
+    pin: "1234",
+    baName: "Ifeoluwa Olawoore",
+    baPhone: "08030001234",
+    isActive: true,
+    lat: 6.7148,
+    lng: 3.4025,
+    geofenceRadius: 150,
+  },
   {
     id: "exp-marketing-ikeja",
     name: "EXP Marketing HQ",
