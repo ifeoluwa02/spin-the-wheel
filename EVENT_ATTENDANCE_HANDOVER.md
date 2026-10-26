@@ -33,20 +33,27 @@ spin-the-wheel/ (Monorepo root)
 │       ├── app/
 │       │   ├── page.tsx           # Platform Discovery & Registration entrance
 │       │   ├── e/[slug]/page.tsx  # Dedicated Closed Event Registration (No dropdown)
-│       │   ├── scan/page.tsx      # Zero-Click Continuous Camera Scanner (?event= locked)
-│       │   ├── admin/page.tsx     # Admin Operations, Event Creator & 1-Click Link Copy
+│       │   ├── e/[slug]/admin/    # Dedicated Event Admin Portal (PIN protected)
+│       │   ├── e/[slug]/scan/     # Dedicated Event Gate Scanner (PIN protected)
+│       │   ├── scan/page.tsx      # Global Gate Scanner (PIN protected)
+│       │   ├── admin/page.tsx     # Master Super-Admin Operations (PIN protected)
 │       │   ├── ticket/[ticketId]/ # Mobile Digital Pass view (bookmarkable / shareable)
 │       │   ├── api/
+│       │   │   ├── auth/pin-verify/ # PIN verification & signed HMAC token dispatch
 │       │   │   ├── register/      # Registration + Email dispatch API
 │       │   │   ├── admit/         # Atomic gate admission & duplicate checker
 │       │   │   └── events/        # Events listing & creation API ([slug] lookup)
 │       │   ├── globals.css        # Clean light styling, scanner crosshairs & animations
 │       │   └── layout.tsx         # Root light layout and header
 │       ├── components/
-│       │   ├── Navbar.tsx         # Minimalist header with Zedda-inspired geometric brand
+│       │   ├── Navbar.tsx         # Context-aware navigation (attendee vs staff)
+│       │   ├── SecurityAuthGuard.tsx # Terminal lock & 1-minute periodic PIN verification
+│       │   ├── GateScannerView.tsx   # Reusable continuous zero-click scanner view
+│       │   ├── AdminDashboardView.tsx # Reusable event operations & attendee registry
 │       │   └── EventRegistrationView.tsx # Core view supporting locked & discovery modes
 │       ├── lib/
-│       │   ├── types.ts           # Event, Attendee, CheckinResult TypeScript models
+│       │   ├── auth.ts            # Roles (super-admin, admin, usher), PINs, signed tokens
+│       │   ├── types.ts           # Event, Attendee, CheckinResult, AuthSession models
 │       │   ├── email-template.ts  # Responsive HTML email with embedded QR & Cal link
 │       │   ├── audio.ts           # Web Audio API turnstile chimes (ding & warning buzz)
 │       │   ├── repository.ts      # Dual-mode store (Local memory + Firebase Firestore)

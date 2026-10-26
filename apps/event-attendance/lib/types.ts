@@ -13,6 +13,8 @@ export interface EventItem {
   endDate: string;
   capacity: number;
   bannerGradient: string;
+  adminPin?: string; // Event manager PIN (default e.g. "1234")
+  usherPin?: string; // Gate usher PIN (default e.g. "0000")
   customFields?: {
     id: string;
     label: string;
@@ -21,6 +23,18 @@ export interface EventItem {
     required: boolean;
   }[];
   createdAt?: string;
+}
+
+export type UserRole = "super-admin" | "admin" | "usher" | "attendee";
+
+export interface AuthSession {
+  role: UserRole;
+  eventId?: string;
+  eventSlug?: string;
+  eventName?: string;
+  token: string;
+  expiresAt: number;
+  lastVerifiedAt: number;
 }
 
 export interface AttendeeRegistration {

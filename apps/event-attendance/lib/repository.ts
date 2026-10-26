@@ -29,6 +29,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     endDate: "2026-11-15T18:00:00",
     capacity: 500,
     bannerGradient: "from-blue-600 via-indigo-600 to-purple-700",
+    adminPin: "1234",
+    usherPin: "0000",
     createdAt: "2026-10-01T10:00:00Z",
   },
   {
@@ -46,6 +48,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     endDate: "2026-12-05T17:00:00",
     capacity: 1000,
     bannerGradient: "from-emerald-600 via-teal-600 to-cyan-700",
+    adminPin: "5678",
+    usherPin: "0000",
     createdAt: "2026-10-10T12:00:00Z",
   },
 ];
