@@ -89,9 +89,9 @@ export function EventRegistrationView({
   }, [initialEvent, targetSlug]);
 
   const activeEvent =
-    (initialEvent && lockedMode)
+    ((initialEvent && lockedMode)
       ? initialEvent
-      : events.find((e) => e.id === selectedEventId) || initialEvent || events[0];
+      : events.find((e) => e.id === selectedEventId) || initialEvent || events[0]) || INITIAL_EVENTS[0];
 
   const dedicatedEventUrl =
     typeof window !== "undefined"

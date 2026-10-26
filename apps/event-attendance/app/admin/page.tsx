@@ -57,6 +57,9 @@ export default function AdminDashboardPage() {
   const [copiedRegLink, setCopiedRegLink] = useState(false);
   const [copiedScanLink, setCopiedScanLink] = useState(false);
 
+  const activeEvent =
+    events.find((e) => e.id === selectedEventId) || events[0] || INITIAL_EVENTS[0];
+
   const handleCopyRegistrationLink = () => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${origin}/e/${activeEvent.slug || activeEvent.id}`;
@@ -98,7 +101,6 @@ export default function AdminDashboardPage() {
     loadData();
   }, [selectedEventId]);
 
-  const activeEvent = events.find((e) => e.id === selectedEventId) || events[0];
   const stats = useMemo(() => computeEventStats(attendees), [attendees]);
 
   const filteredAttendees = useMemo(() => {
