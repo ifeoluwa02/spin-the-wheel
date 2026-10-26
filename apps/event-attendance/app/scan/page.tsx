@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Html5Qrcode } from "html5-qrcode";
 import confetti from "canvas-confetti";
 import {
@@ -15,14 +16,19 @@ import {
   VolumeX,
   Users,
   ShieldCheck,
+  Lock,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration, CheckinResult } from "@/lib/types";
 import { INITIAL_EVENTS } from "@/lib/repository";
 import { playSuccessChime, playWarningBuzz } from "@/lib/audio";
 
-export default function ZeroClickScannerPage() {
+function ScannerContent() {
+  const searchParams = useSearchParams();
+  const eventParam = searchParams.get("event");
+
   const [events, setEvents] = useState<EventItem[]>(INITIAL_EVENTS);
   const [selectedEventId, setSelectedEventId] = useState<string>(INITIAL_EVENTS[0].id);
+  const [isEventLocked, setIsEventLocked] = useState<boolean>(false);
 
   // Scanner state
   const [isScanning, setIsScanning] = useState(false);
@@ -51,6 +57,16 @@ export default function ZeroClickScannerPage() {
           const data = await res.json();
           if (data.events && data.events.length > 0) {
             setEvents(data.events);
+            if (eventParam) {
+              const matched = data.events.find(
+                (e: EventItem) => e.slug === eventParam || e.id === eventParam
+              );
+              if (matched) {
+                setSelectedEventId(matched.id);
+                setIsEventLocked(true);
+                return;
+              }
+            }
             setSelectedEventId(data.events[0].id);
           }
         }
@@ -59,7 +75,7 @@ export default function ZeroClickScannerPage() {
       }
     }
     loadEvents();
-  }, []);
+  }, [eventParam]);
 
   const activeEvent = events.find((e) => e.id === selectedEventId) || events[0];
 
@@ -222,17 +238,30 @@ export default function ZeroClickScannerPage() {
             {soundEnabled ? <Volume2 className="w-4 h-4 text-emerald-600" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
           </button>
 
-          <select
-            value={selectedEventId}
-            onChange={(e) => setSelectedEventId(e.target.value)}
-            className="bg-white border border-slate-200 text-slate-900 text-xs font-semibold rounded-xl px-3 py-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          >
-            {events.map((evt) => (
-              <option key={evt.id} value={evt.id}>
-                {evt.title}
-              </option>
-            ))}
-          </select>
+          {isEventLocked ? (
+            <div
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-blue-50 border border-blue-200/80 text-blue-900 text-xs font-bold"
+              title="Gate terminal is locked to this event"
+            >
+              <Lock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span className="truncate max-w-[180px] sm:max-w-[240px]">{activeEvent.title}</span>
+              <span className="px-1.5 py-0.5 rounded-full bg-blue-200/70 text-[9px] uppercase tracking-wider text-blue-800 shrink-0">
+                Locked
+              </span>
+            </div>
+          ) : (
+            <select
+              value={selectedEventId}
+              onChange={(e) => setSelectedEventId(e.target.value)}
+              className="bg-white border border-slate-200 text-slate-900 text-xs font-semibold rounded-xl px-3 py-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            >
+              {events.map((evt) => (
+                <option key={evt.id} value={evt.id}>
+                  {evt.title}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
 
@@ -441,5 +470,22 @@ export default function ZeroClickScannerPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function ZeroClickScannerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[60vh] flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <p className="text-xs text-slate-500 font-medium">Initializing Gate Terminal...</p>
+          </div>
+        </div>
+      }
+    >
+      <ScannerContent />
+    </Suspense>
   );
 }

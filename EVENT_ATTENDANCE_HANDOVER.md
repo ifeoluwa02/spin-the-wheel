@@ -31,18 +31,20 @@ spin-the-wheel/ (Monorepo root)
 │   ├── field-checkin/             # [Port 3001] Field Staff GPS Check-in & Watermark Camera
 │   └── event-attendance/          # [Port 3002] Event Registration & QR Check-In (Passflow)
 │       ├── app/
-│       │   ├── page.tsx           # Attendee Registration & Instant Pass (Zedda style)
-│       │   ├── scan/page.tsx      # Zero-Click Continuous Camera Scanner
-│       │   ├── admin/page.tsx     # Admin Operations, Event Creator & Registry Table
+│       │   ├── page.tsx           # Platform Discovery & Registration entrance
+│       │   ├── e/[slug]/page.tsx  # Dedicated Closed Event Registration (No dropdown)
+│       │   ├── scan/page.tsx      # Zero-Click Continuous Camera Scanner (?event= locked)
+│       │   ├── admin/page.tsx     # Admin Operations, Event Creator & 1-Click Link Copy
 │       │   ├── ticket/[ticketId]/ # Mobile Digital Pass view (bookmarkable / shareable)
 │       │   ├── api/
 │       │   │   ├── register/      # Registration + Email dispatch API
 │       │   │   ├── admit/         # Atomic gate admission & duplicate checker
-│       │   │   └── events/        # Events listing & creation API
+│       │   │   └── events/        # Events listing & creation API ([slug] lookup)
 │       │   ├── globals.css        # Clean light styling, scanner crosshairs & animations
 │       │   └── layout.tsx         # Root light layout and header
 │       ├── components/
-│       │   └── Navbar.tsx         # Minimalist header with Zedda-inspired geometric brand
+│       │   ├── Navbar.tsx         # Minimalist header with Zedda-inspired geometric brand
+│       │   └── EventRegistrationView.tsx # Core view supporting locked & discovery modes
 │       ├── lib/
 │       │   ├── types.ts           # Event, Attendee, CheckinResult TypeScript models
 │       │   ├── email-template.ts  # Responsive HTML email with embedded QR & Cal link
@@ -190,9 +192,11 @@ npm run build
 
 ### Key URLs (Local Port 3002)
 
-- **Registration Portal:** [http://localhost:3002](http://localhost:3002)
-- **Zero-Click Scanner:** [http://localhost:3002/scan](http://localhost:3002/scan)
-- **Admin & Attendee Table:** [http://localhost:3002/admin](http://localhost:3002/admin)
+- **Dedicated Event Page (Closed Mode, No Dropdown):** [http://localhost:3002/e/nestle-summit-2026](http://localhost:3002/e/nestle-summit-2026)
+- **Second Dedicated Event Page:** [http://localhost:3002/e/tech-africa-lagos](http://localhost:3002/e/tech-africa-lagos)
+- **General Platform Entrance (Discovery Mode):** [http://localhost:3002](http://localhost:3002)
+- **Dedicated Locked Gate Scanner:** [http://localhost:3002/scan?event=nestle-summit-2026](http://localhost:3002/scan?event=nestle-summit-2026)
+- **Admin & Attendee Table (with 1-Click Link Copy):** [http://localhost:3002/admin](http://localhost:3002/admin)
 - **Sample Mobile Pass:** [http://localhost:3002/ticket/TKT-LAG-1001](http://localhost:3002/ticket/TKT-LAG-1001)
 
 ### Key Git Commits on `feature/event-attendance`

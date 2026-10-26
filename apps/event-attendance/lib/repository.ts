@@ -101,6 +101,9 @@ export const INITIAL_ATTENDEES: AttendeeRegistration[] = [
   },
 ];
 
+const inMemoryEvents: EventItem[] = [...INITIAL_EVENTS];
+const inMemoryAttendees: AttendeeRegistration[] = [...INITIAL_ATTENDEES];
+
 const LOCAL_STORAGE_KEY_EVENTS = "attendance_events_store";
 const LOCAL_STORAGE_KEY_ATTENDEES = "attendance_attendees_store";
 
@@ -109,20 +112,22 @@ function isClient(): boolean {
 }
 
 function getLocalEvents(): EventItem[] {
-  if (!isClient()) return INITIAL_EVENTS;
+  if (!isClient()) return inMemoryEvents;
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_EVENTS);
     if (!raw) {
-      localStorage.setItem(LOCAL_STORAGE_KEY_EVENTS, JSON.stringify(INITIAL_EVENTS));
-      return INITIAL_EVENTS;
+      localStorage.setItem(LOCAL_STORAGE_KEY_EVENTS, JSON.stringify(inMemoryEvents));
+      return inMemoryEvents;
     }
     return JSON.parse(raw);
   } catch {
-    return INITIAL_EVENTS;
+    return inMemoryEvents;
   }
 }
 
 function saveLocalEvents(events: EventItem[]) {
+  inMemoryEvents.length = 0;
+  inMemoryEvents.push(...events);
   if (!isClient()) return;
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY_EVENTS, JSON.stringify(events));
@@ -132,20 +137,22 @@ function saveLocalEvents(events: EventItem[]) {
 }
 
 function getLocalAttendees(): AttendeeRegistration[] {
-  if (!isClient()) return INITIAL_ATTENDEES;
+  if (!isClient()) return inMemoryAttendees;
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY_ATTENDEES);
     if (!raw) {
-      localStorage.setItem(LOCAL_STORAGE_KEY_ATTENDEES, JSON.stringify(INITIAL_ATTENDEES));
-      return INITIAL_ATTENDEES;
+      localStorage.setItem(LOCAL_STORAGE_KEY_ATTENDEES, JSON.stringify(inMemoryAttendees));
+      return inMemoryAttendees;
     }
     return JSON.parse(raw);
   } catch {
-    return INITIAL_ATTENDEES;
+    return inMemoryAttendees;
   }
 }
 
 function saveLocalAttendees(attendees: AttendeeRegistration[]) {
+  inMemoryAttendees.length = 0;
+  inMemoryAttendees.push(...attendees);
   if (!isClient()) return;
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY_ATTENDEES, JSON.stringify(attendees));
