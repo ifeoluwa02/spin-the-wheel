@@ -1,4 +1,5 @@
 import { EventItem, AttendeeRegistration, CheckinResult, EventStats } from "./types";
+import { escapeRegex, sanitizeText, containsMaliciousPayload } from "./validation";
 import { db } from "./firebase";
 import {
   collection,
@@ -9,7 +10,6 @@ import {
   updateDoc,
   query,
   where,
-  orderBy,
 } from "firebase/firestore";
 
 // Seed sample events so the app works immediately out of the box
@@ -20,7 +20,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     title: "Nestlé Brand Activation & Retail Summit 2026",
     category: "Corporate & Brand Activation",
     organizer: "Nestlé Nigeria Field Marketing",
-    description: "Annual convention of brand activators, field managers, and retail partners celebrating nationwide growth and introducing new activation technology.",
+    description:
+      "Annual convention of brand activators, field managers, and retail partners celebrating nationwide growth and introducing new activation technology.",
     venueName: "Eko Hotel & Suites Grand Ballroom",
     venueAddress: "Plot 1415 Adetokunbo Ademola Street, Victoria Island",
     city: "Lagos",
@@ -29,7 +30,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     endDate: "2026-11-15T18:00:00",
     capacity: 500,
     bannerGradient: "from-blue-600 via-indigo-600 to-purple-700",
-    adminPin: "1234",
+    adminEmail: "admin@nestle.com",
+    adminPassword: "admin123",
     usherPin: "0000",
     createdAt: "2026-10-01T10:00:00Z",
   },
@@ -39,7 +41,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     title: "Lagos Tech & Product Innovation Expo",
     category: "Technology & Design",
     organizer: "Innovcity Tech Network",
-    description: "Connecting over 1,000 developers, product founders, and venture builders for keynote sessions, live product demos, and VIP networking.",
+    description:
+      "Connecting over 1,000 developers, product founders, and venture builders for keynote sessions, live product demos, and VIP networking.",
     venueName: "Landmark Event Centre Hall A",
     venueAddress: "Water Corporation Drive, Oniru, Victoria Island",
     city: "Lagos",
@@ -48,7 +51,8 @@ export const INITIAL_EVENTS: EventItem[] = [
     endDate: "2026-12-05T17:00:00",
     capacity: 1000,
     bannerGradient: "from-emerald-600 via-teal-600 to-cyan-700",
-    adminPin: "5678",
+    adminEmail: "admin@techafrica.com",
+    adminPassword: "admin123",
     usherPin: "0000",
     createdAt: "2026-10-10T12:00:00Z",
   },
@@ -107,12 +111,63 @@ export const INITIAL_ATTENDEES: AttendeeRegistration[] = [
 
 const inMemoryEvents: EventItem[] = [...INITIAL_EVENTS];
 const inMemoryAttendees: AttendeeRegistration[] = [...INITIAL_ATTENDEES];
+const activeCheckinLocks = new Set<string>();
 
 const LOCAL_STORAGE_KEY_EVENTS = "attendance_events_store";
 const LOCAL_STORAGE_KEY_ATTENDEES = "attendance_attendees_store";
 
 function isClient(): boolean {
   return typeof window !== "undefined";
+}
+
+async function getServerMongoDb() {
+  if (isClient()) return null;
+  try {
+    const { getMongoDb } = await import("./mongodb");
+    return await getMongoDb();
+  } catch (e) {
+    console.warn("Could not load server MongoDB:", e);
+    return null;
+  }
+}
+
+async function hashServerPassword(plainPassword: string): Promise<string> {
+  if (!plainPassword || plainPassword.includes(":")) return plainPassword;
+  if (isClient()) return plainPassword;
+  try {
+    const { hashPassword } = await import("./auth");
+    return hashPassword(plainPassword);
+  } catch {
+    return plainPassword;
+  }
+}
+
+async function signServerQrHash(ticketId: string, eventId: string): Promise<string> {
+  if (isClient()) return `${ticketId}#${eventId}`;
+  try {
+    const { signTicketQrHash } = await import("./auth");
+    return signTicketQrHash(ticketId, eventId);
+  } catch {
+    return `${ticketId}#${eventId}`;
+  }
+}
+
+async function verifyServerQrSignature(rawQr: string): Promise<{
+  valid: boolean;
+  ticketId: string;
+  eventId?: string;
+}> {
+  if (isClient()) {
+    const parts = rawQr.split("#");
+    return { valid: true, ticketId: parts[0], eventId: parts[1] };
+  }
+  try {
+    const { verifyTicketQrSignature } = await import("./auth");
+    return verifyTicketQrSignature(rawQr);
+  } catch {
+    const parts = rawQr.split("#");
+    return { valid: true, ticketId: parts[0], eventId: parts[1] };
+  }
 }
 
 function getLocalEvents(): EventItem[] {
@@ -168,6 +223,44 @@ function saveLocalAttendees(attendees: AttendeeRegistration[]) {
 // ----------------- Public API Functions -----------------
 
 export async function fetchAllEvents(): Promise<EventItem[]> {
+  if (isClient()) {
+    try {
+      const res = await fetch("/api/events", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.events) && data.events.length > 0) {
+          saveLocalEvents(data.events);
+          return data.events;
+        }
+      }
+    } catch (e) {
+      console.warn("Client fetch /api/events fallback to local:", e);
+    }
+    return getLocalEvents();
+  }
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const docs = await mongo.collection("events").find({}).sort({ createdAt: -1 }).toArray();
+      if (docs && docs.length > 0) {
+        return docs.map(({ _id, ...rest }) => rest as unknown as EventItem);
+      } else {
+        // Hash seed passwords before inserting into fresh MongoDB
+        const hashedSeeds = await Promise.all(
+          INITIAL_EVENTS.map(async (evt) => ({
+            ...evt,
+            adminPassword: await hashServerPassword(evt.adminPassword || "admin123"),
+          }))
+        );
+        await mongo.collection("events").insertMany(hashedSeeds).catch(() => {});
+        return hashedSeeds;
+      }
+    }
+  } catch (e) {
+    console.warn("MongoDB fetchAllEvents error:", e);
+  }
+
   try {
     if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
       const snap = await getDocs(collection(db, "events"));
@@ -182,17 +275,66 @@ export async function fetchAllEvents(): Promise<EventItem[]> {
 }
 
 export async function fetchEventById(eventIdOrSlug: string): Promise<EventItem | null> {
+  const clean = (eventIdOrSlug || "").trim();
+  if (!clean) return null;
+
+  if (isClient()) {
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(clean)}`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.event) return data.event as EventItem;
+      }
+    } catch (e) {
+      console.warn("Client fetchEventById fallback:", e);
+    }
+  }
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const doc = await mongo.collection("events").findOne({
+        $or: [{ id: clean }, { slug: clean }],
+      });
+      if (doc) {
+        const { _id, ...rest } = doc;
+        return rest as unknown as EventItem;
+      }
+    }
+  } catch (e) {
+    console.warn("MongoDB fetchEventById error:", e);
+  }
+
   const events = await fetchAllEvents();
-  return events.find((e) => e.id === eventIdOrSlug || e.slug === eventIdOrSlug) || null;
+  return events.find((e) => e.id === clean || e.slug === clean) || null;
 }
 
+/**
+ * Creates a new event and automatically hashes `adminPassword` using salted PBKDF2 (100,000 iterations)
+ * before persisting to MongoDB, Firestore, or memory.
+ */
 export async function createNewEvent(eventData: Omit<EventItem, "id" | "createdAt">): Promise<EventItem> {
   const newId = `evt-${Date.now()}`;
+  const rawPassword = (eventData.adminPassword || "admin123").trim();
+  const hashedAdminPassword = await hashServerPassword(rawPassword);
+
   const newEvent: EventItem = {
     ...eventData,
     id: newId,
+    adminEmail: (eventData.adminEmail || `admin@${eventData.slug || "event"}.com`).trim().toLowerCase(),
+    adminPassword: hashedAdminPassword,
+    usherPin: (eventData.usherPin || "0000").trim(),
     createdAt: new Date().toISOString(),
   };
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      await mongo.collection("events").insertOne({ ...newEvent });
+    }
+  } catch (err) {
+    console.warn("MongoDB createNewEvent error:", err);
+  }
 
   try {
     if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
@@ -208,7 +350,67 @@ export async function createNewEvent(eventData: Omit<EventItem, "id" | "createdA
   return newEvent;
 }
 
+/**
+ * Upgrades a legacy plaintext event admin password in MongoDB to a salted PBKDF2 hash.
+ */
+export async function upgradeEventAdminPasswordHash(
+  eventId: string,
+  hashedPassword: string
+): Promise<void> {
+  if (!eventId || !hashedPassword.includes(":")) return;
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      await mongo.collection("events").updateOne(
+        { id: eventId },
+        { $set: { adminPassword: hashedPassword } }
+      );
+    }
+  } catch (err) {
+    console.warn("Failed to upgrade event admin password hash:", err);
+  }
+}
+
 export async function fetchAttendeesByEvent(eventId: string): Promise<AttendeeRegistration[]> {
+  if (isClient()) {
+    try {
+      const res = await fetch(`/api/attendees?eventId=${encodeURIComponent(eventId)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.attendees)) {
+          return data.attendees;
+        }
+      }
+    } catch (e) {
+      console.warn("Client fetchAttendeesByEvent fallback:", e);
+    }
+    const list = getLocalAttendees();
+    return list.filter((a) => a.eventId === eventId);
+  }
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const docs = await mongo
+        .collection("attendees")
+        .find({ eventId })
+        .sort({ registeredAt: -1 })
+        .toArray();
+      if (docs && docs.length > 0) {
+        return docs.map(({ _id, ...rest }) => rest as unknown as AttendeeRegistration);
+      } else if (eventId === INITIAL_EVENTS[0].id) {
+        const seeds = INITIAL_ATTENDEES.filter((a) => a.eventId === eventId);
+        await mongo.collection("attendees").insertMany(seeds).catch(() => {});
+        return seeds;
+      }
+      return [];
+    }
+  } catch (e) {
+    console.warn("MongoDB fetchAttendeesByEvent error:", e);
+  }
+
   try {
     if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
       const q = query(collection(db, "registrations"), where("eventId", "==", eventId));
@@ -226,9 +428,40 @@ export async function fetchAttendeesByEvent(eventId: string): Promise<AttendeeRe
 }
 
 export async function fetchAttendeeByTicketId(ticketId: string): Promise<AttendeeRegistration | null> {
+  if (containsMaliciousPayload(ticketId)) return null;
+  const clean = sanitizeText(ticketId, 120);
+  if (!clean) return null;
+
+  if (isClient()) {
+    try {
+      const res = await fetch(`/api/tickets/${encodeURIComponent(clean)}`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.attendee) return data.attendee as AttendeeRegistration;
+      }
+    } catch (e) {
+      console.warn("Client fetchAttendeeByTicketId fallback:", e);
+    }
+  }
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const doc = await mongo.collection("attendees").findOne({
+        id: { $regex: new RegExp(`^${escapeRegex(clean)}$`, "i") },
+      });
+      if (doc) {
+        const { _id, ...rest } = doc;
+        return rest as unknown as AttendeeRegistration;
+      }
+    }
+  } catch (e) {
+    console.warn("MongoDB fetchAttendeeByTicketId error:", e);
+  }
+
   try {
     if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
-      const snap = await getDoc(doc(db, "registrations", ticketId));
+      const snap = await getDoc(doc(db, "registrations", clean));
       if (snap.exists()) {
         return snap.data() as AttendeeRegistration;
       }
@@ -238,7 +471,54 @@ export async function fetchAttendeeByTicketId(ticketId: string): Promise<Attende
   }
 
   const list = getLocalAttendees();
-  return list.find((a) => a.id.toLowerCase() === ticketId.trim().toLowerCase()) || null;
+  return list.find((a) => a.id.toLowerCase() === clean.toLowerCase()) || null;
+}
+
+/**
+ * O(1) Indexed Capacity & Duplicate Email Check for High-Throughput Registrations
+ */
+export async function checkEventCapacityAndDuplicate(
+  eventId: string,
+  email: string
+): Promise<{
+  registeredCount: number;
+  existingDuplicate: AttendeeRegistration | null;
+}> {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const [count, dupDoc] = await Promise.all([
+        mongo.collection("attendees").countDocuments({ eventId }),
+        mongo.collection("attendees").findOne({
+          eventId,
+          email: normalizedEmail,
+        }),
+      ]);
+
+      let existingDuplicate: AttendeeRegistration | null = null;
+      if (dupDoc) {
+        const { _id, ...rest } = dupDoc;
+        existingDuplicate = rest as unknown as AttendeeRegistration;
+      }
+
+      return {
+        registeredCount: count,
+        existingDuplicate,
+      };
+    }
+  } catch (e) {
+    console.warn("MongoDB checkEventCapacityAndDuplicate fallback:", e);
+  }
+
+  const all = await fetchAttendeesByEvent(eventId);
+  const dup =
+    all.find((a) => a.email.trim().toLowerCase() === normalizedEmail) || null;
+  return {
+    registeredCount: all.length,
+    existingDuplicate: dup,
+  };
 }
 
 export async function registerNewAttendee(params: {
@@ -258,7 +538,8 @@ export async function registerNewAttendee(params: {
   const randCode = Math.floor(10000 + Math.random() * 90000);
   const prefix = event.city ? event.city.slice(0, 3).toUpperCase() : "EVT";
   const ticketId = `TKT-${prefix}-${randCode}`;
-  const qrHash = `${ticketId}#${event.id}`;
+  // Cryptographically sign QR payload with HMAC-SHA256 (<ticketId>#<eventId>#<16-char-sig>)
+  const qrHash = await signServerQrHash(ticketId, event.id);
 
   const registration: AttendeeRegistration = {
     id: ticketId,
@@ -278,6 +559,15 @@ export async function registerNewAttendee(params: {
   };
 
   try {
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      await mongo.collection("attendees").insertOne({ ...registration });
+    }
+  } catch (err) {
+    console.warn("MongoDB registerNewAttendee error:", err);
+  }
+
+  try {
     if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
       await setDoc(doc(db, "registrations", ticketId), registration);
     }
@@ -293,24 +583,36 @@ export async function registerNewAttendee(params: {
 }
 
 /**
- * Atomic zero-click checkin evaluator:
+ * Atomic Multi-Gate Zero-Click Check-In Evaluator:
  * Decodes scanned QR payload, validates ticket against current event,
- * checks for duplicate admission, and records timestamp atomically.
+ * and uses MongoDB's atomic `findOneAndUpdate({ id, status: "registered" })`
+ * to guarantee that simultaneous scans across multiple gates cannot double-admit.
  */
-export async function admitAttendeeByQr(scannedRaw: string, activeEventId?: string): Promise<CheckinResult> {
+export async function admitAttendeeByQr(
+  scannedRaw: string,
+  activeEventId?: string,
+  terminalId = "Scanner-Camera"
+): Promise<CheckinResult> {
   if (!scannedRaw) {
     return { success: false, code: "INVALID_TICKET", message: "Empty QR code detected" };
   }
 
   const cleanRaw = scannedRaw.trim();
-  // Support either full hash "TKT-LAG-1001#evt-nestle-summit-2026" or plain ticket ID "TKT-LAG-1001" or URL
   let parsedTicketId = cleanRaw;
 
   if (cleanRaw.includes("/ticket/")) {
     const parts = cleanRaw.split("/ticket/");
     parsedTicketId = decodeURIComponent(parts[1]?.split("?")[0]?.split("#")[0] || "");
   } else if (cleanRaw.includes("#")) {
-    parsedTicketId = cleanRaw.split("#")[0];
+    const sigCheck = await verifyServerQrSignature(cleanRaw);
+    if (!sigCheck.valid) {
+      return {
+        success: false,
+        code: "INVALID_TICKET",
+        message: "QR cryptographic signature verification failed — forged or tampered pass.",
+      };
+    }
+    parsedTicketId = sigCheck.ticketId;
   }
 
   const attendee = await fetchAttendeeByTicketId(parsedTicketId);
@@ -333,7 +635,7 @@ export async function admitAttendeeByQr(scannedRaw: string, activeEventId?: stri
     };
   }
 
-  // Check for duplicate admission
+  // Fast pre-check if already checked in
   if (attendee.status === "checked_in") {
     return {
       success: false,
@@ -344,41 +646,126 @@ export async function admitAttendeeByQr(scannedRaw: string, activeEventId?: stri
     };
   }
 
-  // Mark admitted
-  const checkedInAt = new Date().toISOString();
-  const updatedAttendee: AttendeeRegistration = {
-    ...attendee,
-    status: "checked_in",
-    checkedInAt,
-    checkedInBy: "Scanner-Camera",
-  };
+  // In-memory concurrency lock for same-process simultaneous requests
+  const lockKey = attendee.id.toUpperCase();
+  if (activeCheckinLocks.has(lockKey)) {
+    return {
+      success: false,
+      code: "ALREADY_CHECKED_IN",
+      message: "Concurrent scan detected at another gate — ticket is already being admitted.",
+      attendee,
+      previousCheckinAt: new Date().toISOString(),
+    };
+  }
+
+  activeCheckinLocks.add(lockKey);
 
   try {
-    if (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app") {
-      await updateDoc(doc(db, "registrations", attendee.id), {
-        status: "checked_in",
-        checkedInAt,
-        checkedInBy: "Scanner-Camera",
-      });
+    const checkedInAt = new Date().toISOString();
+
+    // Primary Atomic Multi-Gate Check-in via MongoDB findOneAndUpdate
+    const mongo = await getServerMongoDb();
+    if (mongo) {
+      const atomicUpdatedDoc = await mongo.collection("attendees").findOneAndUpdate(
+        {
+          id: attendee.id,
+          status: "registered", // ATOMIC CONDITION: Only matches if status is still "registered"
+        },
+        {
+          $set: {
+            status: "checked_in",
+            checkedInAt,
+            checkedInBy: terminalId,
+          },
+        },
+        { returnDocument: "after" }
+      );
+
+      // If null, another gate usher won the race milliseconds ago!
+      if (!atomicUpdatedDoc) {
+        const latestDoc = await mongo.collection("attendees").findOne({ id: attendee.id });
+        const latestAttendee = latestDoc
+          ? (({ _id, ...rest }) => rest as unknown as AttendeeRegistration)(latestDoc)
+          : attendee;
+
+        return {
+          success: false,
+          code: "ALREADY_CHECKED_IN",
+          message: `Already admitted at ${new Date(
+            latestAttendee.checkedInAt || checkedInAt
+          ).toLocaleTimeString()}`,
+          attendee: latestAttendee,
+          previousCheckinAt: latestAttendee.checkedInAt || checkedInAt,
+        };
+      }
+
+      const { _id, ...cleanUpdated } = atomicUpdatedDoc;
+      const updatedAttendee = cleanUpdated as unknown as AttendeeRegistration;
+
+      // Sync local memory cache
+      const all = getLocalAttendees();
+      const index = all.findIndex((a) => a.id === attendee.id);
+      if (index !== -1) {
+        all[index] = updatedAttendee;
+        saveLocalAttendees(all);
+      }
+
+      return {
+        success: true,
+        code: "ADMITTED",
+        message: "Admission confirmed. Welcome!",
+        attendee: updatedAttendee,
+      };
     }
-  } catch (err) {
-    console.warn("Firestore checkin update error:", err);
-  }
 
-  // Update local memory
-  const all = getLocalAttendees();
-  const index = all.findIndex((a) => a.id === attendee.id);
-  if (index !== -1) {
-    all[index] = updatedAttendee;
-    saveLocalAttendees(all);
-  }
+    // Fallback path when running without MongoDB (Firestore or Local Memory)
+    const updatedAttendee: AttendeeRegistration = {
+      ...attendee,
+      status: "checked_in",
+      checkedInAt,
+      checkedInBy: terminalId,
+    };
 
-  return {
-    success: true,
-    code: "ADMITTED",
-    message: "Admission confirmed. Welcome!",
-    attendee: updatedAttendee,
-  };
+    try {
+      if (
+        process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID &&
+        process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID !== "mock-app"
+      ) {
+        await updateDoc(doc(db, "registrations", attendee.id), {
+          status: "checked_in",
+          checkedInAt,
+          checkedInBy: terminalId,
+        });
+      }
+    } catch (err) {
+      console.warn("Firestore checkin update error:", err);
+    }
+
+    const all = getLocalAttendees();
+    const index = all.findIndex((a) => a.id === attendee.id);
+    if (index !== -1) {
+      if (all[index].status === "checked_in") {
+        return {
+          success: false,
+          code: "ALREADY_CHECKED_IN",
+          message: `Already admitted at ${new Date(all[index].checkedInAt || "").toLocaleTimeString()}`,
+          attendee: all[index],
+          previousCheckinAt: all[index].checkedInAt,
+        };
+      }
+      all[index] = updatedAttendee;
+      saveLocalAttendees(all);
+    }
+
+    return {
+      success: true,
+      code: "ADMITTED",
+      message: "Admission confirmed. Welcome!",
+      attendee: updatedAttendee,
+    };
+  } finally {
+    activeCheckinLocks.delete(lockKey);
+  }
 }
 
 export function computeEventStats(attendees: AttendeeRegistration[]): EventStats {

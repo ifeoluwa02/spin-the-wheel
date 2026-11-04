@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import confetti from "canvas-confetti";
 import {
-  ScanLine,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -14,15 +13,29 @@ import {
   Volume2,
   VolumeX,
   Users,
-  ShieldCheck,
   Lock,
   Clock,
   LogOut,
   KeyRound,
+  Wifi,
+  WifiOff,
+  CloudUpload,
+  Database,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration, CheckinResult } from "@/lib/types";
-import { INITIAL_EVENTS } from "@/lib/repository";
+import { INITIAL_EVENTS, INITIAL_ATTENDEES } from "@/lib/repository";
 import { playSuccessChime, playWarningBuzz } from "@/lib/audio";
+
+interface OfflineCheckinQueueItem {
+  qrData: string;
+  ticketId: string;
+  eventId: string;
+  scannedAt: string;
+  terminalId: string;
+}
+
+const OFFLINE_QUEUE_STORAGE_KEY = "passflow_offline_checkin_queue";
+const ROSTER_CACHE_PREFIX = "passflow_roster_cache_";
 
 interface GateScannerViewProps {
   initialEvent?: EventItem | null;
@@ -63,11 +76,218 @@ export function GateScannerView({
   const [manualCode, setManualCode] = useState("");
   const [isManualChecking, setIsManualChecking] = useState(false);
 
+  // Offline / Low-Network Resilience State
+  const [isOnline, setIsOnline] = useState<boolean>(true);
+  const [cachedRosterCount, setCachedRosterCount] = useState<number>(0);
+  const [lastRosterSyncTime, setLastRosterSyncTime] = useState<string | null>(null);
+  const [offlineQueue, setOfflineQueue] = useState<OfflineCheckinQueueItem[]>([]);
+  const [isSyncingOffline, setIsSyncingOffline] = useState<boolean>(false);
+
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
   const isProcessingRef = useRef<boolean>(false);
   const readerElementId = "qr-reader-container";
 
-  // Load events
+  const activeEvent =
+    initialEvent && lockedMode
+      ? initialEvent
+      : events.find((e) => e.id === selectedEventId) ||
+        initialEvent ||
+        events[0] ||
+        INITIAL_EVENTS[0];
+
+  // Helpers for LocalStorage Roster Cache & Offline Check-in Queue
+  const getCachedRoster = useCallback((eventId: string): AttendeeRegistration[] => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(`${ROSTER_CACHE_PREFIX}${eventId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.warn("Failed to read cached roster:", e);
+    }
+    return INITIAL_ATTENDEES.filter((a) => a.eventId === eventId);
+  }, []);
+
+  const saveCachedRoster = useCallback(
+    (eventId: string, roster: AttendeeRegistration[]) => {
+      if (typeof window === "undefined") return;
+      try {
+        localStorage.setItem(`${ROSTER_CACHE_PREFIX}${eventId}`, JSON.stringify(roster));
+        setCachedRosterCount(roster.length);
+        setLastRosterSyncTime(
+          new Date().toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })
+        );
+      } catch (e) {
+        console.warn("Failed to save cached roster:", e);
+      }
+    },
+    []
+  );
+
+  const getStoredOfflineQueue = useCallback((): OfflineCheckinQueueItem[] => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(OFFLINE_QUEUE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }, []);
+
+  const saveStoredOfflineQueue = useCallback((queue: OfflineCheckinQueueItem[]) => {
+    setOfflineQueue(queue);
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(OFFLINE_QUEUE_STORAGE_KEY, JSON.stringify(queue));
+    } catch (e) {
+      console.warn("Failed to save offline checkin queue:", e);
+    }
+  }, []);
+
+  // Sync Attendee Roster from API into local cache
+  const refreshRosterCache = useCallback(
+    async (eventId: string) => {
+      const existing = getCachedRoster(eventId);
+      setCachedRosterCount(existing.length);
+
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        setIsOnline(false);
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `/api/attendees?eventId=${encodeURIComponent(eventId)}`,
+          { cache: "no-store" }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.attendees)) {
+            // Merge any pending offline check-ins so local cache doesn't lose unsynced offline admissions
+            const currentQueue = getStoredOfflineQueue();
+            const pendingIds = new Set(
+              currentQueue
+                .filter((q) => q.eventId === eventId)
+                .map((q) => q.ticketId.toUpperCase())
+            );
+
+            const mergedRoster: AttendeeRegistration[] = data.attendees.map(
+              (att: AttendeeRegistration) => {
+                if (pendingIds.has(att.id.toUpperCase()) && att.status !== "checked_in") {
+                  const qItem = currentQueue.find(
+                    (q) => q.ticketId.toUpperCase() === att.id.toUpperCase()
+                  );
+                  return {
+                    ...att,
+                    status: "checked_in",
+                    checkedInAt: qItem?.scannedAt || new Date().toISOString(),
+                    checkedInBy: qItem?.terminalId || "Offline-Gate-Scanner",
+                  };
+                }
+                return att;
+              }
+            );
+
+            saveCachedRoster(eventId, mergedRoster);
+            setIsOnline(true);
+          }
+        }
+      } catch {
+        // Network unavailable — rely on cached roster
+      }
+    },
+    [getCachedRoster, getStoredOfflineQueue, saveCachedRoster]
+  );
+
+  // Flush queued offline check-ins to /api/admit/sync when network returns
+  const syncOfflineQueueToServer = useCallback(async () => {
+    const queue = getStoredOfflineQueue();
+    if (queue.length === 0 || isSyncingOffline) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+    setIsSyncingOffline(true);
+    try {
+      const res = await fetch("/api/admit/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: queue,
+          eventId: activeEvent.id,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        saveStoredOfflineQueue([]);
+        if (Array.isArray(data.attendees) && data.attendees.length > 0) {
+          saveCachedRoster(activeEvent.id, data.attendees);
+        } else {
+          await refreshRosterCache(activeEvent.id);
+        }
+        setIsOnline(true);
+      }
+    } catch (e) {
+      console.warn("Offline queue sync deferred (network still unstable):", e);
+    } finally {
+      setIsSyncingOffline(false);
+    }
+  }, [
+    activeEvent.id,
+    getStoredOfflineQueue,
+    isSyncingOffline,
+    refreshRosterCache,
+    saveCachedRoster,
+    saveStoredOfflineQueue,
+  ]);
+
+  // Monitor Online/Offline browser events & periodic roster sync
+  useEffect(() => {
+    setOfflineQueue(getStoredOfflineQueue());
+    setIsOnline(typeof navigator !== "undefined" ? navigator.onLine : true);
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      syncOfflineQueueToServer();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [getStoredOfflineQueue, syncOfflineQueueToServer]);
+
+  // Pre-cache roster on event change and refresh every 25s
+  useEffect(() => {
+    refreshRosterCache(activeEvent.id);
+
+    const interval = setInterval(() => {
+      if (getStoredOfflineQueue().length > 0) {
+        syncOfflineQueueToServer();
+      } else {
+        refreshRosterCache(activeEvent.id);
+      }
+    }, 25000);
+
+    return () => clearInterval(interval);
+  }, [activeEvent.id, getStoredOfflineQueue, refreshRosterCache, syncOfflineQueueToServer]);
+
+  // Load events via API
   useEffect(() => {
     async function loadEvents() {
       if (initialEvent && lockedMode) {
@@ -75,7 +295,7 @@ export function GateScannerView({
         return;
       }
       try {
-        const res = await fetch("/api/events");
+        const res = await fetch("/api/events", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.events && data.events.length > 0) {
@@ -101,42 +321,184 @@ export function GateScannerView({
     loadEvents();
   }, [initialEvent, lockedMode, targetSlug]);
 
-  const activeEvent =
-    (initialEvent && lockedMode)
-      ? initialEvent
-      : events.find((e) => e.id === selectedEventId) || initialEvent || events[0] || INITIAL_EVENTS[0];
+  // Evaluate QR locally against the cached roster when cellular network drops or stalls
+  const evaluateOfflineQr = useCallback(
+    (decodedText: string, eventId: string): CheckinResult => {
+      const cleanRaw = (decodedText || "").trim();
+      if (!cleanRaw) {
+        return {
+          success: false,
+          code: "INVALID_TICKET",
+          message: "Empty QR code detected",
+        };
+      }
 
-  // Process a scanned QR string
+      let parsedTicketId = cleanRaw;
+      if (cleanRaw.includes("/ticket/")) {
+        const parts = cleanRaw.split("/ticket/");
+        parsedTicketId = decodeURIComponent(
+          parts[1]?.split("?")[0]?.split("#")[0] || ""
+        );
+      } else if (cleanRaw.includes("#")) {
+        parsedTicketId = cleanRaw.split("#")[0];
+      }
+
+      const roster = getCachedRoster(eventId);
+      const attendeeIndex = roster.findIndex(
+        (a) => a.id.toLowerCase() === parsedTicketId.toLowerCase()
+      );
+
+      if (attendeeIndex === -1) {
+        return {
+          success: false,
+          code: "INVALID_TICKET",
+          message: `Ticket "${parsedTicketId}" not found in cached event roster (${roster.length} passes cached).`,
+        };
+      }
+
+      const attendee = roster[attendeeIndex];
+
+      if (eventId && attendee.eventId !== eventId) {
+        return {
+          success: false,
+          code: "WRONG_EVENT",
+          message: `Ticket belongs to another event: "${attendee.eventTitle}".`,
+          attendee,
+        };
+      }
+
+      const currentQueue = getStoredOfflineQueue();
+      const alreadyQueued = currentQueue.find(
+        (q) => q.ticketId.toLowerCase() === attendee.id.toLowerCase()
+      );
+
+      if (attendee.status === "checked_in" || alreadyQueued) {
+        const prevTime = alreadyQueued?.scannedAt || attendee.checkedInAt || "";
+        return {
+          success: false,
+          code: "ALREADY_CHECKED_IN",
+          message: `Already admitted at ${
+            prevTime ? new Date(prevTime).toLocaleTimeString() : "earlier scan"
+          }`,
+          attendee,
+          previousCheckinAt: prevTime,
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      const updatedAttendee: AttendeeRegistration = {
+        ...attendee,
+        status: "checked_in",
+        checkedInAt: nowIso,
+        checkedInBy: "Offline-Gate-Scanner",
+      };
+
+      // Update local cached roster immediately to block any duplicate offline scan
+      const updatedRoster = [...roster];
+      updatedRoster[attendeeIndex] = updatedAttendee;
+      saveCachedRoster(eventId, updatedRoster);
+
+      // Push to offline sync queue
+      const nextQueue: OfflineCheckinQueueItem[] = [
+        ...currentQueue,
+        {
+          qrData: cleanRaw,
+          ticketId: attendee.id,
+          eventId,
+          scannedAt: nowIso,
+          terminalId: "Offline-Gate-Scanner",
+        },
+      ];
+      saveStoredOfflineQueue(nextQueue);
+
+      return {
+        success: true,
+        code: "ADMITTED",
+        message: "Admitted (Offline Mode • Queued for Auto-Sync)",
+        attendee: updatedAttendee,
+      };
+    },
+    [getCachedRoster, getStoredOfflineQueue, saveCachedRoster, saveStoredOfflineQueue]
+  );
+
+  // Process a scanned QR string (API first with 3.5s low-network timeout, automatic local roster fallback)
   const handleDecodedCode = useCallback(
     async (decodedText: string) => {
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
 
+      let result: CheckinResult | null = null;
+
       try {
-        const res = await fetch("/api/admit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            qrData: decodedText,
-            eventId: activeEvent.id,
-          }),
-        });
-
-        const result: CheckinResult = await res.json();
-        setLastScanResult(result);
-
-        if (result.success && result.code === "ADMITTED") {
-          if (soundEnabled) playSuccessChime();
-          confetti({
-            particleCount: 50,
-            spread: 60,
-            origin: { y: 0.5 },
-          });
-          if (result.attendee) {
-            setRecentAdmissions((prev) => [result.attendee!, ...prev.slice(0, 9)]);
-          }
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          setIsOnline(false);
+          result = evaluateOfflineQr(decodedText, activeEvent.id);
         } else {
-          if (soundEnabled) playWarningBuzz();
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3500);
+
+          try {
+            const res = await fetch("/api/admit", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                qrData: decodedText,
+                eventId: activeEvent.id,
+                terminalId: "Gate-Camera-Scanner",
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (res.ok || res.status === 400) {
+              result = await res.json();
+              setIsOnline(true);
+
+              // Keep local cached roster updated with this online check-in
+              if (result?.attendee) {
+                const roster = getCachedRoster(activeEvent.id);
+                const idx = roster.findIndex((a) => a.id === result!.attendee!.id);
+                if (idx !== -1) {
+                  roster[idx] = result.attendee;
+                } else {
+                  roster.unshift(result.attendee);
+                }
+                saveCachedRoster(activeEvent.id, roster);
+              }
+            } else {
+              // 5xx Server Error -> fall back to cached roster
+              result = evaluateOfflineQr(decodedText, activeEvent.id);
+            }
+          } catch (networkErr) {
+            clearTimeout(timeoutId);
+            console.warn(
+              "Network drop or timeout on /api/admit — falling back to offline cached roster:",
+              networkErr
+            );
+            setIsOnline(false);
+            result = evaluateOfflineQr(decodedText, activeEvent.id);
+          }
+        }
+
+        if (result) {
+          setLastScanResult(result);
+
+          if (result.success && result.code === "ADMITTED") {
+            if (soundEnabled) playSuccessChime();
+            confetti({
+              particleCount: 50,
+              spread: 60,
+              origin: { y: 0.5 },
+            });
+            if (result.attendee) {
+              setRecentAdmissions((prev) => [
+                result!.attendee!,
+                ...prev.filter((p) => p.id !== result!.attendee!.id).slice(0, 9),
+              ]);
+            }
+          } else {
+            if (soundEnabled) playWarningBuzz();
+          }
         }
 
         // Automatic cooldown before resuming
@@ -159,7 +521,7 @@ export function GateScannerView({
         setLastScanResult({
           success: false,
           code: "SERVER_ERROR",
-          message: "Could not connect to admission server. Please check internet.",
+          message: "Could not validate ticket. Please try scanning again.",
         });
         setTimeout(() => {
           setLastScanResult(null);
@@ -167,7 +529,13 @@ export function GateScannerView({
         }, 2500);
       }
     },
-    [activeEvent.id, soundEnabled]
+    [
+      activeEvent.id,
+      evaluateOfflineQr,
+      getCachedRoster,
+      saveCachedRoster,
+      soundEnabled,
+    ]
   );
 
   // Initialize and start camera scanner
@@ -281,6 +649,73 @@ export function GateScannerView({
         </div>
       )}
 
+      {/* Offline / Low-Network Field Resilience Bar */}
+      <div
+        className={`p-3.5 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs transition-all ${
+          !isOnline || offlineQueue.length > 0
+            ? "bg-amber-50/90 border-amber-200 text-amber-900"
+            : "bg-emerald-50/70 border-emerald-200/80 text-emerald-900"
+        }`}
+      >
+        <div className="flex flex-wrap items-center gap-2.5">
+          {isOnline ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[11px]">
+              <Wifi className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Online</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-200/80 text-amber-950 font-bold text-[11px] animate-pulse">
+              <WifiOff className="w-3.5 h-3.5 text-amber-700" />
+              <span>Offline Resilience Active</span>
+            </span>
+          )}
+
+          <span className="inline-flex items-center gap-1.5 text-slate-700 font-semibold">
+            <Database className="w-3.5 h-3.5 text-blue-600" />
+            <span>
+              Offline Roster Cached: <strong>{cachedRosterCount}</strong> passes
+            </span>
+            {lastRosterSyncTime && (
+              <span className="text-[11px] text-slate-400 font-mono">
+                (Synced {lastRosterSyncTime})
+              </span>
+            )}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {offlineQueue.length > 0 && (
+            <button
+              type="button"
+              onClick={syncOfflineQueueToServer}
+              disabled={isSyncingOffline}
+              className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <CloudUpload
+                className={`w-3.5 h-3.5 ${isSyncingOffline ? "animate-bounce" : ""}`}
+              />
+              <span>
+                {isSyncingOffline
+                  ? "Syncing to DB..."
+                  : `Sync ${offlineQueue.length} Queued Check-In${
+                      offlineQueue.length > 1 ? "s" : ""
+                    }`}
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => refreshRosterCache(activeEvent.id)}
+            className="px-2.5 py-1 rounded-lg bg-white/90 hover:bg-white text-slate-700 font-semibold text-[11px] border border-slate-200/80 transition-colors flex items-center gap-1"
+            title="Refresh offline roster cache from server"
+          >
+            <RefreshCw className="w-3 h-3 text-blue-600" />
+            <span>Refresh Cache</span>
+          </button>
+        </div>
+      </div>
+
       {/* Gate Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 light-card p-5 rounded-2xl">
         <div>
@@ -294,7 +729,7 @@ export function GateScannerView({
             Gate Camera Scanner
           </h1>
           <p className="text-xs text-slate-500">
-            Hold attendee QR in camera frame. Admittance records automatically with no button clicks.
+            Hold attendee QR in camera frame. Validates via live API or instant offline cache if venue network drops.
           </p>
         </div>
 

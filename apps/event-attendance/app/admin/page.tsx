@@ -7,8 +7,9 @@ export default function SuperAdminPage() {
   return (
     <SecurityAuthGuard
       targetRole="super-admin"
+      defaultEmail="superadmin@passflow.io"
       title="Master Super-Admin Portal"
-      description="Enter Super-Admin PIN (Default: 9999) for cross-event management and operations."
+      description="Sign in with Master Super-Admin email and password (Default: superadmin@passflow.io / admin123) for cross-event oversight."
     >
       {(auth) => (
         <AdminDashboardView

@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAllEvents, createNewEvent } from "@/lib/repository";
+import { validateCreateEventPayload } from "@/lib/validation";
+import { verifyApiAuthorization } from "@/lib/auth";
 
 export async function GET() {
   try {
     const events = await fetchAllEvents();
-    return NextResponse.json({ events });
+    // Sanitize sensitive password hashes before returning to client
+    const safeEvents = events.map(({ adminPassword, ...rest }) => rest);
+    return NextResponse.json({ events: safeEvents });
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to load events" },
@@ -15,35 +19,54 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { title, slug, organizer, description, venueName, venueAddress, city, state, startDate, endDate, capacity, bannerGradient } = body;
-
-    if (!title || !venueName || !startDate) {
+    // 1. Require Super-Admin or Admin Session to Create Events
+    const auth = verifyApiAuthorization(req, ["super-admin", "admin"]);
+    if (!auth.authorized) {
       return NextResponse.json(
-        { error: "Title, venue name, and start date are required" },
+        { error: auth.error || "Unauthorized" },
+        { status: auth.status || 401 }
+      );
+    }
+
+    const body = await req.json();
+
+    // Strict Field Validation & PHP / Script / NoSQL Injection Guard
+    const validation = validateCreateEventPayload(body);
+    if (!validation.valid || !validation.data) {
+      return NextResponse.json(
+        {
+          error: validation.error || "Invalid event fields.",
+          fieldErrors: validation.fieldErrors,
+        },
         { status: 400 }
       );
     }
 
-    const eventSlug = slug || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const validData = validation.data;
 
+    // createNewEvent automatically hashes adminPassword with salted PBKDF2 (100k iterations)
     const newEvent = await createNewEvent({
-      slug: eventSlug,
-      title,
-      category: body.category || "General Event",
-      organizer: organizer || "Event Organizer",
-      description: description || "",
-      venueName,
-      venueAddress: venueAddress || "",
-      city: city || "Lagos",
-      state: state || "Lagos",
-      startDate,
-      endDate: endDate || startDate,
-      capacity: Number(capacity) || 500,
-      bannerGradient: bannerGradient || "from-indigo-600 via-purple-600 to-pink-600",
+      slug: validData.slug,
+      title: validData.title,
+      category: validData.category,
+      organizer: validData.organizer,
+      description: validData.description,
+      venueName: validData.venueName,
+      venueAddress: validData.venueAddress,
+      city: validData.city,
+      state: validData.state,
+      startDate: validData.startDate,
+      endDate: validData.endDate,
+      capacity: validData.capacity,
+      bannerGradient: validData.bannerGradient,
+      adminEmail: validData.adminEmail,
+      adminPassword: validData.adminPassword,
+      usherPin: validData.usherPin,
     });
 
-    return NextResponse.json({ success: true, event: newEvent });
+    const { adminPassword: _hidden, ...safeEvent } = newEvent;
+
+    return NextResponse.json({ success: true, event: safeEvent });
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to create event" },

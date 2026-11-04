@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   Users,
@@ -9,12 +9,10 @@ import {
   PlusCircle,
   Download,
   Search,
-  Filter,
   CheckCircle2,
   ScanLine,
   Mail,
   Calendar,
-  Building,
   RefreshCw,
   ExternalLink,
   Copy,
@@ -22,17 +20,16 @@ import {
   Lock,
   LogOut,
   KeyRound,
-  ShieldCheck,
+  Radio,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration } from "@/lib/types";
 import {
-  fetchAllEvents,
-  fetchAttendeesByEvent,
-  createNewEvent,
   computeEventStats,
   INITIAL_EVENTS,
   INITIAL_ATTENDEES,
 } from "@/lib/repository";
+import { validateCreateEventPayload, sanitizeCsvCell } from "@/lib/validation";
+import { EmailQueueView } from "./EmailQueueView";
 
 interface AdminDashboardViewProps {
   initialEvent?: EventItem | null;
@@ -61,6 +58,9 @@ export function AdminDashboardView({
   const [attendees, setAttendees] = useState<AttendeeRegistration[]>(INITIAL_ATTENDEES);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Active View Tab
+  const [activeTab, setActiveTab] = useState<"attendees" | "email-queue">("attendees");
+
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "CHECKED_IN" | "PENDING">("ALL");
@@ -76,12 +76,19 @@ export function AdminDashboardView({
   const [newEventDate, setNewEventDate] = useState("");
   const [newEventCapacity, setNewEventCapacity] = useState("500");
   const [newEventCategory, setNewEventCategory] = useState("Brand Activation");
-  const [newEventAdminPin, setNewEventAdminPin] = useState("1234");
+  const [newEventAdminEmail, setNewEventAdminEmail] = useState("");
+  const [newEventAdminPassword, setNewEventAdminPassword] = useState("admin123");
   const [newEventUsherPin, setNewEventUsherPin] = useState("0000");
   const [isCreatingEvent, setIsCreatingEvent] = useState(false);
+  const [createEventError, setCreateEventError] = useState<string | null>(null);
 
   const [copiedRegLink, setCopiedRegLink] = useState(false);
   const [copiedScanLink, setCopiedScanLink] = useState(false);
+
+  // Live Multi-Terminal Polling State (7-second interval)
+  const [isLivePolling, setIsLivePolling] = useState(true);
+  const [lastPolledTime, setLastPolledTime] = useState<string | null>(null);
+  const [admittingTicketId, setAdmittingTicketId] = useState<string | null>(null);
 
   const activeEvent =
     (initialEvent && lockedMode)
@@ -108,32 +115,101 @@ export function AdminDashboardView({
     }
   };
 
-  const loadData = async () => {
-    setIsLoading(true);
-    try {
-      if (!initialEvent || !lockedMode) {
-        const evts = await fetchAllEvents();
-        setEvents(evts);
-        if (targetSlug) {
-          const match = evts.find((e) => e.slug === targetSlug || e.id === targetSlug);
-          if (match) setSelectedEventId(match.id);
-        } else if (evts.length > 0 && !evts.find((e) => e.id === selectedEventId)) {
-          setSelectedEventId(evts[0].id);
+  const loadData = useCallback(
+    async (silent = false) => {
+      if (!silent) setIsLoading(true);
+      try {
+        let targetId =
+          initialEvent && lockedMode ? initialEvent.id : selectedEventId;
+
+        if (!initialEvent || !lockedMode) {
+          const evtsRes = await fetch("/api/events", { cache: "no-store" });
+          if (evtsRes.ok) {
+            const evtsData = await evtsRes.json();
+            const evts: EventItem[] = Array.isArray(evtsData.events)
+              ? evtsData.events
+              : [];
+            if (evts.length > 0) {
+              setEvents(evts);
+              if (targetSlug) {
+                const match = evts.find(
+                  (e) => e.slug === targetSlug || e.id === targetSlug
+                );
+                if (match) {
+                  targetId = match.id;
+                  setSelectedEventId(match.id);
+                }
+              } else if (!evts.find((e) => e.id === selectedEventId)) {
+                targetId = evts[0].id;
+                setSelectedEventId(evts[0].id);
+              }
+            }
+          }
         }
+
+        const attsRes = await fetch(
+          `/api/attendees?eventId=${encodeURIComponent(targetId)}`,
+          { cache: "no-store" }
+        );
+        if (attsRes.ok) {
+          const attsData = await attsRes.json();
+          if (Array.isArray(attsData.attendees)) {
+            setAttendees(attsData.attendees);
+            setLastPolledTime(
+              new Date().toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })
+            );
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load admin data via API:", err);
+      } finally {
+        if (!silent) setIsLoading(false);
       }
-      const targetId = (initialEvent && lockedMode) ? initialEvent.id : selectedEventId;
-      const atts = await fetchAttendeesByEvent(targetId);
-      setAttendees(atts);
+    },
+    [initialEvent, lockedMode, selectedEventId, targetSlug]
+  );
+
+  // Initial load on selection change
+  useEffect(() => {
+    loadData(false);
+  }, [loadData]);
+
+  // 7-Second Live Multi-Terminal Polling
+  useEffect(() => {
+    if (!isLivePolling) return;
+    const pollInterval = setInterval(() => {
+      loadData(true);
+    }, 7000);
+    return () => clearInterval(pollInterval);
+  }, [isLivePolling, loadData]);
+
+  // 1-Click Admin Check-In via /api/admit
+  const handleAdminCheckIn = async (ticketId: string) => {
+    if (admittingTicketId) return;
+    setAdmittingTicketId(ticketId);
+    try {
+      const res = await fetch("/api/admit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qrData: ticketId,
+          eventId: activeEvent.id,
+          terminalId: "Admin-Desk",
+        }),
+      });
+      if (res.ok) {
+        await loadData(true);
+      }
     } catch (err) {
-      console.warn("Failed to load admin data:", err);
+      console.error("Admin check-in via API failed:", err);
     } finally {
-      setIsLoading(false);
+      setAdmittingTicketId(null);
     }
   };
-
-  useEffect(() => {
-    loadData();
-  }, [selectedEventId, initialEvent, lockedMode]);
 
   const stats = useMemo(() => computeEventStats(attendees), [attendees]);
 
@@ -174,16 +250,16 @@ export function AdminDashboardView({
       "Admitted At",
     ];
     const rows = filteredAttendees.map((a) => [
-      a.id,
-      `"${a.fullName.replace(/"/g, '""')}"`,
-      a.email,
-      a.phone,
-      `"${(a.organization || "").replace(/"/g, '""')}"`,
-      `"${(a.jobTitle || "").replace(/"/g, '""')}"`,
-      a.ticketType,
-      a.status,
-      a.registeredAt,
-      a.checkedInAt || "",
+      sanitizeCsvCell(a.id),
+      `"${sanitizeCsvCell(a.fullName).replace(/"/g, '""')}"`,
+      sanitizeCsvCell(a.email),
+      sanitizeCsvCell(a.phone),
+      `"${sanitizeCsvCell(a.organization || "").replace(/"/g, '""')}"`,
+      `"${sanitizeCsvCell(a.jobTitle || "").replace(/"/g, '""')}"`,
+      sanitizeCsvCell(a.ticketType),
+      sanitizeCsvCell(a.status),
+      sanitizeCsvCell(a.registeredAt),
+      sanitizeCsvCell(a.checkedInAt || ""),
     ]);
 
     const csvContent =
@@ -203,29 +279,50 @@ export function AdminDashboardView({
 
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newEventTitle || !newEventVenue || !newEventDate) return;
+    setCreateEventError(null);
+
+    const computedSlug = newEventTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+
+    const validation = validateCreateEventPayload({
+      title: newEventTitle,
+      slug: computedSlug,
+      organizer: newEventOrganizer || "Innovcity Activations",
+      category: newEventCategory,
+      venueName: newEventVenue,
+      venueAddress: newEventAddress,
+      city: newEventCity,
+      startDate: newEventDate,
+      capacity: Number(newEventCapacity) || 500,
+      adminEmail: (newEventAdminEmail || `admin@${computedSlug || "event"}.com`)
+        .trim()
+        .toLowerCase(),
+      adminPassword: newEventAdminPassword || "admin123",
+      usherPin: newEventUsherPin || "0000",
+    });
+
+    if (!validation.valid || !validation.data) {
+      setCreateEventError(validation.error || "Please check event fields.");
+      return;
+    }
 
     setIsCreatingEvent(true);
     try {
       const res = await fetch("/api/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: newEventTitle,
-          organizer: newEventOrganizer || "Innovcity Activations",
-          category: newEventCategory,
-          venueName: newEventVenue,
-          venueAddress: newEventAddress,
-          city: newEventCity,
-          startDate: new Date(newEventDate).toISOString(),
-          capacity: Number(newEventCapacity) || 500,
-          adminPin: newEventAdminPin || "1234",
-          usherPin: newEventUsherPin || "0000",
-        }),
+        body: JSON.stringify(validation.data),
       });
 
       const data = await res.json();
-      if (res.ok && data.event) {
+      if (!res.ok) {
+        setCreateEventError(data.error || "Failed to create event.");
+        return;
+      }
+
+      if (data.event) {
         setEvents((prev) => [data.event, ...prev]);
         setSelectedEventId(data.event.id);
         setShowCreateModal(false);
@@ -233,9 +330,12 @@ export function AdminDashboardView({
         setNewEventVenue("");
         setNewEventAddress("");
         setNewEventDate("");
+        setNewEventAdminEmail("");
+        setNewEventAdminPassword("admin123");
       }
     } catch (err) {
       console.error("Create event failed:", err);
+      setCreateEventError("Could not connect to server to create event.");
     } finally {
       setIsCreatingEvent(false);
     }
@@ -339,7 +439,35 @@ export function AdminDashboardView({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Live Multi-Terminal Polling Toggle */}
+            <button
+              type="button"
+              onClick={() => setIsLivePolling((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[11px] font-bold transition-colors ${
+                isLivePolling
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-slate-50 border-slate-200 text-slate-500"
+              }`}
+              title={
+                isLivePolling
+                  ? "Auto-polling gate check-ins every 7 seconds (Click to pause)"
+                  : "Live polling paused (Click to resume)"
+              }
+            >
+              <Radio
+                className={`w-3.5 h-3.5 ${
+                  isLivePolling ? "text-emerald-600 animate-pulse" : "text-slate-400"
+                }`}
+              />
+              <span>{isLivePolling ? "LIVE SYNC (7s)" : "POLLING PAUSED"}</span>
+              {lastPolledTime && isLivePolling && (
+                <span className="font-mono text-[10px] text-emerald-600 hidden sm:inline">
+                  &bull; {lastPolledTime}
+                </span>
+              )}
+            </button>
+
             {!lockedMode ? (
               <select
                 value={selectedEventId}
@@ -359,10 +487,10 @@ export function AdminDashboardView({
             )}
 
             <button
-              onClick={loadData}
+              onClick={() => loadData(false)}
               disabled={isLoading}
               className="p-2.5 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-slate-900 transition-colors"
-              title="Refresh Data"
+              title="Refresh Data via API"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
             </button>
@@ -487,8 +615,40 @@ export function AdminDashboardView({
         </div>
       </div>
 
-      {/* Registry Controls & Table */}
-      <div className="light-card rounded-2xl overflow-hidden border border-slate-200 space-y-4 p-5">
+      {/* Tab Navigation */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab("attendees")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeTab === "attendees"
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Attendee Registry ({attendees.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab("email-queue")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeTab === "email-queue"
+              ? "bg-blue-600 text-white shadow-sm"
+              : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          <Mail className="w-4 h-4" />
+          <span>Resend Email &amp; Queue</span>
+        </button>
+      </div>
+
+      {activeTab === "email-queue" ? (
+        <EmailQueueView />
+      ) : (
+        /* Registry Controls & Table */
+        <div className="light-card rounded-2xl overflow-hidden border border-slate-200 space-y-4 p-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="relative flex-1 max-w-md">
             <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
@@ -606,14 +766,27 @@ export function AdminDashboardView({
                         : `Registered on ${new Date(att.registeredAt).toLocaleDateString()}`}
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <a
-                        href={`/ticket/${att.id}`}
-                        target="_blank"
-                        className="text-blue-600 hover:text-blue-800 font-bold text-xs inline-flex items-center gap-1"
-                      >
-                        <span>Pass</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
+                      <div className="inline-flex items-center justify-end gap-2">
+                        {att.status !== "checked_in" && (
+                          <button
+                            type="button"
+                            onClick={() => handleAdminCheckIn(att.id)}
+                            disabled={admittingTicketId === att.id}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] transition-colors disabled:opacity-50"
+                            title="Admit attendee via /api/admit"
+                          >
+                            {admittingTicketId === att.id ? "Admitting..." : "Check In"}
+                          </button>
+                        )}
+                        <a
+                          href={`/ticket/${att.id}`}
+                          target="_blank"
+                          className="text-blue-600 hover:text-blue-800 font-bold text-xs inline-flex items-center gap-1"
+                        >
+                          <span>Pass</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -622,6 +795,7 @@ export function AdminDashboardView({
           </table>
         </div>
       </div>
+      )}
 
       {/* Modal: Create Event (Super-Admin) */}
       {showCreateModal && !lockedMode && (
@@ -641,6 +815,12 @@ export function AdminDashboardView({
             </div>
 
             <form onSubmit={handleCreateEvent} className="space-y-3 text-xs">
+              {createEventError && (
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 font-medium text-xs">
+                  {createEventError}
+                </div>
+              )}
+
               <div>
                 <label className="block text-slate-700 font-semibold uppercase mb-1">
                   Event Title *
@@ -760,35 +940,51 @@ export function AdminDashboardView({
                 </div>
               </div>
 
-              {/* Security PINs */}
-              <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+              {/* Security Credentials (PBKDF2 Hashed) */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
                 <div>
                   <label className="block text-slate-700 font-semibold uppercase mb-1">
-                    Event Admin PIN
+                    Event Admin Email
                   </label>
                   <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="1234"
-                    value={newEventAdminPin}
-                    onChange={(e) => setNewEventAdminPin(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-center font-bold tracking-wider focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    type="email"
+                    placeholder="admin@brand.com"
+                    value={newEventAdminEmail}
+                    onChange={(e) => setNewEventAdminEmail(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                   />
-                  <span className="text-[10px] text-slate-400">For /e/[slug]/admin</span>
+                  <span className="text-[10px] text-slate-400">
+                    For /e/[slug]/admin (Defaults to admin@[slug].com if blank)
+                  </span>
                 </div>
-                <div>
-                  <label className="block text-slate-700 font-semibold uppercase mb-1">
-                    Gate Usher PIN
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="0000"
-                    value={newEventUsherPin}
-                    onChange={(e) => setNewEventUsherPin(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-center font-bold tracking-wider focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  />
-                  <span className="text-[10px] text-slate-400">For /e/[slug]/scan</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-700 font-semibold uppercase mb-1">
+                      Event Admin Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="admin123"
+                      value={newEventAdminPassword}
+                      onChange={(e) => setNewEventAdminPassword(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400">Stored as salted PBKDF2 hash</span>
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-semibold uppercase mb-1">
+                      Gate Usher PIN
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      placeholder="0000"
+                      value={newEventUsherPin}
+                      onChange={(e) => setNewEventUsherPin(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-slate-900 font-mono text-center font-bold tracking-wider focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400">For /e/[slug]/scan</span>
+                  </div>
                 </div>
               </div>
 

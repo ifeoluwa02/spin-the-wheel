@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { AttendeeRegistration, EventItem } from "@/lib/types";
-import { fetchAttendeeByTicketId, fetchEventById, INITIAL_ATTENDEES, INITIAL_EVENTS } from "@/lib/repository";
+import { INITIAL_ATTENDEES, INITIAL_EVENTS } from "@/lib/repository";
 
 export default function MobileTicketPage() {
   const params = useParams();
@@ -31,21 +31,47 @@ export default function MobileTicketPage() {
     async function loadData() {
       setIsLoading(true);
       try {
-        let att = await fetchAttendeeByTicketId(ticketId);
+        const res = await fetch(`/api/tickets/${encodeURIComponent(ticketId)}`, {
+          cache: "no-store",
+        });
+
+        let att: AttendeeRegistration | null = null;
+        let evt: EventItem | null = null;
+
+        if (res.ok) {
+          const data = await res.json();
+          att = data.attendee || null;
+          evt = data.event || null;
+        }
+
         if (!att) {
-          att = INITIAL_ATTENDEES.find((a) => a.id.toLowerCase() === ticketId?.toLowerCase()) || null;
+          att =
+            INITIAL_ATTENDEES.find(
+              (a) => a.id.toLowerCase() === ticketId?.toLowerCase()
+            ) || null;
         }
 
         if (att) {
           setAttendee(att);
-          let evt = await fetchEventById(att.eventId);
           if (!evt) {
-            evt = INITIAL_EVENTS.find((e) => e.id === att?.eventId) || INITIAL_EVENTS[0];
+            const evtRes = await fetch(
+              `/api/events/${encodeURIComponent(att.eventId)}`,
+              { cache: "no-store" }
+            ).catch(() => null);
+            if (evtRes && evtRes.ok) {
+              const evtData = await evtRes.json();
+              evt = evtData.event || null;
+            }
+          }
+          if (!evt) {
+            evt =
+              INITIAL_EVENTS.find((e) => e.id === att?.eventId) ||
+              INITIAL_EVENTS[0];
           }
           setEvent(evt);
         }
       } catch (err) {
-        console.error("Failed to load ticket:", err);
+        console.error("Failed to load ticket via API:", err);
       } finally {
         setIsLoading(false);
       }

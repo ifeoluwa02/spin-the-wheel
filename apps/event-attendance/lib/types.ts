@@ -13,7 +13,8 @@ export interface EventItem {
   endDate: string;
   capacity: number;
   bannerGradient: string;
-  adminPin?: string; // Event manager PIN (default e.g. "1234")
+  adminEmail?: string; // Event manager login email (e.g. "admin@nestle.com")
+  adminPassword?: string; // Event manager login password (e.g. "admin123" or PBKDF2 hash)
   usherPin?: string; // Gate usher PIN (default e.g. "0000")
   customFields?: {
     id: string;
@@ -29,6 +30,8 @@ export type UserRole = "super-admin" | "admin" | "usher" | "attendee";
 
 export interface AuthSession {
   role: UserRole;
+  email?: string;
+  name?: string;
   eventId?: string;
   eventSlug?: string;
   eventName?: string;

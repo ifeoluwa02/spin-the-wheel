@@ -1,4 +1,5 @@
 import { EventItem, AttendeeRegistration } from "./types";
+import { escapeHtml } from "./validation";
 
 /**
  * Generate a production-ready, responsive HTML email template for event admission
@@ -9,6 +10,15 @@ export function generateTicketEmailHtml(params: {
   appBaseUrl: string;
 }): string {
   const { event, attendee, appBaseUrl } = params;
+
+  const safeEventTitle = escapeHtml(event.title);
+  const safeOrganizer = escapeHtml(event.organizer);
+  const safeFullName = escapeHtml(attendee.fullName);
+  const safeTicketType = escapeHtml(attendee.ticketType);
+  const safeTicketId = escapeHtml(attendee.id);
+  const safeVenueName = escapeHtml(event.venueName);
+  const safeVenueAddress = escapeHtml(event.venueAddress);
+  const safeCity = escapeHtml(event.city);
 
   // Generate QR code image URL via reliable public QR API so it renders directly in Gmail/Outlook
   const qrDataUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
@@ -42,7 +52,7 @@ export function generateTicketEmailHtml(params: {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Entry Ticket: ${event.title}</title>
+  <title>Your Entry Ticket: ${safeEventTitle}</title>
   <style>
     body {
       margin: 0;
@@ -203,19 +213,19 @@ export function generateTicketEmailHtml(params: {
     <div class="container">
       <div class="banner">
         <div class="badge">Official Admission Pass</div>
-        <h1 class="title">${event.title}</h1>
-        <p class="organizer">Presented by ${event.organizer}</p>
+        <h1 class="title">${safeEventTitle}</h1>
+        <p class="organizer">Presented by ${safeOrganizer}</p>
       </div>
 
       <div class="content">
-        <p class="greeting">Hello <strong>${attendee.fullName}</strong>,</p>
+        <p class="greeting">Hello <strong>${safeFullName}</strong>,</p>
         <p style="font-size: 14px; color: #94a3b8; line-height: 1.5;">
           You are confirmed! Present the QR code below at the reception desk on event day for quick, zero-contact entry.
         </p>
 
         <div class="ticket-card">
-          <span class="tier-badge">${attendee.ticketType}</span>
-          <div class="ticket-id">${attendee.id}</div>
+          <span class="tier-badge">${safeTicketType}</span>
+          <div class="ticket-id">${safeTicketId}</div>
           
           <div class="qr-box">
             <img class="qr-img" src="${qrDataUrl}" alt="QR Entry Code" />
@@ -229,7 +239,7 @@ export function generateTicketEmailHtml(params: {
         <table class="details-table">
           <tr>
             <td class="label">Attendee</td>
-            <td class="val">${attendee.fullName}</td>
+            <td class="val">${safeFullName}</td>
           </tr>
           <tr>
             <td class="label">Date</td>
@@ -241,11 +251,11 @@ export function generateTicketEmailHtml(params: {
           </tr>
           <tr>
             <td class="label">Venue</td>
-            <td class="val">${event.venueName}</td>
+            <td class="val">${safeVenueName}</td>
           </tr>
           <tr>
             <td class="label">Address</td>
-            <td class="val">${event.venueAddress}, ${event.city}</td>
+            <td class="val">${safeVenueAddress}, ${safeCity}</td>
           </tr>
         </table>
 

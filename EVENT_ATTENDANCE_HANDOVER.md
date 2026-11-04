@@ -54,9 +54,11 @@ spin-the-wheel/ (Monorepo root)
 │       ├── lib/
 │       │   ├── auth.ts            # Roles (super-admin, admin, usher), PINs, signed tokens
 │       │   ├── types.ts           # Event, Attendee, CheckinResult, AuthSession models
+│       │   ├── mongodb.ts         # Singleton MongoDB client with Next.js HMR caching
+│       │   ├── email-service.ts   # Resend daily quota & rate-limiting queue
 │       │   ├── email-template.ts  # Responsive HTML email with embedded QR & Cal link
 │       │   ├── audio.ts           # Web Audio API turnstile chimes (ding & warning buzz)
-│       │   ├── repository.ts      # Dual-mode store (Local memory + Firebase Firestore)
+│       │   ├── repository.ts      # Multi-mode store (MongoDB primary + Firebase + Local memory)
 │       │   └── firebase.ts        # Resilient Firebase client setup
 │       ├── public/
 │       │   └── hero-ticket-3d.jpg # 3D clay-style VIP badge illustration asset
@@ -100,6 +102,19 @@ Based on direct feedback, the user interface rejects dark "neon sci-fi" aestheti
   - Confetti burst celebration on successful ticket creation.
   - In-app **"Preview Email" modal** allowing users to inspect the exact transactional email without opening an email client.
   - Direct links to **"Mobile Pass"** and browser **"Print / Save PDF"**.
+  - **Resend Email Queue Protection:** If the 100 emails/day free limit is reached, registrations continue uninterrupted and ticket emails are safely queued for next-day delivery (00:05 UTC) without losing tickets.
+
+### A2. Resend Email Delivery & Daily Quota Queue System
+- **Core Library:** `apps/event-attendance/lib/email-service.ts`
+- **Endpoints:**
+  - `GET /api/email/stats` (Quota status, % utilized, remaining count, queue list)
+  - `POST /api/email/process-queue` (Batch queue processor with 600ms throttle)
+  - `POST /api/email/test` (Instant live transmission test)
+- **Features:**
+  - **100 Emails/Day Limit:** Automatically tracks UTC day count (`sentToday`). When 100 is reached, subsequent registrations are scheduled for rollover (00:05 UTC next day).
+  - **2 Req/Sec Rate Limiter:** Throttles batch queue dispatches at 600ms intervals to prevent HTTP 429 errors.
+  - **Resend Sandbox Guard:** Informative guidance regarding sandbox `onboarding@resend.dev` (account owner only) vs. custom verified domains (all attendees).
+  - **Admin Quota Dashboard:** Live progress bar, time-to-reset countdown, and manual "Process Queue Now" button in `AdminDashboardView.tsx`.
 
 ### B. Transactional Email Generator & Engine
 - **Files:**

@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { fetchEventById } from "@/lib/repository";
-import { SecurityAuthGuard } from "@/components/SecurityAuthGuard";
-import { GateScannerView } from "@/components/GateScannerView";
+import { DedicatedEventScannerClient } from "@/components/DedicatedEventScannerClient";
 
 interface PageProps {
   params: {
@@ -45,28 +44,5 @@ export default async function DedicatedEventScannerPage({ params }: PageProps) {
     );
   }
 
-  return (
-    <SecurityAuthGuard
-      targetRole="usher"
-      eventId={event.id}
-      eventSlug={event.slug}
-      eventTitle={event.title}
-      title="Gate Usher Terminal"
-      description={`Enter Usher PIN (Default: 0000) to activate the scanner for ${event.title}.`}
-    >
-      {(auth) => (
-        <GateScannerView
-          initialEvent={event}
-          lockedMode={true}
-          targetSlug={params.slug}
-          sessionInfo={{
-            role: auth.session.role,
-            secondsRemaining: auth.secondsRemaining,
-            onLock: auth.lockSession,
-            onReverify: auth.reVerifyNow,
-          }}
-        />
-      )}
-    </SecurityAuthGuard>
-  );
+  return <DedicatedEventScannerClient event={event} slug={params.slug} />;
 }

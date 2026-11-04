@@ -57,10 +57,13 @@ export function EventRegistrationView({
   const [phone, setPhone] = useState("");
   const [organization, setOrganization] = useState("");
   const [ticketType, setTicketType] = useState<AttendeeRegistration["ticketType"]>("General Admission");
+  // Invisible honeypot field to trap automated spam bots
+  const [websiteUrl, setWebsiteUrl] = useState("");
 
   // Registration Result
   const [registeredAttendee, setRegisteredAttendee] = useState<AttendeeRegistration | null>(null);
   const [emailPreviewHtml, setEmailPreviewHtml] = useState<string | null>(null);
+  const [emailDeliveryStatus, setEmailDeliveryStatus] = useState<string>("sent");
   const [showEmailModal, setShowEmailModal] = useState(false);
 
   useEffect(() => {
@@ -127,6 +130,7 @@ export function EventRegistrationView({
           phone,
           organization,
           ticketType,
+          websiteUrl, // Honeypot
         }),
       });
 
@@ -137,6 +141,7 @@ export function EventRegistrationView({
 
       setRegisteredAttendee(data.attendee);
       setEmailPreviewHtml(data.emailPreviewHtml || null);
+      setEmailDeliveryStatus(data.emailStatus || (data.emailSent ? "sent" : "mock_sent"));
 
       confetti({
         particleCount: 80,
@@ -333,6 +338,20 @@ export function EventRegistrationView({
 
                   {/* Main Form */}
                   <form onSubmit={handleSubmit} className="space-y-4">
+                    {/* Invisible Honeypot Field for Bot Abuse Protection */}
+                    <div className="sr-only" aria-hidden="true">
+                      <label htmlFor="website_url_hp">Company Website (Leave blank)</label>
+                      <input
+                        id="website_url_hp"
+                        name="website_url_hp"
+                        type="text"
+                        tabIndex={-1}
+                        autoComplete="off"
+                        value={websiteUrl}
+                        onChange={(e) => setWebsiteUrl(e.target.value)}
+                      />
+                    </div>
+
                     {/* Full Name */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
@@ -474,9 +493,31 @@ export function EventRegistrationView({
                     <h2 className="text-2xl font-black text-slate-900 tracking-tight">
                       You&apos;re All Set!
                     </h2>
-                    <p className="text-xs text-slate-500">
-                      Your admission pass has been created and sent to your email.
-                    </p>
+                    {emailDeliveryStatus === "queued" ? (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs text-left space-y-1">
+                        <div className="font-bold flex items-center gap-1.5 text-amber-900">
+                          <Clock className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Pass Generated &bull; Email Delivery Queued</span>
+                        </div>
+                        <p className="text-[11px] text-amber-700">
+                          Your pass is confirmed! To respect email provider daily limits, email delivery is queued and will arrive in your inbox shortly. You can open and save your mobile ticket below right now.
+                        </p>
+                      </div>
+                    ) : emailDeliveryStatus === "already_registered" ? (
+                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-800 text-xs text-left space-y-1">
+                        <div className="font-bold flex items-center gap-1.5 text-blue-900">
+                          <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Existing Pass Recovered</span>
+                        </div>
+                        <p className="text-[11px] text-blue-700">
+                          This email is already registered for this event. We have restored your official entry pass below.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        Your admission pass has been created and sent to your email.
+                      </p>
+                    )}
                   </div>
 
                   {/* Ticket Card */}

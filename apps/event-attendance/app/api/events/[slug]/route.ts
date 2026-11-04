@@ -10,7 +10,8 @@ export async function GET(
     if (!event) {
       return NextResponse.json({ error: "Event not found" }, { status: 404 });
     }
-    return NextResponse.json({ success: true, event });
+    const { adminPassword: _hidden, ...safeEvent } = event;
+    return NextResponse.json({ success: true, event: safeEvent });
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to load event" },

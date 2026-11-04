@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { fetchEventById } from "@/lib/repository";
-import { SecurityAuthGuard } from "@/components/SecurityAuthGuard";
-import { AdminDashboardView } from "@/components/AdminDashboardView";
+import { DedicatedEventAdminClient } from "@/components/DedicatedEventAdminClient";
 
 interface PageProps {
   params: {
@@ -45,28 +44,5 @@ export default async function DedicatedEventAdminPage({ params }: PageProps) {
     );
   }
 
-  return (
-    <SecurityAuthGuard
-      targetRole="admin"
-      eventId={event.id}
-      eventSlug={event.slug}
-      eventTitle={event.title}
-      title="Event Operations Admin"
-      description={`Enter Event Admin PIN (Default: 1234) to access attendee roster and gate analytics for ${event.title}.`}
-    >
-      {(auth) => (
-        <AdminDashboardView
-          initialEvent={event}
-          lockedMode={true}
-          targetSlug={params.slug}
-          sessionInfo={{
-            role: auth.session.role,
-            secondsRemaining: auth.secondsRemaining,
-            onLock: auth.lockSession,
-            onReverify: auth.reVerifyNow,
-          }}
-        />
-      )}
-    </SecurityAuthGuard>
-  );
+  return <DedicatedEventAdminClient event={event} slug={params.slug} />;
 }
