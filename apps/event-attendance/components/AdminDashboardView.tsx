@@ -27,7 +27,7 @@ import {
   computeEventStats,
   INITIAL_EVENTS,
   INITIAL_ATTENDEES,
-} from "@/lib/repository";
+} from "@/lib/constants";
 import { validateCreateEventPayload, sanitizeCsvCell } from "@/lib/validation";
 import { EmailQueueView } from "./EmailQueueView";
 

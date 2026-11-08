@@ -23,7 +23,7 @@ import {
   Database,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration, CheckinResult } from "@/lib/types";
-import { INITIAL_EVENTS, INITIAL_ATTENDEES } from "@/lib/repository";
+import { INITIAL_EVENTS, INITIAL_ATTENDEES } from "@/lib/constants";
 import { playSuccessChime, playWarningBuzz } from "@/lib/audio";
 
 interface OfflineCheckinQueueItem {

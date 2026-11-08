@@ -3,7 +3,7 @@
 import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { EventRegistrationView } from "@/components/EventRegistrationView";
-import { INITIAL_EVENTS } from "@/lib/repository";
+import { INITIAL_EVENTS } from "@/lib/constants";
 
 function RegistrationWithParams() {
   const searchParams = useSearchParams();

@@ -26,7 +26,7 @@ import {
   Lock,
 } from "lucide-react";
 import { EventItem, AttendeeRegistration } from "@/lib/types";
-import { INITIAL_EVENTS } from "@/lib/repository";
+import { INITIAL_EVENTS } from "@/lib/constants";
 
 interface EventRegistrationViewProps {
   initialEvent?: EventItem | null;

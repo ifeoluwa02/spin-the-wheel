@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { AttendeeRegistration, EventItem } from "@/lib/types";
-import { INITIAL_ATTENDEES, INITIAL_EVENTS } from "@/lib/repository";
+import { INITIAL_ATTENDEES, INITIAL_EVENTS } from "@/lib/constants";
 
 export default function MobileTicketPage() {
   const params = useParams();
