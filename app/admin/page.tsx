@@ -130,6 +130,15 @@ export default function AdminDashboard() {
   const [showPassword, setShowPassword] = useState(false);
   const [campaign, setCampaign] = useState<Campaign>(DEFAULT_CAMPAIGN);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  // Paginated Participants & Lightweight Loading State
+  const [paginatedParticipants, setPaginatedParticipants] = useState<Participant[]>([]);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize] = useState<number>(50);
+  const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [isTableLoading, setIsTableLoading] = useState<boolean>(false);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [campaignStats, setCampaignStats] = useState<{ totalSpins: number; totalWinners: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -618,33 +627,70 @@ export default function AdminDashboard() {
     });
   }, [campaignSlug]);
 
-  // Live real-time campaign & participant listener once authenticated
+  // Live real-time campaign & lightweight recent participants listener once authenticated
   useEffect(() => {
     if (!authenticated || !campaignSlug) return;
 
     setLoading(true);
-    // Initial fetch via secure server API route
-    fetch(`/api/admin/participants?c=${campaignSlug}`)
+    // Fetch fast O(1) stats summary from server
+    fetch(`/api/admin/participants?c=${campaignSlug}&stats=true`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.participants)) {
-          setParticipants(data.participants);
+        if (data.success) {
+          setCampaignStats({
+            totalSpins: data.totalCount || 0,
+            totalWinners: data.winnersCount || 0,
+          });
+          setTotalRecords(data.totalCount || 0);
         }
-        setLoading(false);
       })
       .catch(() => { });
 
     const unsubCampaign = subscribeCampaign(campaignSlug, (c) => setCampaign(c));
+    // Listen only to top 50 recent participants for live activity & recent table (prevents loading 27k+ records into DOM)
     const unsubParticipants = subscribeParticipants(campaignSlug, (p) => {
       setParticipants(p);
       setLoading(false);
-    });
+    }, 50);
 
     return () => {
       unsubCampaign();
       unsubParticipants();
     };
   }, [authenticated, campaignSlug]);
+
+  // Reset pagination to page 1 whenever filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [storeFilter, searchQuery, dateRangeFilter, customFrom, customTo]);
+
+  // Fetch paginated table records on-demand when on the export/participants tab
+  useEffect(() => {
+    if (!authenticated || !campaignSlug || activeTab !== "export") return;
+
+    setIsTableLoading(true);
+    const params = new URLSearchParams({
+      c: campaignSlug,
+      page: String(currentPage),
+      pageSize: String(pageSize),
+      store: storeFilter,
+      search: searchQuery,
+    });
+    if (customFrom) params.set("from", customFrom);
+    if (customTo) params.set("to", customTo);
+
+    fetch(`/api/admin/participants?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.participants)) {
+          setPaginatedParticipants(data.participants);
+          setTotalRecords(data.totalCount ?? data.allTotalCount ?? 0);
+          setTotalPages(data.totalPages || 1);
+        }
+      })
+      .catch(() => { })
+      .finally(() => setIsTableLoading(false));
+  }, [authenticated, campaignSlug, activeTab, currentPage, pageSize, storeFilter, searchQuery, customFrom, customTo]);
 
   function handleOpenClearModal() {
     setClearPasswordInput("");
@@ -851,42 +897,67 @@ export default function AdminDashboard() {
     setCampaign(prev => ({ ...prev, prizes: prev.prizes.filter((_, i) => i !== idx) }));
   }
 
-  function exportToCSV() {
-    // Export only what is currently visible (date range + store + search applied)
-    const exportRows = storeFiltered;
-    const headers = ["Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
-    const rows = exportRows.map(p => [
-      `"${p.name}"`,
-      `"${p.phone}"`,
-      `"${p.ageRange || "—"}"`,
-      `"${p.gender || "—"}"`,
-      `"${p.email || ""}"`,
-      `"${p.prizeLabel}"`,
-      `"${p.voucherCode || ""}"`,
-      p.won ? "Winner" : "Non-Winner",
-      `"${p.storeName || "General Stage"}"`,
-      `"${p.storeCode || ""}"`,
-      `"${new Date(p.createdAt).toLocaleString()}"`,
-    ]);
-    // Build a descriptive filename that includes the date range
-    const rangeLabel =
-      dateRangeFilter === "custom" && customFrom && customTo
-        ? `${customFrom}_to_${customTo}`
-        : dateRangeFilter !== "all"
-          ? dateRangeFilter
-          : "all_time";
-    const storeLabel =
-      storeFilter !== "all"
-        ? `_${storeFilter}`
-        : "";
-    const filename = `${campaign.name.toLowerCase().replace(/\s+/g, "_")}_${rangeLabel}${storeLabel}.csv`;
-    const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    const link = document.createElement("a");
-    link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  async function exportToCSV() {
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams({
+        c: campaignSlug,
+        export: "true",
+        store: storeFilter,
+        search: searchQuery,
+      });
+      if (customFrom) params.set("from", customFrom);
+      if (customTo) params.set("to", customTo);
+
+      const res = await fetch(`/api/admin/participants?${params.toString()}`);
+      const data = await res.json();
+      const exportRows: Participant[] = data.success && Array.isArray(data.participants)
+        ? data.participants
+        : (paginatedParticipants.length > 0 ? paginatedParticipants : participants);
+
+      if (!exportRows.length) {
+        alert("No records found to export for the selected filter.");
+        return;
+      }
+
+      const headers = ["Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA Name", "Store Code", "Date & Time"];
+      const rows = exportRows.map(p => [
+        `"${p.name}"`,
+        `"${p.phone}"`,
+        `"${p.ageRange || "—"}"`,
+        `"${p.gender || "—"}"`,
+        `"${p.email || ""}"`,
+        `"${p.prizeLabel}"`,
+        `"${p.voucherCode || ""}"`,
+        p.won ? "Winner" : "Non-Winner",
+        `"${p.storeName || "General Stage"}"`,
+        `"${p.storeCode || ""}"`,
+        `"${new Date(p.createdAt).toLocaleString()}"`,
+      ]);
+      const rangeLabel =
+        dateRangeFilter === "custom" && customFrom && customTo
+          ? `${customFrom}_to_${customTo}`
+          : dateRangeFilter !== "all"
+            ? dateRangeFilter
+            : "all_time";
+      const storeLabel =
+        storeFilter !== "all"
+          ? `_${storeFilter}`
+          : "";
+      const filename = `${campaign.name.toLowerCase().replace(/\s+/g, "_")}_${rangeLabel}${storeLabel}.csv`;
+      const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+      const link = document.createElement("a");
+      link.setAttribute("href", encodeURI(csv));
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Failed to export CSV. Please check your connection.");
+    } finally {
+      setIsExporting(false);
+    }
   }
 
   function triggerLuckyDraw() {
@@ -901,8 +972,8 @@ export default function AdminDashboard() {
   }
 
   const totalWeight = campaign.prizes.reduce((s, p) => s + Math.max(p.weight, 0), 0);
-  const totalParticipants = participants.length;
-  const winnersCount = participants.filter(p => p.won).length;
+  const totalParticipants = campaignStats?.totalSpins || totalRecords || participants.length;
+  const winnersCount = campaignStats?.totalWinners || participants.filter(p => p.won).length;
   const winRate = totalParticipants ? Math.round((winnersCount / totalParticipants) * 100) : 0;
 
   // ─── Date Range Filter ──────────────────────────────────────────────────────
@@ -2477,10 +2548,10 @@ export default function AdminDashboard() {
               <div>
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
                   Participant Registrations ·{" "}
-                  <span style={{ color: "#00BFA6" }}>{storeFiltered.length}</span>
-                  {dateRangeFilter !== "all" || storeFilter !== "all" ? (
+                  <span style={{ color: "#00BFA6" }}>{totalRecords > 0 ? totalRecords.toLocaleString() : paginatedParticipants.length}</span>
+                  {dateRangeFilter !== "all" || storeFilter !== "all" || searchQuery ? (
                     <span className="text-[11px] ml-1.5 font-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      (filtered from {participants.length} total)
+                      (filtered results)
                     </span>
                   ) : null}
                 </h3>
@@ -2504,10 +2575,23 @@ export default function AdminDashboard() {
                 <input type="text" placeholder="Search name/phone…" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                   className="rounded-xl px-4 py-2 text-xs text-white outline-none w-44"
                   style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }} />
-                <button onClick={exportToCSV} disabled={!participants.length}
+                <button
+                  onClick={exportToCSV}
+                  disabled={isExporting || totalRecords === 0}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black text-white disabled:opacity-50 hover:opacity-90 transition-all"
-                  style={{ background: "linear-gradient(135deg, #10b981, #059669)", boxShadow: "0 4px 12px rgba(16,185,129,0.3)" }}>
-                  <Download className="w-3.5 h-3.5" /> Export
+                  style={{ background: "linear-gradient(135deg, #10b981, #059669)", boxShadow: "0 4px 12px rgba(16,185,129,0.3)" }}
+                >
+                  {isExporting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Exporting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export CSV ({totalRecords > 0 ? totalRecords.toLocaleString() : "All"})</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
@@ -2635,9 +2719,18 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {storeFiltered.length === 0 ? (
+                  {isTableLoading ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-sm font-bold text-teal-400">
+                        <div className="flex items-center justify-center gap-2">
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Loading page {currentPage}...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (paginatedParticipants.length > 0 ? paginatedParticipants : storeFiltered).length === 0 ? (
                     <tr><td colSpan={8} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
-                  ) : storeFiltered.map((p, i) => (
+                  ) : (paginatedParticipants.length > 0 ? paginatedParticipants : storeFiltered).map((p, i) => (
                     <tr key={p.id || i} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td className="py-3 px-2 font-bold text-white">{p.name}</td>
                       <td className="py-3 px-2 font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{p.phone}</td>
@@ -2695,6 +2788,34 @@ export default function AdminDashboard() {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            {/* ── Table Pagination Controls ── */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-white/10 text-xs">
+              <span className="text-white/40">
+                Showing <strong className="text-white font-mono">{totalRecords > 0 ? (currentPage - 1) * pageSize + 1 : 0}</strong> – <strong className="text-white font-mono">{Math.min(currentPage * pageSize, totalRecords || paginatedParticipants.length)}</strong> of <strong className="text-emerald-400 font-mono">{totalRecords > 0 ? totalRecords.toLocaleString() : paginatedParticipants.length}</strong> records
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1 || isTableLoading}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 hover:bg-white/10 transition-all font-bold flex items-center gap-1.5"
+                >
+                  ← Previous
+                </button>
+                <span className="px-3 py-1.5 rounded-xl bg-teal-500/15 border border-teal-500/30 text-teal-300 font-bold font-mono">
+                  Page {currentPage} of {Math.max(1, totalPages)}
+                </span>
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages || isTableLoading}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white disabled:opacity-30 hover:bg-white/10 transition-all font-bold flex items-center gap-1.5"
+                >
+                  Next →
+                </button>
+              </div>
             </div>
           </div>
         )}

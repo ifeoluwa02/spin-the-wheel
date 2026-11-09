@@ -13,6 +13,8 @@ import {
   orderBy,
   onSnapshot,
   increment,
+  getCountFromServer,
+  startAfter,
 } from "firebase/firestore";
 import { db } from "./firebase";
 import type { Campaign, Participant, SuperAdminConfig, StoreInventoryRecord } from "@/types";
@@ -257,6 +259,15 @@ export async function recordParticipant(participant: Participant): Promise<strin
     }
   }
 
+  // Atomically increment campaign analytics counter (fast O(1) total counter)
+  if (cleanParticipant.campaignId) {
+    incrementCampaignAnalytics(
+      cleanParticipant.campaignId,
+      Boolean(cleanParticipant.won),
+      cleanParticipant.storeCode
+    ).catch(() => {});
+  }
+
   try {
     const ref = await addDoc(collection(db, "participants"), cleanParticipant);
     return ref.id;
@@ -266,51 +277,229 @@ export async function recordParticipant(participant: Participant): Promise<strin
   }
 }
 
+/**
+ * Atomically increments campaign analytics counter (total spins, winners, store stats).
+ * Stored at campaigns/{campaignId}/analytics/summary
+ */
+export async function incrementCampaignAnalytics(
+  campaignId: string,
+  isWinner: boolean,
+  storeCode?: string
+): Promise<void> {
+  if (!campaignId) return;
+  try {
+    const statsRef = doc(db, "campaigns", campaignId, "analytics", "summary");
+    const updatePayload: Record<string, any> = {
+      totalSpins: increment(1),
+      lastSpinAt: Date.now(),
+    };
+    if (isWinner) {
+      updatePayload.totalWinners = increment(1);
+    }
+    if (storeCode) {
+      const cleanCode = storeCode.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+      if (cleanCode) {
+        updatePayload[`stores.${cleanCode}.spins`] = increment(1);
+        if (isWinner) {
+          updatePayload[`stores.${cleanCode}.winners`] = increment(1);
+        }
+      }
+    }
+    await updateDoc(statsRef, updatePayload).catch(async () => {
+      await setDoc(statsRef, updatePayload, { merge: true });
+    });
+  } catch (err) {
+    console.warn("Failed to increment campaign analytics:", err);
+  }
+}
+
+/** Reads the fast O(1) campaign analytics summary document */
+export async function getCampaignAnalytics(campaignId: string): Promise<{
+  totalSpins: number;
+  totalWinners: number;
+  stores?: Record<string, { spins: number; winners: number }>;
+} | null> {
+  if (!campaignId) return null;
+  try {
+    const statsRef = doc(db, "campaigns", campaignId, "analytics", "summary");
+    const snap = await getDoc(statsRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      return {
+        totalSpins: Number(data.totalSpins) || 0,
+        totalWinners: Number(data.totalWinners) || 0,
+        stores: data.stores || {},
+      };
+    }
+  } catch (err) {
+    console.warn("getCampaignAnalytics failed:", err);
+  }
+  return null;
+}
+
+/** Queries server aggregation count from Firestore indexes */
+export async function getParticipantCounts(campaignId: string): Promise<{ total: number; winners: number }> {
+  if (!campaignId) return { total: 0, winners: 0 };
+  try {
+    const baseQ = query(collection(db, "participants"), where("campaignId", "==", campaignId));
+    const snap = await getCountFromServer(baseQ);
+    const total = snap.data().count || 0;
+    return { total, winners: 0 };
+  } catch (err) {
+    console.warn("getParticipantCounts failed:", err);
+    return { total: 0, winners: 0 };
+  }
+}
+
+export interface GetParticipantsOptions {
+  limit?: number;
+  startAfterCreatedAt?: number;
+  storeCode?: string;
+}
+
 /** Fetches participants for admin analytics, exports, and TV display */
-export async function getParticipants(campaignId: string): Promise<Participant[]> {
+export async function getParticipants(
+  campaignId: string,
+  options?: number | GetParticipantsOptions
+): Promise<Participant[]> {
   const list: Participant[] = [];
   if (!campaignId) return list;
+
+  const limitCount = typeof options === "number" ? options : options?.limit;
+  const startAfterCreatedAt = typeof options === "object" ? options?.startAfterCreatedAt : undefined;
+  const storeCode = typeof options === "object" ? options?.storeCode : undefined;
+
   try {
-    // Query by campaignId without orderBy to prevent Firestore index errors; sort in memory
-    const q = query(
-      collection(db, "participants"),
-      where("campaignId", "==", campaignId)
-    );
+    let q;
+    if (limitCount && limitCount > 0) {
+      if (startAfterCreatedAt) {
+        if (storeCode) {
+          q = query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId),
+            where("storeCode", "==", storeCode),
+            orderBy("createdAt", "desc"),
+            startAfter(startAfterCreatedAt),
+            limit(limitCount)
+          );
+        } else {
+          q = query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId),
+            orderBy("createdAt", "desc"),
+            startAfter(startAfterCreatedAt),
+            limit(limitCount)
+          );
+        }
+      } else {
+        if (storeCode) {
+          q = query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId),
+            where("storeCode", "==", storeCode),
+            orderBy("createdAt", "desc"),
+            limit(limitCount)
+          );
+        } else {
+          q = query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId),
+            orderBy("createdAt", "desc"),
+            limit(limitCount)
+          );
+        }
+      }
+    } else {
+      if (storeCode) {
+        q = query(
+          collection(db, "participants"),
+          where("campaignId", "==", campaignId),
+          where("storeCode", "==", storeCode)
+        );
+      } else {
+        q = query(
+          collection(db, "participants"),
+          where("campaignId", "==", campaignId)
+        );
+      }
+    }
+
     const snap = await getDocs(q);
     snap.forEach((docSnap) => {
       list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
     });
   } catch (err) {
-    console.warn("Firestore getParticipants failed:", err);
-  }
-
-  return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-}
-
-/** Subscribes to real-time participant entries for a campaign */
-export function subscribeParticipants(
-  campaignId: string,
-  callback: (participants: Participant[]) => void
-): () => void {
-  // Query by campaignId without orderBy to avoid index requirements; sort in memory on update
-  const q = query(
-    collection(db, "participants"),
-    where("campaignId", "==", campaignId)
-  );
-  return onSnapshot(
-    q,
-    (snap) => {
-      const list: Participant[] = [];
+    console.warn("Firestore getParticipants query failed, falling back to basic query:", err);
+    try {
+      const fallbackQ = query(
+        collection(db, "participants"),
+        where("campaignId", "==", campaignId)
+      );
+      const snap = await getDocs(fallbackQ);
       snap.forEach((docSnap) => {
         list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
       });
-      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      callback(list);
-    },
-    (err) => {
-      console.warn("subscribeParticipants snapshot error:", err);
+    } catch (fallbackErr) {
+      console.warn("Fallback getParticipants also failed:", fallbackErr);
     }
-  );
+  }
+
+  list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  if (limitCount && limitCount > 0 && list.length > limitCount && !startAfterCreatedAt) {
+    return list.slice(0, limitCount);
+  }
+  return list;
+}
+
+/** Subscribes to real-time participant entries for a campaign (defaults to recent 50 for high performance) */
+export function subscribeParticipants(
+  campaignId: string,
+  callback: (participants: Participant[]) => void,
+  limitCount: number = 50
+): () => void {
+  try {
+    const q = query(
+      collection(db, "participants"),
+      where("campaignId", "==", campaignId),
+      orderBy("createdAt", "desc"),
+      limit(limitCount)
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const list: Participant[] = [];
+        snap.forEach((docSnap) => {
+          list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+        });
+        list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        callback(list);
+      },
+      (err) => {
+        console.warn("subscribeParticipants indexed snapshot failed, using basic listener:", err);
+        const fallbackQ = query(
+          collection(db, "participants"),
+          where("campaignId", "==", campaignId)
+        );
+        return onSnapshot(
+          fallbackQ,
+          (snap) => {
+            const list: Participant[] = [];
+            snap.forEach((docSnap) => {
+              list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+            });
+            list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            callback(limitCount > 0 ? list.slice(0, limitCount) : list);
+          },
+          (fallbackErr) => {
+            console.warn("Fallback subscribeParticipants snapshot error:", fallbackErr);
+          }
+        );
+      }
+    );
+  } catch (err) {
+    console.warn("subscribeParticipants initialization error:", err);
+    return () => {};
+  }
 }
 
 /** Fetches all active & past campaigns for Super Admin Master Portal */

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getParticipants } from "@/lib/campaign";
+import { getParticipants, getCampaignAnalytics } from "@/lib/campaign";
 
 export const dynamic = "force-dynamic";
 
@@ -15,10 +15,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const participants = await getParticipants(campaignId);
-    const totalSpins = participants.length;
+    const [participants, summary] = await Promise.all([
+      getParticipants(campaignId, 50),
+      getCampaignAnalytics(campaignId),
+    ]);
+
+    const totalSpins = summary?.totalSpins || participants.length;
     const winnersList = participants.filter((p) => p.won);
-    const winRate = totalSpins ? Math.round((winnersList.length / totalSpins) * 100) : 0;
+    const totalWinners = summary?.totalWinners || winnersList.length;
+    const winRate = totalSpins ? Math.round((totalWinners / totalSpins) * 100) : 0;
 
     // Mask name for privacy if full name provided (e.g. "Akin Omisakin" -> "Akin O.")
     // Strictly omit phone, email, and voucherCode from the response!
