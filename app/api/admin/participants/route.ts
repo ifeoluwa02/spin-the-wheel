@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifySignedSession } from "@/lib/auth-session";
-import { getParticipants, getCampaignAnalytics, getParticipantCounts } from "@/lib/campaign";
+import {
+  getParticipants,
+  getCampaignAnalytics,
+  getParticipantCounts,
+  getAllPrizeCounts,
+  getAllStoreInventories,
+} from "@/lib/campaign";
 
 export const dynamic = "force-dynamic";
 
@@ -57,20 +63,24 @@ export async function GET(request: NextRequest) {
 
     // 1. Fast Stats Only Endpoint
     if (isStatsOnly) {
-      const summary = await getCampaignAnalytics(campaignId);
-      let totalCount = summary?.totalSpins || 0;
-      let winnersCount = summary?.totalWinners || 0;
+      const [summary, counts, prizeCounts, storeInventories] = await Promise.all([
+        getCampaignAnalytics(campaignId),
+        getParticipantCounts(campaignId),
+        getAllPrizeCounts(campaignId),
+        getAllStoreInventories(campaignId),
+      ]);
 
-      if (!totalCount) {
-        const counts = await getParticipantCounts(campaignId);
-        totalCount = counts.total;
-        winnersCount = counts.winners;
-      }
+      const totalPrizeWinners = Object.values(prizeCounts).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      const totalCount = Math.max(summary?.totalSpins || 0, counts.total || 0);
+      const winnersCount = Math.max(summary?.totalWinners || 0, counts.winners || 0, totalPrizeWinners);
 
       return NextResponse.json({
         success: true,
         totalCount,
         winnersCount,
+        prizeCounts,
+        storeInventories,
+        storesSummary: summary?.stores || {},
       });
     }
 
@@ -119,18 +129,20 @@ export async function GET(request: NextRequest) {
     }
 
     // 3. Paginated Participant Query (Fast & Lightweight)
-    // First, check summary document for fast total spin count
-    const summary = await getCampaignAnalytics(campaignId);
-    let totalCount = summary?.totalSpins || 0;
-    let winnersCount = summary?.totalWinners || 0;
-
-    // Fetch participants with limit
-    // If no store/search/date filters applied, we only fetch up to (page * pageSize)
+    const activeStoreFilter = storeParam && storeParam !== "all" ? storeParam : undefined;
+    const isComplexFilter = Boolean(searchParam || fromDate || toDate || (session.role === "supervisor" && session.scopeType === "stores"));
     const neededCount = page * pageSize;
-    let participants = await getParticipants(campaignId, {
-      limit: searchParam || fromDate || toDate ? undefined : neededCount,
-      storeCode: storeParam && storeParam !== "all" ? storeParam : undefined,
-    });
+
+    const [summary, counts, participantsRaw] = await Promise.all([
+      getCampaignAnalytics(campaignId),
+      getParticipantCounts(campaignId, activeStoreFilter),
+      getParticipants(campaignId, {
+        limit: isComplexFilter ? undefined : neededCount,
+        storeCode: activeStoreFilter,
+      }),
+    ]);
+
+    let participants = participantsRaw;
 
     // If supervisor, scope participants
     if (session.role === "supervisor" && session.scopeType === "stores" && session.storeIds?.length) {
@@ -140,17 +152,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (!totalCount) {
-      totalCount = participants.length;
-    }
-    if (!winnersCount) {
-      winnersCount = participants.filter((p) => p.won).length;
-    }
+    const totalCount = Math.max(summary?.totalSpins || 0, counts.total || 0, participants.length);
+    const winnersCount = Math.max(summary?.totalWinners || 0, counts.winners || 0, participants.filter((p) => p.won).length);
 
     // Apply store filter if not done by query
     let filtered = participants;
-    if (storeParam && storeParam !== "all") {
-      filtered = filtered.filter((p) => p.storeCode?.toLowerCase() === storeParam.toLowerCase());
+    if (activeStoreFilter) {
+      filtered = filtered.filter((p) => p.storeCode?.toLowerCase() === activeStoreFilter.toLowerCase());
     }
 
     // Apply search filter
@@ -173,9 +181,14 @@ export async function GET(request: NextRequest) {
       filtered = filtered.filter((p) => (p.createdAt || 0) <= toTs);
     }
 
-    const filteredTotal = searchParam || fromDate || toDate || (storeParam && storeParam !== "all")
-      ? filtered.length
-      : totalCount;
+    let filteredTotal = totalCount;
+    if (isComplexFilter) {
+      filteredTotal = filtered.length;
+    } else if (activeStoreFilter) {
+      const cleanStoreKey = activeStoreFilter.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+      const storeSummarySpins = summary?.stores?.[cleanStoreKey]?.spins || 0;
+      filteredTotal = Math.max(counts.total || 0, storeSummarySpins, filtered.length);
+    }
 
     const totalPages = Math.max(1, Math.ceil(filteredTotal / pageSize));
     const startIndex = (page - 1) * pageSize;

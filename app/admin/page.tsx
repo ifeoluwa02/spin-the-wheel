@@ -139,6 +139,9 @@ export default function AdminDashboard() {
   const [isTableLoading, setIsTableLoading] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [campaignStats, setCampaignStats] = useState<{ totalSpins: number; totalWinners: number } | null>(null);
+  const [prizeCountsMap, setPrizeCountsMap] = useState<Record<string, number>>({});
+  const [storeInventoriesMap, setStoreInventoriesMap] = useState<Record<string, { storeCode: string; claimedCounts: Record<string, number> }>>({});
+  const [storesSummaryMap, setStoresSummaryMap] = useState<Record<string, { spins: number; winners: number }>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -642,6 +645,15 @@ export default function AdminDashboard() {
             totalWinners: data.winnersCount || 0,
           });
           setTotalRecords(data.totalCount || 0);
+          if (data.prizeCounts && typeof data.prizeCounts === "object") {
+            setPrizeCountsMap(data.prizeCounts);
+          }
+          if (data.storeInventories && typeof data.storeInventories === "object") {
+            setStoreInventoriesMap(data.storeInventories);
+          }
+          if (data.storesSummary && typeof data.storesSummary === "object") {
+            setStoresSummaryMap(data.storesSummary);
+          }
         }
       })
       .catch(() => { });
@@ -1363,7 +1375,10 @@ export default function AdminDashboard() {
               </div>
               <div className="space-y-4">
                 {campaign.prizes.map(prize => {
-                  const count = participants.filter(p => p.prizeId === prize.id).length || prize.claimedCount || 0;
+                  const localCount = participants.filter(p => p.prizeId === prize.id).length;
+                  const count = prize.isLosing
+                    ? Math.max(0, totalParticipants - winnersCount, localCount)
+                    : Math.max(prizeCountsMap[prize.id] || 0, prize.claimedCount || 0, localCount);
                   const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
                   const hasLimit = prize.quantity !== undefined && prize.quantity !== null && prize.quantity >= 0;
                   const remaining = hasLimit ? Math.max(0, prize.quantity! - count) : Infinity;
@@ -1442,8 +1457,12 @@ export default function AdminDashboard() {
                   </h4>
                   <div className="space-y-2.5">
                     {AGE_RANGES.map(range => {
-                      const count = participants.filter(p => p.ageRange === range).length;
-                      const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
+                      const sampleTotal = participants.length || 1;
+                      const sampleCount = participants.filter(p => p.ageRange === range).length;
+                      const pct = participants.length ? Math.round((sampleCount / sampleTotal) * 100) : 0;
+                      const count = totalParticipants > participants.length
+                        ? Math.round((sampleCount / sampleTotal) * totalParticipants)
+                        : sampleCount;
                       return (
                         <div key={range} className="space-y-1">
                           <div className="flex justify-between text-xs">
@@ -1473,8 +1492,12 @@ export default function AdminDashboard() {
                   </h4>
                   <div className="space-y-2.5">
                     {GENDERS.map(g => {
-                      const count = participants.filter(p => p.gender === g).length;
-                      const pct = totalParticipants ? Math.round((count / totalParticipants) * 100) : 0;
+                      const sampleTotal = participants.length || 1;
+                      const sampleCount = participants.filter(p => p.gender === g).length;
+                      const pct = participants.length ? Math.round((sampleCount / sampleTotal) * 100) : 0;
+                      const count = totalParticipants > participants.length
+                        ? Math.round((sampleCount / sampleTotal) * totalParticipants)
+                        : sampleCount;
                       const barColor = g === "Female" ? "linear-gradient(90deg, #ec4899, #f472b6)" : g === "Male" ? "linear-gradient(90deg, #00BFA6, #38bdf8)" : "linear-gradient(90deg, #94a3b8, #cbd5e1)";
                       return (
                         <div key={g} className="space-y-1">
@@ -1646,7 +1669,8 @@ export default function AdminDashboard() {
             <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
               {campaign.prizes.map((prize, idx) => {
                 const prob = totalWeight > 0 ? Math.round((Math.max(prize.weight, 0) / totalWeight) * 100) : 0;
-                const wonCount = participants.filter(p => p.prizeId === prize.id).length || prize.claimedCount || 0;
+                const localWon = participants.filter(p => p.prizeId === prize.id).length;
+                const wonCount = Math.max(prizeCountsMap[prize.id] || 0, prize.claimedCount || 0, localWon);
                 const hasLimit = prize.quantity !== undefined && prize.quantity !== null && prize.quantity >= 0;
                 const remaining = hasLimit ? Math.max(0, prize.quantity! - wonCount) : Infinity;
                 const isOutOfStock = !prize.isLosing && hasLimit && remaining <= 0;
@@ -1992,9 +2016,12 @@ export default function AdminDashboard() {
                                 const isPaused = pausedList.includes(prize.id);
                                 const isGloballyPaused = !!prize.globallyPaused;
                                 const storeQuota = getStorePrizeQuota(campaign, store.code || store.id, prize.id);
-                                const claimedAtStore = participants.filter(
+                                const cleanStoreCode = (store.code || store.id || "").trim().toLowerCase();
+                                const invClaimed = storeInventoriesMap[cleanStoreCode]?.claimedCounts?.[prize.id] || 0;
+                                const localClaimed = participants.filter(
                                   p => (p.storeCode?.toLowerCase() === (store.code || "").toLowerCase() || p.storeCode === store.id) && p.prizeId === prize.id
                                 ).length;
+                                const claimedAtStore = Math.max(invClaimed, localClaimed);
                                 const storeRemaining = storeQuota !== null ? Math.max(0, storeQuota - claimedAtStore) : Infinity;
                                 const isStoreOutOfStock = storeQuota !== null && storeRemaining <= 0;
 
@@ -2349,9 +2376,15 @@ export default function AdminDashboard() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredStoresTab.map((s) => {
+                    const cleanStoreCode = (s.code || s.id || "").trim().toLowerCase();
+                    const cleanStoreKey = cleanStoreCode.replace(/[^a-z0-9_-]/g, "_");
+                    const invClaimedMap = storeInventoriesMap[cleanStoreCode]?.claimedCounts || {};
+                    const invWinnersCount = Object.values(invClaimedMap).reduce((sum, n) => sum + (Number(n) || 0), 0);
                     const storeSpins = participants.filter((p) => isParticipantInStore(p, s));
-                    const storeWinners = storeSpins.filter((p) => isParticipantWinner(p, campaign.prizes)).length;
-                    const storeWinRate = storeSpins.length ? Math.round((storeWinners / storeSpins.length) * 100) : 0;
+                    const localWinners = storeSpins.filter((p) => isParticipantWinner(p, campaign.prizes)).length;
+                    const storeWinners = Math.max(storesSummaryMap[cleanStoreKey]?.winners || 0, invWinnersCount, localWinners);
+                    const storeSpinsCount = Math.max(storesSummaryMap[cleanStoreKey]?.spins || 0, storeSpins.length, storeWinners);
+                    const storeWinRate = storeSpinsCount ? Math.round((storeWinners / storeSpinsCount) * 100) : 0;
                     const storeTvUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/tv?c=${campaignSlug}&store=${s.code}`;
                     const storeWheelUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/?c=${campaignSlug}&store=${s.code}`;
 
@@ -2451,7 +2484,7 @@ export default function AdminDashboard() {
                         {/* Stats Row */}
                         <div className="grid grid-cols-3 gap-2 py-2 px-3 rounded-xl bg-black/40 border border-white/5 text-center">
                           <div>
-                            <p className="text-base font-black font-mono text-white">{storeSpins.length}</p>
+                            <p className="text-base font-black font-mono text-white">{storeSpinsCount}</p>
                             <p className="text-[9px] uppercase font-bold text-white/40">Spins</p>
                           </div>
                           <div>
@@ -3363,9 +3396,12 @@ export default function AdminDashboard() {
                 const isPaused = (selectedStoreForPrizes.pausedPrizes || []).includes(prize.id);
                 const isGloballyPaused = !!prize.globallyPaused;
                 const storeQuota = getStorePrizeQuota(campaign, selectedStoreForPrizes.code || selectedStoreForPrizes.id, prize.id);
-                const claimedAtStore = participants.filter(
+                const cleanModalStoreCode = (selectedStoreForPrizes.code || selectedStoreForPrizes.id || "").trim().toLowerCase();
+                const invModalClaimed = storeInventoriesMap[cleanModalStoreCode]?.claimedCounts?.[prize.id] || 0;
+                const localModalClaimed = participants.filter(
                   p => (p.storeCode?.toLowerCase() === (selectedStoreForPrizes.code || "").toLowerCase() || p.storeCode === selectedStoreForPrizes.id) && p.prizeId === prize.id
                 ).length;
+                const claimedAtStore = Math.max(invModalClaimed, localModalClaimed);
                 const storeRemaining = storeQuota !== null ? Math.max(0, storeQuota - claimedAtStore) : Infinity;
                 const isStoreOutOfStock = storeQuota !== null && storeRemaining <= 0;
 

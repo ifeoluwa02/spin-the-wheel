@@ -337,14 +337,46 @@ export async function getCampaignAnalytics(campaignId: string): Promise<{
   return null;
 }
 
+/** Fetches all prize claimed counts from campaigns/{campaignId}/prizeCounts */
+export async function getAllPrizeCounts(campaignId: string): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  if (!campaignId) return result;
+  try {
+    const colRef = collection(db, "campaigns", campaignId, "prizeCounts");
+    const snap = await getDocs(colRef);
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const pid = data.prizeId || docSnap.id;
+      result[pid] = Number(data.claimedCount) || 0;
+    });
+  } catch (err) {
+    console.warn("getAllPrizeCounts failed:", err);
+  }
+  return result;
+}
+
 /** Queries server aggregation count from Firestore indexes */
-export async function getParticipantCounts(campaignId: string): Promise<{ total: number; winners: number }> {
+export async function getParticipantCounts(
+  campaignId: string,
+  storeCode?: string
+): Promise<{ total: number; winners: number }> {
   if (!campaignId) return { total: 0, winners: 0 };
   try {
-    const baseQ = query(collection(db, "participants"), where("campaignId", "==", campaignId));
-    const snap = await getCountFromServer(baseQ);
+    const baseQ = storeCode
+      ? query(
+          collection(db, "participants"),
+          where("campaignId", "==", campaignId),
+          where("storeCode", "==", storeCode)
+        )
+      : query(collection(db, "participants"), where("campaignId", "==", campaignId));
+
+    const [snap, prizeCounts] = await Promise.all([
+      getCountFromServer(baseQ),
+      storeCode ? Promise.resolve({} as Record<string, number>) : getAllPrizeCounts(campaignId),
+    ]);
     const total = snap.data().count || 0;
-    return { total, winners: 0 };
+    const winners = Object.values(prizeCounts).reduce((sum, n) => sum + (Number(n) || 0), 0);
+    return { total, winners };
   } catch (err) {
     console.warn("getParticipantCounts failed:", err);
     return { total: 0, winners: 0 };
