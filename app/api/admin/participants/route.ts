@@ -9,6 +9,17 @@ import {
 
 export const dynamic = "force-dynamic";
 
+// Incremental export delta cache: stores already-fetched export rows per campaign so repeated
+// CSV exports only fetch newly created spins (createdAt > latestCreatedAt) instead of re-reading 35k+ docs.
+const exportDeltaCache = new Map<
+  string,
+  {
+    participants: any[];
+    latestCreatedAt: number;
+    cachedAt: number;
+  }
+>();
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -136,9 +147,47 @@ export async function GET(request: NextRequest) {
 
     // 2. Full Export Endpoint (Called on-demand when admin clicks 'Export to CSV')
     if (isExport) {
-      const rawParticipants = await getParticipants(campaignId, {
-        storeCode: activeStoreFilter,
-      });
+      let rawParticipants: any[] = [];
+
+      // If exporting a specific date window (e.g. Today / This Week / Custom Range), push fromTs/toTs
+      // directly to Firestore so we only read that date window instead of all 35k+ historical records.
+      if (fromTsParam > 0 || toTsParam > 0 || activeStoreFilter) {
+        rawParticipants = await getParticipants(campaignId, {
+          storeCode: activeStoreFilter,
+          fromTs: fromTsParam > 0 ? fromTsParam : undefined,
+          toTs: toTsParam > 0 ? toTsParam : undefined,
+        });
+      } else {
+        // Full All-Time Export: use incremental delta cache so repeated exports only read new spins
+        const cached = exportDeltaCache.get(campaignId);
+        if (cached && Date.now() - cached.cachedAt < 30 * 60 * 1000 && cached.latestCreatedAt > 0) {
+          const deltaNew = await getParticipants(campaignId, {
+            fromTs: cached.latestCreatedAt + 1,
+          });
+          const seenIds = new Set(cached.participants.map((p) => p.id));
+          const uniqueNew = deltaNew.filter((p) => !seenIds.has(p.id));
+          const merged = [...uniqueNew, ...cached.participants];
+          merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          const newLatest = merged[0]?.createdAt || cached.latestCreatedAt;
+          exportDeltaCache.set(campaignId, {
+            participants: merged,
+            latestCreatedAt: newLatest,
+            cachedAt: Date.now(),
+          });
+          rawParticipants = merged;
+        } else {
+          rawParticipants = await getParticipants(campaignId);
+          const latestCreatedAt = rawParticipants[0]?.createdAt || 0;
+          if (rawParticipants.length > 0) {
+            exportDeltaCache.set(campaignId, {
+              participants: rawParticipants,
+              latestCreatedAt,
+              cachedAt: Date.now(),
+            });
+          }
+        }
+      }
+
       const participants = applyFilters(rawParticipants);
 
       return NextResponse.json({
@@ -161,6 +210,8 @@ export async function GET(request: NextRequest) {
       getParticipants(campaignId, {
         limit: boundedScanLimit,
         storeCode: activeStoreFilter,
+        fromTs: fromTsParam > 0 ? fromTsParam : undefined,
+        toTs: toTsParam > 0 ? toTsParam : undefined,
       }),
     ]);
 

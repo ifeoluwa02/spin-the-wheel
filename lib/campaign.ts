@@ -498,6 +498,8 @@ export interface GetParticipantsOptions {
   limit?: number;
   startAfterCreatedAt?: number;
   storeCode?: string;
+  fromTs?: number;
+  toTs?: number;
 }
 
 /** Fetches participants for admin analytics, exports, and TV display */
@@ -511,62 +513,31 @@ export async function getParticipants(
   const limitCount = typeof options === "number" ? options : options?.limit;
   const startAfterCreatedAt = typeof options === "object" ? options?.startAfterCreatedAt : undefined;
   const storeCode = typeof options === "object" ? options?.storeCode : undefined;
+  const fromTs = typeof options === "object" ? options?.fromTs : undefined;
+  const toTs = typeof options === "object" ? options?.toTs : undefined;
 
   try {
-    let q;
+    const constraints: any[] = [where("campaignId", "==", campaignId)];
+    if (storeCode) {
+      constraints.push(where("storeCode", "==", storeCode));
+    }
+    if (fromTs && fromTs > 0) {
+      constraints.push(where("createdAt", ">=", fromTs));
+    }
+    if (toTs && toTs > 0) {
+      constraints.push(where("createdAt", "<=", toTs));
+    }
+    if ((limitCount && limitCount > 0) || (fromTs && fromTs > 0) || (toTs && toTs > 0)) {
+      constraints.push(orderBy("createdAt", "desc"));
+    }
+    if (startAfterCreatedAt) {
+      constraints.push(startAfter(startAfterCreatedAt));
+    }
     if (limitCount && limitCount > 0) {
-      if (startAfterCreatedAt) {
-        if (storeCode) {
-          q = query(
-            collection(db, "participants"),
-            where("campaignId", "==", campaignId),
-            where("storeCode", "==", storeCode),
-            orderBy("createdAt", "desc"),
-            startAfter(startAfterCreatedAt),
-            limit(limitCount)
-          );
-        } else {
-          q = query(
-            collection(db, "participants"),
-            where("campaignId", "==", campaignId),
-            orderBy("createdAt", "desc"),
-            startAfter(startAfterCreatedAt),
-            limit(limitCount)
-          );
-        }
-      } else {
-        if (storeCode) {
-          q = query(
-            collection(db, "participants"),
-            where("campaignId", "==", campaignId),
-            where("storeCode", "==", storeCode),
-            orderBy("createdAt", "desc"),
-            limit(limitCount)
-          );
-        } else {
-          q = query(
-            collection(db, "participants"),
-            where("campaignId", "==", campaignId),
-            orderBy("createdAt", "desc"),
-            limit(limitCount)
-          );
-        }
-      }
-    } else {
-      if (storeCode) {
-        q = query(
-          collection(db, "participants"),
-          where("campaignId", "==", campaignId),
-          where("storeCode", "==", storeCode)
-        );
-      } else {
-        q = query(
-          collection(db, "participants"),
-          where("campaignId", "==", campaignId)
-        );
-      }
+      constraints.push(limit(limitCount));
     }
 
+    const q = query(collection(db, "participants"), ...constraints);
     const snap = await getDocs(q);
     snap.forEach((docSnap) => {
       list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
