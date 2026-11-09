@@ -370,17 +370,96 @@ export async function getParticipantCounts(
         )
       : query(collection(db, "participants"), where("campaignId", "==", campaignId));
 
-    const [snap, prizeCounts] = await Promise.all([
-      getCountFromServer(baseQ),
+    const [countSnap, prizeCounts] = await Promise.all([
+      getCountFromServer(baseQ).catch((err) => {
+        console.warn("getParticipantCounts getCountFromServer failed:", err);
+        return null;
+      }),
       storeCode ? Promise.resolve({} as Record<string, number>) : getAllPrizeCounts(campaignId),
     ]);
-    const total = snap.data().count || 0;
     const winners = Object.values(prizeCounts).reduce((sum, n) => sum + (Number(n) || 0), 0);
-    return { total, winners };
+    const total = countSnap ? countSnap.data().count || 0 : winners;
+    return { total: Math.max(total, winners), winners };
   } catch (err) {
     console.warn("getParticipantCounts failed:", err);
     return { total: 0, winners: 0 };
   }
+}
+
+/**
+ * Fast O(1) analytics reader with automatic one-time backfill from server count.
+ * - Reads `campaigns/{campaignId}/analytics/summary` (1 doc) + `prizeCounts` (~5 docs).
+ * - If `analytics/summary` already exists (`totalSpins > 0`) and `!forceSync`, returns immediately
+ *   without scanning the `participants` collection.
+ * - If `analytics/summary` is missing (legacy campaign), queries `getCountFromServer` once
+ *   and saves the summary document so all subsequent loads cost 1 document read.
+ */
+export async function getOrSyncCampaignAnalytics(
+  campaignId: string,
+  forceSync: boolean = false
+): Promise<{
+  totalSpins: number;
+  totalWinners: number;
+  stores: Record<string, { spins: number; winners: number }>;
+  prizeCounts: Record<string, number>;
+}> {
+  if (!campaignId) {
+    return { totalSpins: 0, totalWinners: 0, stores: {}, prizeCounts: {} };
+  }
+
+  const [existingSummary, prizeCounts] = await Promise.all([
+    getCampaignAnalytics(campaignId),
+    getAllPrizeCounts(campaignId),
+  ]);
+
+  const prizeCountsWinners = Object.values(prizeCounts).reduce(
+    (sum, n) => sum + (Number(n) || 0),
+    0
+  );
+
+  if (existingSummary && existingSummary.totalSpins > 0 && !forceSync) {
+    const totalWinners = Math.max(existingSummary.totalWinners || 0, prizeCountsWinners);
+    const totalSpins = Math.max(existingSummary.totalSpins || 0, totalWinners);
+    return {
+      totalSpins,
+      totalWinners,
+      stores: existingSummary.stores || {},
+      prizeCounts,
+    };
+  }
+
+  // Summary doc missing or forceSync requested — query server count once and persist
+  let serverTotal = 0;
+  try {
+    const baseQ = query(collection(db, "participants"), where("campaignId", "==", campaignId));
+    const snap = await getCountFromServer(baseQ);
+    serverTotal = snap.data().count || 0;
+  } catch (err) {
+    console.warn(`getOrSyncCampaignAnalytics server count failed for ${campaignId}:`, err);
+  }
+
+  const totalWinners = Math.max(existingSummary?.totalWinners || 0, prizeCountsWinners);
+  const totalSpins = Math.max(serverTotal, existingSummary?.totalSpins || 0, totalWinners);
+
+  if (serverTotal > 0) {
+    const statsRef = doc(db, "campaigns", campaignId, "analytics", "summary");
+    setDoc(
+      statsRef,
+      {
+        totalSpins,
+        totalWinners,
+        syncedAt: Date.now(),
+      },
+      { merge: true }
+    ).catch((err) => console.warn("Failed to backfill analytics/summary:", err));
+  }
+
+  return {
+    totalSpins,
+    totalWinners,
+    stores: existingSummary?.stores || {},
+    prizeCounts,
+  };
 }
 
 export interface GetParticipantsOptions {
@@ -461,12 +540,34 @@ export async function getParticipants(
       list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
     });
   } catch (err) {
-    console.warn("Firestore getParticipants query failed, falling back to basic query:", err);
+    console.warn("Firestore getParticipants query failed, falling back to basic bounded query:", err);
     try {
-      const fallbackQ = query(
-        collection(db, "participants"),
-        where("campaignId", "==", campaignId)
-      );
+      // CRITICAL: Always preserve limit(limitCount) in fallback so missing composite index
+      // never triggers an unbounded 27k+ full collection scan!
+      const fallbackQ =
+        limitCount && limitCount > 0
+          ? storeCode
+            ? query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId),
+                where("storeCode", "==", storeCode),
+                limit(limitCount)
+              )
+            : query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId),
+                limit(limitCount)
+              )
+          : storeCode
+            ? query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId),
+                where("storeCode", "==", storeCode)
+              )
+            : query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId)
+              );
       const snap = await getDocs(fallbackQ);
       snap.forEach((docSnap) => {
         list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
@@ -507,11 +608,18 @@ export function subscribeParticipants(
         callback(list);
       },
       (err) => {
-        console.warn("subscribeParticipants indexed snapshot failed, using basic listener:", err);
-        const fallbackQ = query(
-          collection(db, "participants"),
-          where("campaignId", "==", campaignId)
-        );
+        console.warn("subscribeParticipants indexed snapshot failed, using bounded basic listener:", err);
+        const fallbackQ =
+          limitCount > 0
+            ? query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId),
+                limit(limitCount)
+              )
+            : query(
+                collection(db, "participants"),
+                where("campaignId", "==", campaignId)
+              );
         return onSnapshot(
           fallbackQ,
           (snap) => {

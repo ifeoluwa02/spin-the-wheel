@@ -635,8 +635,8 @@ export default function AdminDashboard() {
     if (!authenticated || !campaignSlug) return;
 
     setLoading(true);
-    // Fetch fast O(1) stats summary from server
-    fetch(`/api/admin/participants?c=${campaignSlug}&stats=true`)
+    // Fetch fast O(1) analytics summary from dedicated /api/admin/analytics endpoint
+    fetch(`/api/admin/analytics?c=${campaignSlug}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -732,6 +732,13 @@ export default function AdminDashboard() {
       }
 
       setParticipants([]);
+      setPaginatedParticipants([]);
+      setCampaignStats({ totalSpins: 0, totalWinners: 0 });
+      setTotalRecords(0);
+      setTotalPages(1);
+      setPrizeCountsMap({});
+      setStoreInventoriesMap({});
+      setStoresSummaryMap({});
       setShowClearModal(false);
       setClearPasswordInput("");
       alert(`✅ Database cleared! Deleted ${data.deletedCount} participant record(s) and reset prize claimed stock counts in Firestore.`);

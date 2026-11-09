@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifySignedSession } from "@/lib/auth-session";
 import {
   getParticipants,
-  getCampaignAnalytics,
+  getOrSyncCampaignAnalytics,
   getParticipantCounts,
-  getAllPrizeCounts,
   getAllStoreInventories,
 } from "@/lib/campaign";
 
@@ -63,24 +62,18 @@ export async function GET(request: NextRequest) {
 
     // 1. Fast Stats Only Endpoint
     if (isStatsOnly) {
-      const [summary, counts, prizeCounts, storeInventories] = await Promise.all([
-        getCampaignAnalytics(campaignId),
-        getParticipantCounts(campaignId),
-        getAllPrizeCounts(campaignId),
+      const [analytics, storeInventories] = await Promise.all([
+        getOrSyncCampaignAnalytics(campaignId),
         getAllStoreInventories(campaignId),
       ]);
 
-      const totalPrizeWinners = Object.values(prizeCounts).reduce((sum, n) => sum + (Number(n) || 0), 0);
-      const totalCount = Math.max(summary?.totalSpins || 0, counts.total || 0);
-      const winnersCount = Math.max(summary?.totalWinners || 0, counts.winners || 0, totalPrizeWinners);
-
       return NextResponse.json({
         success: true,
-        totalCount,
-        winnersCount,
-        prizeCounts,
+        totalCount: analytics.totalSpins,
+        winnersCount: analytics.totalWinners,
+        prizeCounts: analytics.prizeCounts,
         storeInventories,
-        storesSummary: summary?.stores || {},
+        storesSummary: analytics.stores || {},
       });
     }
 
@@ -133,9 +126,9 @@ export async function GET(request: NextRequest) {
     const isComplexFilter = Boolean(searchParam || fromDate || toDate || (session.role === "supervisor" && session.scopeType === "stores"));
     const neededCount = page * pageSize;
 
-    const [summary, counts, participantsRaw] = await Promise.all([
-      getCampaignAnalytics(campaignId),
-      getParticipantCounts(campaignId, activeStoreFilter),
+    const [analytics, storeCounts, participantsRaw] = await Promise.all([
+      getOrSyncCampaignAnalytics(campaignId),
+      activeStoreFilter ? getParticipantCounts(campaignId, activeStoreFilter) : Promise.resolve({ total: 0, winners: 0 }),
       getParticipants(campaignId, {
         limit: isComplexFilter ? undefined : neededCount,
         storeCode: activeStoreFilter,
@@ -152,8 +145,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const totalCount = Math.max(summary?.totalSpins || 0, counts.total || 0, participants.length);
-    const winnersCount = Math.max(summary?.totalWinners || 0, counts.winners || 0, participants.filter((p) => p.won).length);
+    const totalCount = Math.max(analytics.totalSpins || 0, participants.length);
+    const winnersCount = Math.max(analytics.totalWinners || 0, participants.filter((p) => p.won).length);
 
     // Apply store filter if not done by query
     let filtered = participants;
@@ -186,8 +179,8 @@ export async function GET(request: NextRequest) {
       filteredTotal = filtered.length;
     } else if (activeStoreFilter) {
       const cleanStoreKey = activeStoreFilter.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
-      const storeSummarySpins = summary?.stores?.[cleanStoreKey]?.spins || 0;
-      filteredTotal = Math.max(counts.total || 0, storeSummarySpins, filtered.length);
+      const storeSummarySpins = analytics.stores?.[cleanStoreKey]?.spins || 0;
+      filteredTotal = Math.max(storeCounts.total || 0, storeSummarySpins, filtered.length);
     }
 
     const totalPages = Math.max(1, Math.ceil(filteredTotal / pageSize));

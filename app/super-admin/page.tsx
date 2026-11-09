@@ -74,14 +74,15 @@ export default function SuperAdminDashboard() {
     }
   }, [authenticated]);
 
-  async function loadData() {
-    setLoading(true);
+  async function loadAnalytics(forceSync = false) {
     try {
-      const res = await fetch("/api/super-admin/data");
+      const res = await fetch(`/api/super-admin/analytics${forceSync ? "?sync=true" : ""}`);
+      if (!res.ok) return;
       const data = await res.json();
-      if (res.ok && data.success) {
-        setCampaigns(data.campaigns || []);
-        setAllParticipants(data.participants || []);
+      if (data.success) {
+        if (Array.isArray(data.participants)) {
+          setAllParticipants(data.participants);
+        }
         setGlobalStats({
           totalSpins: data.globalTotalSpins ?? (data.participants || []).length,
           totalWinners: data.globalTotalWinners ?? (data.participants || []).filter((p: Participant) => p.won).length,
@@ -89,6 +90,21 @@ export default function SuperAdminDashboard() {
         if (data.campaignStats && typeof data.campaignStats === "object") {
           setCampaignStatsMap(data.campaignStats);
         }
+      }
+    } catch (err) {
+      console.warn("Failed to load super admin analytics:", err);
+    }
+  }
+
+  async function loadData(forceSync = false) {
+    setLoading(true);
+    // Start analytics fetch in parallel without blocking the Campaign Directory UI
+    const analyticsPromise = loadAnalytics(forceSync);
+    try {
+      const res = await fetch("/api/super-admin/data");
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCampaigns(data.campaigns || []);
       } else {
         const allC = await getAllCampaigns();
         setCampaigns(allC);
@@ -102,11 +118,12 @@ export default function SuperAdminDashboard() {
     } finally {
       setLoading(false);
     }
+    await analyticsPromise;
   }
 
   async function handleRefresh() {
     setRefreshing(true);
-    await loadData();
+    await loadData(true);
     setRefreshing(false);
   }
 
