@@ -140,6 +140,7 @@ export default function AdminDashboard() {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [isTableLoading, setIsTableLoading] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [analyticsLoading, setAnalyticsLoading] = useState<boolean>(true);
   const [campaignStats, setCampaignStats] = useState<{ totalSpins: number; totalWinners: number } | null>(null);
   const [prizeCountsMap, setPrizeCountsMap] = useState<Record<string, number>>({});
   const [storeInventoriesMap, setStoreInventoriesMap] = useState<Record<string, { storeCode: string; claimedCounts: Record<string, number> }>>({});
@@ -637,8 +638,9 @@ export default function AdminDashboard() {
     if (!authenticated || !campaignSlug) return;
 
     setLoading(true);
-    // Fetch fast O(1) stats summary from server
-    fetch(`/api/admin/participants?c=${campaignSlug}&stats=true`)
+    setAnalyticsLoading(true);
+    // Fetch fast O(1) analytics summary from dedicated /api/admin/analytics endpoint
+    fetch(`/api/admin/analytics?c=${campaignSlug}`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -658,7 +660,8 @@ export default function AdminDashboard() {
           }
         }
       })
-      .catch(() => { });
+      .catch(() => { })
+      .finally(() => setAnalyticsLoading(false));
 
     const unsubCampaign = subscribeCampaign(campaignSlug, (c) => setCampaign(c));
     // Listen only to top 50 recent participants for live activity & recent table (prevents loading 27k+ records into DOM)
@@ -1021,8 +1024,12 @@ export default function AdminDashboard() {
   }
 
   const totalWeight = campaign.prizes.reduce((s, p) => s + Math.max(p.weight, 0), 0);
-  const totalParticipants = Math.max(campaignStats?.totalSpins || 0, participants.length);
-  const winnersCount = Math.max(campaignStats?.totalWinners || 0, participants.filter(p => p.won).length);
+  const totalParticipants = campaignStats !== null
+    ? Math.max(campaignStats.totalSpins, participants.length)
+    : (analyticsLoading ? 0 : participants.length);
+  const winnersCount = campaignStats !== null
+    ? Math.max(campaignStats.totalWinners, participants.filter(p => p.won).length)
+    : (analyticsLoading ? 0 : participants.filter(p => p.won).length);
   const winRate = totalParticipants ? Math.round((winnersCount / totalParticipants) * 100) : 0;
 
   const DATE_RANGE_OPTIONS = [
@@ -1344,9 +1351,9 @@ export default function AdminDashboard() {
         {/* ── Stat Cards ── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {[
-            { label: "Total Spins", value: totalParticipants, color: "#00BFA6", icon: Activity },
-            { label: "Winners", value: winnersCount, color: "#10b981", icon: Trophy },
-            { label: "Win Rate", value: `${winRate}%`, color: "#FF6B35", icon: Target },
+            { label: "Total Spins", value: analyticsLoading ? "…" : totalParticipants.toLocaleString(), color: "#00BFA6", icon: Activity },
+            { label: "Winners", value: analyticsLoading ? "…" : winnersCount.toLocaleString(), color: "#10b981", icon: Trophy },
+            { label: "Win Rate", value: analyticsLoading ? "…" : `${winRate}%`, color: "#FF6B35", icon: Target },
             { label: "Segments", value: campaign.prizes.length, color: "#a78bfa", icon: Layers },
           ].map(({ label, value, color, icon: Icon }) => (
             <div key={label} className="rounded-2xl p-4 flex items-center gap-4" style={{ background: `${color}0d`, border: `1px solid ${color}25` }}>
@@ -2614,10 +2621,10 @@ export default function AdminDashboard() {
               <div>
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
                   Participant Registrations ·{" "}
-                  <span style={{ color: "#00BFA6" }}>{activeExportCount.toLocaleString()}</span>
+                  <span style={{ color: "#00BFA6" }}>{analyticsLoading && !isTableFiltered ? "…" : activeExportCount.toLocaleString()}</span>
                   {isTableFiltered ? (
                     <span className="text-[11px] ml-1.5 font-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      (filtered of {totalParticipants.toLocaleString()} total)
+                      (filtered{totalParticipants > 0 ? ` of ${totalParticipants.toLocaleString()} total` : ""})
                     </span>
                   ) : null}
                 </h3>
@@ -2655,7 +2662,7 @@ export default function AdminDashboard() {
                   ) : (
                     <>
                       <Download className="w-3.5 h-3.5" />
-                      <span>Export CSV ({activeExportCount.toLocaleString()})</span>
+                      <span>Export CSV ({analyticsLoading && !isTableFiltered ? "…" : activeExportCount.toLocaleString()})</span>
                     </>
                   )}
                 </button>

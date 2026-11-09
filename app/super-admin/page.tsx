@@ -29,6 +29,7 @@ export default function SuperAdminDashboard() {
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
   const [globalStats, setGlobalStats] = useState<{ totalSpins: number; totalWinners: number }>({ totalSpins: 0, totalWinners: 0 });
   const [campaignStatsMap, setCampaignStatsMap] = useState<Record<string, { spins: number; winners: number }>>({});
+  const [analyticsLoading, setAnalyticsLoading] = useState(true);
   const [exportingGlobal, setExportingGlobal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -75,6 +76,7 @@ export default function SuperAdminDashboard() {
   }, [authenticated]);
 
   async function loadAnalytics(forceSync = false) {
+    setAnalyticsLoading(true);
     try {
       const res = await fetch(`/api/super-admin/analytics${forceSync ? "?sync=true" : ""}`);
       if (!res.ok) return;
@@ -93,6 +95,8 @@ export default function SuperAdminDashboard() {
       }
     } catch (err) {
       console.warn("Failed to load super admin analytics:", err);
+    } finally {
+      setAnalyticsLoading(false);
     }
   }
 
@@ -469,18 +473,20 @@ export default function SuperAdminDashboard() {
         {/* Global Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           {[
-            { label: "Campaigns", value: campaigns.length, color: "#f59e0b", icon: Layers },
-            { label: "Active Now", value: activeCampaigns, color: "#10b981", icon: Activity },
-            { label: "Total Spins", value: totalSpins, color: "#00BFA6", icon: Users },
-            { label: "Winners", value: totalWinners, color: "#FF6B35", icon: Trophy },
-            { label: "Win Rate", value: `${globalWinRate}%`, color: "#a78bfa", icon: BarChart3 },
-          ].map(({ label, value, color, icon: Icon }) => (
+            { label: "Campaigns", value: campaigns.length, color: "#f59e0b", icon: Layers, isStat: false },
+            { label: "Active Now", value: activeCampaigns, color: "#10b981", icon: Activity, isStat: false },
+            { label: "Total Spins", value: totalSpins.toLocaleString(), color: "#00BFA6", icon: Users, isStat: true },
+            { label: "Winners", value: totalWinners.toLocaleString(), color: "#FF6B35", icon: Trophy, isStat: true },
+            { label: "Win Rate", value: `${globalWinRate}%`, color: "#a78bfa", icon: BarChart3, isStat: true },
+          ].map(({ label, value, color, icon: Icon, isStat }) => (
             <div key={label} className="rounded-2xl p-4 flex items-center gap-3" style={{ background: `${color}0d`, border: `1px solid ${color}25` }}>
               <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: `${color}18` }}>
                 <Icon className="w-4.5 h-4.5 w-5 h-5" style={{ color }} />
               </div>
               <div>
-                <p className="text-xl font-black leading-none font-mono" style={{ color, fontFamily: "Rubik, sans-serif" }}>{loading ? "—" : value}</p>
+                <p className="text-xl font-black leading-none font-mono" style={{ color, fontFamily: "Rubik, sans-serif" }}>
+                  {loading || (isStat && analyticsLoading) ? "…" : value}
+                </p>
                 <p className="text-xs mt-0.5 font-semibold" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</p>
               </div>
             </div>
@@ -536,7 +542,9 @@ export default function SuperAdminDashboard() {
                             )}
                             <div>
                               <p className="font-black text-white leading-tight">{c.name}</p>
-                              <p className="text-[11px] font-mono mt-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>{spins} spin{spins !== 1 ? "s" : ""}</p>
+                              <p className="text-[11px] font-mono mt-0.5" style={{ color: "rgba(255,255,255,0.3)" }}>
+                                {analyticsLoading ? "… spins" : `${spins.toLocaleString()} spin${spins !== 1 ? "s" : ""}`}
+                              </p>
                             </div>
                           </div>
                         </td>
