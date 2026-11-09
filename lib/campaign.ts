@@ -588,23 +588,39 @@ export async function clearCampaignData(campaignId?: string): Promise<{ deletedC
   }
 
   // 2. Reset claimedCount on campaign prizes in Firestore and wipe sub-collections
+  const targetCampaignIds: string[] = [];
   if (campaignId) {
+    targetCampaignIds.push(campaignId);
+  } else {
     try {
-      const campaign = await getCampaign(campaignId);
+      const allC = await getAllCampaigns();
+      allC.forEach((c) => {
+        if (c.id) targetCampaignIds.push(c.id);
+      });
+    } catch {}
+  }
+
+  for (const cid of targetCampaignIds) {
+    try {
+      const campaign = await getCampaign(cid);
       if (campaign && campaign.prizes) {
         const resetPrizes = campaign.prizes.map((p) => ({ ...p, claimedCount: 0 }));
         await updateCampaign({ ...campaign, prizes: resetPrizes });
       }
 
       // Delete prizeCounts sub-collection
-      const prizeCountsSnap = await getDocs(collection(db, "campaigns", campaignId, "prizeCounts"));
+      const prizeCountsSnap = await getDocs(collection(db, "campaigns", cid, "prizeCounts"));
       await Promise.all(prizeCountsSnap.docs.map((d) => deleteDoc(d.ref)));
 
       // Delete storeInventory sub-collection
-      const storeInvSnap = await getDocs(collection(db, "campaigns", campaignId, "storeInventory"));
+      const storeInvSnap = await getDocs(collection(db, "campaigns", cid, "storeInventory"));
       await Promise.all(storeInvSnap.docs.map((d) => deleteDoc(d.ref)));
+
+      // Delete analytics summary sub-collection
+      const analyticsSnap = await getDocs(collection(db, "campaigns", cid, "analytics"));
+      await Promise.all(analyticsSnap.docs.map((d) => deleteDoc(d.ref)));
     } catch (err) {
-      console.error("Error resetting prize claimed counts and store inventory:", err);
+      console.error(`Error resetting prize claimed counts and store inventory for ${cid}:`, err);
     }
   }
 

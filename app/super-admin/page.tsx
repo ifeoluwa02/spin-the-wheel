@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import type { Campaign, Participant, CampaignAdmin } from "@/types";
 import {
   getAllCampaigns,
-  getAllGlobalParticipants,
   updateCampaign,
   clearCampaignData,
   getAllCampaignAdmins,
@@ -28,6 +27,9 @@ export default function SuperAdminDashboard() {
   const [showPassword, setShowPassword] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [allParticipants, setAllParticipants] = useState<Participant[]>([]);
+  const [globalStats, setGlobalStats] = useState<{ totalSpins: number; totalWinners: number }>({ totalSpins: 0, totalWinners: 0 });
+  const [campaignStatsMap, setCampaignStatsMap] = useState<Record<string, { spins: number; winners: number }>>({});
+  const [exportingGlobal, setExportingGlobal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -80,25 +82,22 @@ export default function SuperAdminDashboard() {
       if (res.ok && data.success) {
         setCampaigns(data.campaigns || []);
         setAllParticipants(data.participants || []);
+        setGlobalStats({
+          totalSpins: data.globalTotalSpins ?? (data.participants || []).length,
+          totalWinners: data.globalTotalWinners ?? (data.participants || []).filter((p: Participant) => p.won).length,
+        });
+        if (data.campaignStats && typeof data.campaignStats === "object") {
+          setCampaignStatsMap(data.campaignStats);
+        }
       } else {
-        // Fallback during transition
-        const [allC, allP] = await Promise.all([
-          getAllCampaigns(),
-          getAllGlobalParticipants(),
-        ]);
+        const allC = await getAllCampaigns();
         setCampaigns(allC);
-        setAllParticipants(allP);
       }
     } catch (err) {
       console.error("Failed to load super admin data:", err);
-      // Fallback
       try {
-        const [allC, allP] = await Promise.all([
-          getAllCampaigns(),
-          getAllGlobalParticipants(),
-        ]);
+        const allC = await getAllCampaigns();
         setCampaigns(allC);
-        setAllParticipants(allP);
       } catch {}
     } finally {
       setLoading(false);
@@ -286,33 +285,49 @@ export default function SuperAdminDashboard() {
     }
   }
 
-  function exportAll() {
-    const headers = ["Campaign", "Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA", "Store Code", "Date & Time"];
-    const rows = allParticipants.map(p => [
-      `"${p.campaignId}"`,
-      `"${p.name}"`,
-      `"${p.phone}"`,
-      `"${p.ageRange || "—"}"`,
-      `"${p.gender || "—"}"`,
-      `"${p.email || ""}"`,
-      `"${p.prizeLabel}"`,
-      `"${p.voucherCode || ""}"`,
-      p.won ? "Winner" : "Non-Winner",
-      `"${p.storeName || "General Stage"}"`,
-      `"${p.storeCode || ""}"`,
-      `"${new Date(p.createdAt).toLocaleString()}"`,
-    ]);
-    const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    const link = document.createElement("a");
-    link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", "global_spin_participants.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  async function exportAll() {
+    setExportingGlobal(true);
+    try {
+      let exportData = allParticipants;
+      const res = await fetch("/api/super-admin/data?export=true");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.participants)) {
+          exportData = data.participants;
+        }
+      }
+      const headers = ["Campaign", "Name", "Phone", "Age Range", "Gender", "Email", "Prize Won", "Voucher Code", "Status", "Store / BA", "Store Code", "Date & Time"];
+      const rows = exportData.map(p => [
+        `"${p.campaignId}"`,
+        `"${p.name}"`,
+        `"${p.phone}"`,
+        `"${p.ageRange || "—"}"`,
+        `"${p.gender || "—"}"`,
+        `"${p.email || ""}"`,
+        `"${p.prizeLabel}"`,
+        `"${p.voucherCode || ""}"`,
+        p.won ? "Winner" : "Non-Winner",
+        `"${p.storeName || "General Stage"}"`,
+        `"${p.storeCode || ""}"`,
+        `"${new Date(p.createdAt).toLocaleString()}"`,
+      ]);
+      const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+      const link = document.createElement("a");
+      link.setAttribute("href", encodeURI(csv));
+      link.setAttribute("download", "global_spin_participants.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("Failed to export global participants:", err);
+      alert("Failed to export global participants.");
+    } finally {
+      setExportingGlobal(false);
+    }
   }
 
-  const totalSpins = allParticipants.length;
-  const totalWinners = allParticipants.filter(p => p.won).length;
+  const totalSpins = Math.max(globalStats.totalSpins, allParticipants.length);
+  const totalWinners = Math.max(globalStats.totalWinners, allParticipants.filter(p => p.won).length);
   const activeCampaigns = campaigns.filter(c => c.active).length;
   const globalWinRate = totalSpins ? Math.round((totalWinners / totalSpins) * 100) : 0;
   const recentWinners = allParticipants.filter(p => p.won).slice(0, 8);
@@ -420,9 +435,9 @@ export default function SuperAdminDashboard() {
             <button onClick={handleRefresh} disabled={refreshing} className="p-2 rounded-xl transition-colors" style={{ background: "rgba(255,255,255,0.05)", color: "rgba(255,255,255,0.5)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
             </button>
-            <button onClick={exportAll} disabled={!allParticipants.length} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}>
+            <button onClick={exportAll} disabled={exportingGlobal || totalSpins === 0} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all disabled:opacity-50" style={{ background: "rgba(16,185,129,0.1)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}>
               <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Export All</span>
+              <span className="hidden sm:inline">{exportingGlobal ? "Exporting…" : "Export All"}</span>
             </button>
             <button onClick={handleLogout} className="p-2 rounded-xl transition-colors hover:text-red-400" style={{ color: "rgba(255,255,255,0.3)" }}>
               <LogOut className="w-4 h-4" />
@@ -489,7 +504,7 @@ export default function SuperAdminDashboard() {
                 <tbody>
                   {campaigns.map((c, i) => {
                     const slug = c.id || "";
-                    const spins = allParticipants.filter(p => p.campaignId === slug).length;
+                    const spins = Math.max(campaignStatsMap[slug]?.spins || 0, allParticipants.filter(p => p.campaignId === slug).length);
                     const adminList = getAllCampaignAdmins(c);
                     return (
                       <tr key={slug || i} className="group transition-colors hover:bg-white/[0.02]" style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
