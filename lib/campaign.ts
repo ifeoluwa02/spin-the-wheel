@@ -308,6 +308,7 @@ export async function incrementCampaignAnalytics(
     await updateDoc(statsRef, updatePayload).catch(async () => {
       await setDoc(statsRef, updatePayload, { merge: true });
     });
+    analyticsCache.delete(campaignId);
   } catch (err) {
     console.warn("Failed to increment campaign analytics:", err);
   }
@@ -386,6 +387,20 @@ export async function getParticipantCounts(
   }
 }
 
+// In-memory 15-second cache for campaign analytics to prevent duplicate reads across tabs/requests
+const analyticsCache = new Map<
+  string,
+  {
+    data: {
+      totalSpins: number;
+      totalWinners: number;
+      stores: Record<string, { spins: number; winners: number }>;
+      prizeCounts: Record<string, number>;
+    };
+    expiresAt: number;
+  }
+>();
+
 /**
  * Fast O(1) analytics reader with automatic one-time backfill from server count.
  * - Reads `campaigns/{campaignId}/analytics/summary` (1 doc) + `prizeCounts` (~5 docs).
@@ -407,6 +422,13 @@ export async function getOrSyncCampaignAnalytics(
     return { totalSpins: 0, totalWinners: 0, stores: {}, prizeCounts: {} };
   }
 
+  if (!forceSync) {
+    const cached = analyticsCache.get(campaignId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
+
   const [existingSummary, prizeCounts] = await Promise.all([
     getCampaignAnalytics(campaignId),
     getAllPrizeCounts(campaignId),
@@ -420,12 +442,14 @@ export async function getOrSyncCampaignAnalytics(
   if (existingSummary && existingSummary.totalSpins > 0 && !forceSync) {
     const totalWinners = Math.max(existingSummary.totalWinners || 0, prizeCountsWinners);
     const totalSpins = Math.max(existingSummary.totalSpins || 0, totalWinners);
-    return {
+    const result = {
       totalSpins,
       totalWinners,
       stores: existingSummary.stores || {},
       prizeCounts,
     };
+    analyticsCache.set(campaignId, { data: result, expiresAt: Date.now() + 15_000 });
+    return result;
   }
 
   // Summary doc missing or forceSync requested — query server count once and persist
@@ -442,24 +466,32 @@ export async function getOrSyncCampaignAnalytics(
   const totalSpins = Math.max(serverTotal, existingSummary?.totalSpins || 0, totalWinners);
 
   if (serverTotal > 0) {
-    const statsRef = doc(db, "campaigns", campaignId, "analytics", "summary");
-    setDoc(
-      statsRef,
-      {
-        totalSpins,
-        totalWinners,
-        syncedAt: Date.now(),
-      },
-      { merge: true }
-    ).catch((err) => console.warn("Failed to backfill analytics/summary:", err));
+    try {
+      const statsRef = doc(db, "campaigns", campaignId, "analytics", "summary");
+      await setDoc(
+        statsRef,
+        {
+          totalSpins,
+          totalWinners,
+          syncedAt: Date.now(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn("Failed to backfill analytics/summary:", err);
+    }
   }
 
-  return {
+  const result = {
     totalSpins,
     totalWinners,
     stores: existingSummary?.stores || {},
     prizeCounts,
   };
+  if (totalSpins > 0) {
+    analyticsCache.set(campaignId, { data: result, expiresAt: Date.now() + 15_000 });
+  }
+  return result;
 }
 
 export interface GetParticipantsOptions {

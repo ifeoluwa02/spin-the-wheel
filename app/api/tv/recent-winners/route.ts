@@ -3,6 +3,9 @@ import { getParticipants, getCampaignAnalytics } from "@/lib/campaign";
 
 export const dynamic = "force-dynamic";
 
+// 10-second in-memory cache so multiple TV screens polling simultaneously don't multiply Firestore reads
+const tvWinnersCache = new Map<string, { payload: any; expiresAt: number }>();
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -15,8 +18,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const cached = tvWinnersCache.get(campaignId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return NextResponse.json(cached.payload);
+    }
+
     const [participants, summary] = await Promise.all([
-      getParticipants(campaignId, 50),
+      getParticipants(campaignId, 20),
       getCampaignAnalytics(campaignId),
     ]);
 
@@ -27,7 +35,7 @@ export async function GET(request: NextRequest) {
 
     // Mask name for privacy if full name provided (e.g. "Akin Omisakin" -> "Akin O.")
     // Strictly omit phone, email, and voucherCode from the response!
-    const sanitizedWinners = winnersList.slice(0, 25).map((p) => {
+    const sanitizedWinners = winnersList.slice(0, 20).map((p) => {
       const parts = (p.name || "Participant").trim().split(" ");
       const maskedName =
         parts.length > 1
@@ -44,12 +52,16 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    return NextResponse.json({
+    const payload = {
       success: true,
       totalSpins,
       winRate,
       winners: sanitizedWinners,
-    });
+    };
+
+    tvWinnersCache.set(campaignId, { payload, expiresAt: Date.now() + 10_000 });
+
+    return NextResponse.json(payload);
   } catch (err: any) {
     console.error("API /api/tv/recent-winners error:", err);
     return NextResponse.json(

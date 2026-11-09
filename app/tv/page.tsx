@@ -82,7 +82,7 @@ export default function TvDisplayMode() {
     }
 
     loadSanitizedWinners();
-    const pollInterval = setInterval(loadSanitizedWinners, 4000);
+    const pollInterval = setInterval(loadSanitizedWinners, 10000);
 
     return () => {
       if (unsubCampaign) unsubCampaign();
