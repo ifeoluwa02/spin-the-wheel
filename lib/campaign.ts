@@ -542,35 +542,31 @@ export async function getParticipants(
   } catch (err) {
     console.warn("Firestore getParticipants query failed, falling back to basic bounded query:", err);
     try {
-      // CRITICAL: Always preserve limit(limitCount) in fallback so missing composite index
-      // never triggers an unbounded 27k+ full collection scan!
-      const fallbackQ =
+      // CRITICAL: Always use single-field where("campaignId", "==", ...) + limit() in fallback
+      // so missing composite indexes never fail and never trigger a 27k+ full collection scan!
+      const safeLimit =
         limitCount && limitCount > 0
           ? storeCode
-            ? query(
-                collection(db, "participants"),
-                where("campaignId", "==", campaignId),
-                where("storeCode", "==", storeCode),
-                limit(limitCount)
-              )
-            : query(
-                collection(db, "participants"),
-                where("campaignId", "==", campaignId),
-                limit(limitCount)
-              )
-          : storeCode
-            ? query(
-                collection(db, "participants"),
-                where("campaignId", "==", campaignId),
-                where("storeCode", "==", storeCode)
-              )
-            : query(
-                collection(db, "participants"),
-                where("campaignId", "==", campaignId)
-              );
+            ? Math.max(limitCount * 4, 250)
+            : limitCount
+          : undefined;
+      const fallbackQ = safeLimit
+        ? query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId),
+            limit(safeLimit)
+          )
+        : query(
+            collection(db, "participants"),
+            where("campaignId", "==", campaignId)
+          );
       const snap = await getDocs(fallbackQ);
+      const normStore = storeCode ? storeCode.toLowerCase() : "";
       snap.forEach((docSnap) => {
-        list.push({ id: docSnap.id, ...(docSnap.data() as Participant) });
+        const p = { id: docSnap.id, ...(docSnap.data() as Participant) };
+        if (!normStore || p.storeCode?.toLowerCase() === normStore || p.storeName?.toLowerCase() === normStore) {
+          list.push(p);
+        }
       });
     } catch (fallbackErr) {
       console.warn("Fallback getParticipants also failed:", fallbackErr);

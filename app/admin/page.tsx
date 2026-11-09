@@ -135,6 +135,8 @@ export default function AdminDashboard() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize] = useState<number>(50);
   const [totalRecords, setTotalRecords] = useState<number>(0);
+  const [filteredRecordsCount, setFilteredRecordsCount] = useState<number | null>(null);
+  const [hasLoadedTable, setHasLoadedTable] = useState<boolean>(false);
   const [totalPages, setTotalPages] = useState<number>(1);
   const [isTableLoading, setIsTableLoading] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -635,8 +637,8 @@ export default function AdminDashboard() {
     if (!authenticated || !campaignSlug) return;
 
     setLoading(true);
-    // Fetch fast O(1) analytics summary from dedicated /api/admin/analytics endpoint
-    fetch(`/api/admin/analytics?c=${campaignSlug}`)
+    // Fetch fast O(1) stats summary from server
+    fetch(`/api/admin/participants?c=${campaignSlug}&stats=true`)
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -671,9 +673,25 @@ export default function AdminDashboard() {
     };
   }, [authenticated, campaignSlug]);
 
+  // ─── Date Range Helper ──────────────────────────────────────────────────────
+  function getDateRangeCutoff(range: string): number {
+    const now = new Date();
+    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    switch (range) {
+      case "today": return todayMidnight;
+      case "2days": return todayMidnight - 1 * 24 * 60 * 60 * 1000;
+      case "week": return todayMidnight - 6 * 24 * 60 * 60 * 1000;
+      case "month": return todayMidnight - 29 * 24 * 60 * 60 * 1000;
+      case "3months": return todayMidnight - 89 * 24 * 60 * 60 * 1000;
+      case "custom": return customFrom ? new Date(customFrom + "T00:00:00").getTime() : 0;
+      default: return 0;
+    }
+  }
+
   // Reset pagination to page 1 whenever filters change
   useEffect(() => {
     setCurrentPage(1);
+    setFilteredRecordsCount(null);
   }, [storeFilter, searchQuery, dateRangeFilter, customFrom, customTo]);
 
   // Fetch paginated table records on-demand when on the export/participants tab
@@ -681,6 +699,12 @@ export default function AdminDashboard() {
     if (!authenticated || !campaignSlug || activeTab !== "export") return;
 
     setIsTableLoading(true);
+    const cutoffTs = getDateRangeCutoff(dateRangeFilter);
+    const ceilingTs =
+      dateRangeFilter === "custom" && customTo
+        ? new Date(customTo + "T23:59:59").getTime()
+        : 0;
+
     const params = new URLSearchParams({
       c: campaignSlug,
       page: String(currentPage),
@@ -688,6 +712,8 @@ export default function AdminDashboard() {
       store: storeFilter,
       search: searchQuery,
     });
+    if (cutoffTs > 0) params.set("fromTs", String(cutoffTs));
+    if (ceilingTs > 0) params.set("toTs", String(ceilingTs));
     if (customFrom) params.set("from", customFrom);
     if (customTo) params.set("to", customTo);
 
@@ -696,13 +722,16 @@ export default function AdminDashboard() {
       .then((data) => {
         if (data.success && Array.isArray(data.participants)) {
           setPaginatedParticipants(data.participants);
-          setTotalRecords(data.totalCount ?? data.allTotalCount ?? 0);
+          setHasLoadedTable(true);
+          const countVal = data.totalCount ?? data.participants.length;
+          setTotalRecords(countVal);
+          setFilteredRecordsCount(countVal);
           setTotalPages(data.totalPages || 1);
         }
       })
       .catch(() => { })
       .finally(() => setIsTableLoading(false));
-  }, [authenticated, campaignSlug, activeTab, currentPage, pageSize, storeFilter, searchQuery, customFrom, customTo]);
+  }, [authenticated, campaignSlug, activeTab, currentPage, pageSize, storeFilter, searchQuery, dateRangeFilter, customFrom, customTo]);
 
   function handleOpenClearModal() {
     setClearPasswordInput("");
@@ -732,13 +761,6 @@ export default function AdminDashboard() {
       }
 
       setParticipants([]);
-      setPaginatedParticipants([]);
-      setCampaignStats({ totalSpins: 0, totalWinners: 0 });
-      setTotalRecords(0);
-      setTotalPages(1);
-      setPrizeCountsMap({});
-      setStoreInventoriesMap({});
-      setStoresSummaryMap({});
       setShowClearModal(false);
       setClearPasswordInput("");
       alert(`✅ Database cleared! Deleted ${data.deletedCount} participant record(s) and reset prize claimed stock counts in Firestore.`);
@@ -919,12 +941,20 @@ export default function AdminDashboard() {
   async function exportToCSV() {
     setIsExporting(true);
     try {
+      const cutoffTs = getDateRangeCutoff(dateRangeFilter);
+      const ceilingTs =
+        dateRangeFilter === "custom" && customTo
+          ? new Date(customTo + "T23:59:59").getTime()
+          : 0;
+
       const params = new URLSearchParams({
         c: campaignSlug,
         export: "true",
         store: storeFilter,
         search: searchQuery,
       });
+      if (cutoffTs > 0) params.set("fromTs", String(cutoffTs));
+      if (ceilingTs > 0) params.set("toTs", String(ceilingTs));
       if (customFrom) params.set("from", customFrom);
       if (customTo) params.set("to", customTo);
 
@@ -932,7 +962,7 @@ export default function AdminDashboard() {
       const data = await res.json();
       const exportRows: Participant[] = data.success && Array.isArray(data.participants)
         ? data.participants
-        : (paginatedParticipants.length > 0 ? paginatedParticipants : participants);
+        : (hasLoadedTable ? paginatedParticipants : storeFiltered);
 
       if (!exportRows.length) {
         alert("No records found to export for the selected filter.");
@@ -991,24 +1021,9 @@ export default function AdminDashboard() {
   }
 
   const totalWeight = campaign.prizes.reduce((s, p) => s + Math.max(p.weight, 0), 0);
-  const totalParticipants = campaignStats?.totalSpins || totalRecords || participants.length;
-  const winnersCount = campaignStats?.totalWinners || participants.filter(p => p.won).length;
+  const totalParticipants = Math.max(campaignStats?.totalSpins || 0, participants.length);
+  const winnersCount = Math.max(campaignStats?.totalWinners || 0, participants.filter(p => p.won).length);
   const winRate = totalParticipants ? Math.round((winnersCount / totalParticipants) * 100) : 0;
-
-  // ─── Date Range Filter ──────────────────────────────────────────────────────
-  function getDateRangeCutoff(range: string): number {
-    const now = new Date();
-    const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    switch (range) {
-      case "today": return todayMidnight;
-      case "2days": return todayMidnight - 1 * 24 * 60 * 60 * 1000;
-      case "week": return todayMidnight - 6 * 24 * 60 * 60 * 1000;
-      case "month": return todayMidnight - 29 * 24 * 60 * 60 * 1000;
-      case "3months": return todayMidnight - 89 * 24 * 60 * 60 * 1000;
-      case "custom": return customFrom ? new Date(customFrom + "T00:00:00").getTime() : 0;
-      default: return 0;
-    }
-  }
 
   const DATE_RANGE_OPTIONS = [
     { key: "all", label: "All Time" },
@@ -1049,6 +1064,17 @@ export default function AdminDashboard() {
   const storeFiltered = selectedStoreForFilter
     ? filtered.filter(p => isParticipantInStore(p, selectedStoreForFilter))
     : (storeFilter === "all" ? filtered : filtered.filter(p => p.storeCode === storeFilter));
+
+  const isTableFiltered =
+    storeFilter !== "all" ||
+    Boolean(searchQuery.trim()) ||
+    dateRangeFilter !== "all";
+
+  const activeExportCount = isTableFiltered
+    ? (filteredRecordsCount !== null ? filteredRecordsCount : storeFiltered.length)
+    : (totalParticipants || totalRecords);
+
+  const displayedTableRows = hasLoadedTable ? paginatedParticipants : storeFiltered.slice(0, pageSize);
 
   // ─── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (!authenticated) {
@@ -2588,10 +2614,10 @@ export default function AdminDashboard() {
               <div>
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>
                   Participant Registrations ·{" "}
-                  <span style={{ color: "#00BFA6" }}>{totalRecords > 0 ? totalRecords.toLocaleString() : paginatedParticipants.length}</span>
-                  {dateRangeFilter !== "all" || storeFilter !== "all" || searchQuery ? (
+                  <span style={{ color: "#00BFA6" }}>{activeExportCount.toLocaleString()}</span>
+                  {isTableFiltered ? (
                     <span className="text-[11px] ml-1.5 font-normal" style={{ color: "rgba(255,255,255,0.3)" }}>
-                      (filtered results)
+                      (filtered of {totalParticipants.toLocaleString()} total)
                     </span>
                   ) : null}
                 </h3>
@@ -2617,7 +2643,7 @@ export default function AdminDashboard() {
                   style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }} />
                 <button
                   onClick={exportToCSV}
-                  disabled={isExporting || totalRecords === 0}
+                  disabled={isExporting || activeExportCount === 0}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-black text-white disabled:opacity-50 hover:opacity-90 transition-all"
                   style={{ background: "linear-gradient(135deg, #10b981, #059669)", boxShadow: "0 4px 12px rgba(16,185,129,0.3)" }}
                 >
@@ -2629,7 +2655,7 @@ export default function AdminDashboard() {
                   ) : (
                     <>
                       <Download className="w-3.5 h-3.5" />
-                      <span>Export CSV ({totalRecords > 0 ? totalRecords.toLocaleString() : "All"})</span>
+                      <span>Export CSV ({activeExportCount.toLocaleString()})</span>
                     </>
                   )}
                 </button>
@@ -2731,7 +2757,7 @@ export default function AdminDashboard() {
                   {customFrom && customTo ? (
                     <div className="space-y-0.5">
                       <p className="text-xs font-black" style={{ color: "#FFD700" }}>
-                        {storeFiltered.length} records
+                        {activeExportCount.toLocaleString()} records
                       </p>
                       <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.35)" }}>
                         {customFrom} → {customTo}
@@ -2768,9 +2794,9 @@ export default function AdminDashboard() {
                         </div>
                       </td>
                     </tr>
-                  ) : (paginatedParticipants.length > 0 ? paginatedParticipants : storeFiltered).length === 0 ? (
+                  ) : displayedTableRows.length === 0 ? (
                     <tr><td colSpan={8} className="py-12 text-center text-sm" style={{ color: "rgba(255,255,255,0.2)" }}>No records found.</td></tr>
-                  ) : (paginatedParticipants.length > 0 ? paginatedParticipants : storeFiltered).map((p, i) => (
+                  ) : displayedTableRows.map((p, i) => (
                     <tr key={p.id || i} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                       <td className="py-3 px-2 font-bold text-white">{p.name}</td>
                       <td className="py-3 px-2 font-mono" style={{ color: "rgba(255,255,255,0.5)" }}>{p.phone}</td>
@@ -2833,7 +2859,7 @@ export default function AdminDashboard() {
             {/* ── Table Pagination Controls ── */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-white/10 text-xs">
               <span className="text-white/40">
-                Showing <strong className="text-white font-mono">{totalRecords > 0 ? (currentPage - 1) * pageSize + 1 : 0}</strong> – <strong className="text-white font-mono">{Math.min(currentPage * pageSize, totalRecords || paginatedParticipants.length)}</strong> of <strong className="text-emerald-400 font-mono">{totalRecords > 0 ? totalRecords.toLocaleString() : paginatedParticipants.length}</strong> records
+                Showing <strong className="text-white font-mono">{activeExportCount > 0 ? (currentPage - 1) * pageSize + 1 : 0}</strong> – <strong className="text-white font-mono">{Math.min(currentPage * pageSize, activeExportCount)}</strong> of <strong className="text-emerald-400 font-mono">{activeExportCount.toLocaleString()}</strong> records
               </span>
               <div className="flex items-center gap-2">
                 <button

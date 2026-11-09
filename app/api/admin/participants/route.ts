@@ -59,6 +59,8 @@ export async function GET(request: NextRequest) {
     const searchParam = (searchParams.get("search") || "").trim().toLowerCase();
     const fromDate = searchParams.get("from") || "";
     const toDate = searchParams.get("to") || "";
+    const fromTsParam = Number(searchParams.get("fromTs")) || (fromDate ? new Date(fromDate + "T00:00:00").getTime() : 0);
+    const toTsParam = Number(searchParams.get("toTs")) || (toDate ? new Date(toDate + "T23:59:59").getTime() : 0);
 
     // 1. Fast Stats Only Endpoint
     if (isStatsOnly) {
@@ -77,42 +79,67 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // 2. Full Export Endpoint (Called on-demand when admin clicks 'Export to CSV')
-    if (isExport) {
-      let participants = await getParticipants(campaignId);
+    const activeStoreFilter = storeParam && storeParam !== "all" ? storeParam : undefined;
+    const isComplexFilter = Boolean(
+      searchParam ||
+      fromTsParam > 0 ||
+      toTsParam > 0 ||
+      (session.role === "supervisor" && session.scopeType === "stores")
+    );
+    const isAnyFilterActive = Boolean(activeStoreFilter || isComplexFilter);
+
+    const applyFilters = (list: any[]) => {
+      let result = list;
 
       // If supervisor, scope participants
       if (session.role === "supervisor" && session.scopeType === "stores" && session.storeIds?.length) {
         const allowed = new Set(session.storeIds.map((s) => s.toLowerCase()));
-        participants = participants.filter(
+        result = result.filter(
           (p) => p.storeCode && allowed.has(p.storeCode.toLowerCase())
         );
       }
 
       // Filter by store
-      if (storeParam && storeParam !== "all") {
-        participants = participants.filter((p) => p.storeCode?.toLowerCase() === storeParam.toLowerCase());
+      if (activeStoreFilter) {
+        const normStore = activeStoreFilter.toLowerCase();
+        result = result.filter(
+          (p) =>
+            p.storeCode?.toLowerCase() === normStore ||
+            p.storeName?.toLowerCase() === normStore
+        );
       }
 
-      // Filter by search
+      // Filter by search across all table columns
       if (searchParam) {
-        participants = participants.filter((p) =>
-          p.name?.toLowerCase().includes(searchParam) ||
-          p.phone?.includes(searchParam) ||
-          (p.email && p.email.toLowerCase().includes(searchParam)) ||
-          p.prizeLabel?.toLowerCase().includes(searchParam)
+        result = result.filter(
+          (p) =>
+            p.name?.toLowerCase().includes(searchParam) ||
+            p.phone?.includes(searchParam) ||
+            (p.email && p.email.toLowerCase().includes(searchParam)) ||
+            p.prizeLabel?.toLowerCase().includes(searchParam) ||
+            (p.storeName && p.storeName.toLowerCase().includes(searchParam)) ||
+            (p.storeCode && p.storeCode.toLowerCase().includes(searchParam)) ||
+            (p.voucherCode && p.voucherCode.toLowerCase().includes(searchParam))
         );
       }
 
       // Filter by date range
-      if (fromDate) {
-        const fromTs = new Date(fromDate + "T00:00:00").getTime();
-        participants = participants.filter((p) => (p.createdAt || 0) >= fromTs);
+      if (fromTsParam > 0) {
+        result = result.filter((p) => (p.createdAt || 0) >= fromTsParam);
       }
-      if (toDate) {
-        const toTs = new Date(toDate + "T23:59:59").getTime();
-        participants = participants.filter((p) => (p.createdAt || 0) <= toTs);
+      if (toTsParam > 0) {
+        result = result.filter((p) => (p.createdAt || 0) <= toTsParam);
       }
+
+      return result;
+    };
+
+    // 2. Full Export Endpoint (Called on-demand when admin clicks 'Export to CSV')
+    if (isExport) {
+      const rawParticipants = await getParticipants(campaignId, {
+        storeCode: activeStoreFilter,
+      });
+      const participants = applyFilters(rawParticipants);
 
       return NextResponse.json({
         success: true,
@@ -122,59 +149,30 @@ export async function GET(request: NextRequest) {
     }
 
     // 3. Paginated Participant Query (Fast & Lightweight)
-    const activeStoreFilter = storeParam && storeParam !== "all" ? storeParam : undefined;
-    const isComplexFilter = Boolean(searchParam || fromDate || toDate || (session.role === "supervisor" && session.scopeType === "stores"));
+    // Never pass limit: undefined during interactive table pagination/filtering on 27k+ records
     const neededCount = page * pageSize;
+    const boundedScanLimit = isAnyFilterActive ? Math.max(neededCount, 500) : neededCount;
 
     const [analytics, storeCounts, participantsRaw] = await Promise.all([
       getOrSyncCampaignAnalytics(campaignId),
-      activeStoreFilter ? getParticipantCounts(campaignId, activeStoreFilter) : Promise.resolve({ total: 0, winners: 0 }),
+      activeStoreFilter && !isComplexFilter
+        ? getParticipantCounts(campaignId, activeStoreFilter)
+        : Promise.resolve({ total: 0, winners: 0 }),
       getParticipants(campaignId, {
-        limit: isComplexFilter ? undefined : neededCount,
+        limit: boundedScanLimit,
         storeCode: activeStoreFilter,
       }),
     ]);
 
-    let participants = participantsRaw;
+    const allTotalCount = Math.max(analytics.totalSpins || 0, participantsRaw.length);
+    const winnersCount = Math.max(
+      analytics.totalWinners || 0,
+      participantsRaw.filter((p) => p.won).length
+    );
 
-    // If supervisor, scope participants
-    if (session.role === "supervisor" && session.scopeType === "stores" && session.storeIds?.length) {
-      const allowed = new Set(session.storeIds.map((s) => s.toLowerCase()));
-      participants = participants.filter(
-        (p) => p.storeCode && allowed.has(p.storeCode.toLowerCase())
-      );
-    }
+    const filtered = applyFilters(participantsRaw);
 
-    const totalCount = Math.max(analytics.totalSpins || 0, participants.length);
-    const winnersCount = Math.max(analytics.totalWinners || 0, participants.filter((p) => p.won).length);
-
-    // Apply store filter if not done by query
-    let filtered = participants;
-    if (activeStoreFilter) {
-      filtered = filtered.filter((p) => p.storeCode?.toLowerCase() === activeStoreFilter.toLowerCase());
-    }
-
-    // Apply search filter
-    if (searchParam) {
-      filtered = filtered.filter((p) =>
-        p.name?.toLowerCase().includes(searchParam) ||
-        p.phone?.includes(searchParam) ||
-        (p.email && p.email.toLowerCase().includes(searchParam)) ||
-        p.prizeLabel?.toLowerCase().includes(searchParam)
-      );
-    }
-
-    // Apply date range filter
-    if (fromDate) {
-      const fromTs = new Date(fromDate + "T00:00:00").getTime();
-      filtered = filtered.filter((p) => (p.createdAt || 0) >= fromTs);
-    }
-    if (toDate) {
-      const toTs = new Date(toDate + "T23:59:59").getTime();
-      filtered = filtered.filter((p) => (p.createdAt || 0) <= toTs);
-    }
-
-    let filteredTotal = totalCount;
+    let filteredTotal = allTotalCount;
     if (isComplexFilter) {
       filteredTotal = filtered.length;
     } else if (activeStoreFilter) {
@@ -192,8 +190,9 @@ export async function GET(request: NextRequest) {
       participants: paginatedSlice,
       page,
       pageSize,
+      isFiltered: isAnyFilterActive,
       totalCount: filteredTotal,
-      allTotalCount: totalCount,
+      allTotalCount,
       totalPages,
       winnersCount,
     });
