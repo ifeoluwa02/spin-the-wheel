@@ -997,13 +997,16 @@ export default function AdminDashboard() {
           ? `_${storeFilter}`
           : "";
       const filename = `${campaign.name.toLowerCase().replace(/\s+/g, "_")}_${rangeLabel}${storeLabel}.csv`;
-      const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+      const csvContent = "\uFEFF" + [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.setAttribute("href", encodeURI(csv));
+      link.href = url;
       link.setAttribute("download", filename);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Export error:", err);
       alert("Failed to export CSV. Please check your connection.");
