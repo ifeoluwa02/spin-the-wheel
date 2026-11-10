@@ -16,8 +16,8 @@ export const DEFAULT_ADMIN_EMAIL = "admin@event.internal";
 export const DEFAULT_ADMIN_PASSWORD = "admin123";
 export const DEFAULT_USHER_PIN = "0000";
 
-/** Inactivity verification interval: 1 minute (60,000 ms) */
-export const PIN_REVERIFY_INTERVAL_MS = 60 * 1000;
+/** Inactivity verification interval: 30 minutes (1,800,000 ms) */
+export const PIN_REVERIFY_INTERVAL_MS = 30 * 60 * 1000;
 
 export interface SessionPayload {
   role: UserRole;
@@ -197,50 +197,52 @@ export function verifySignedSession(token: string): SessionPayload | null {
 }
 
 /**
- * Extracts and verifies the caller's session from cookies or Authorization header.
+ * Extracts all valid signed sessions from the request (Bearer token + all role cookies).
  */
-export function getRequestAuthSession(req: NextRequest): SessionPayload | null {
+export function getAllRequestAuthSessions(req: NextRequest): SessionPayload[] {
+  const sessions: SessionPayload[] = [];
+
   // 1. Check Authorization: Bearer <token>
   const authHeader = req.headers.get("authorization");
   if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
     const bearerToken = authHeader.slice(7).trim();
     const verified = verifySignedSession(bearerToken);
-    if (verified) return verified;
+    if (verified) sessions.push(verified);
   }
 
-  // 2. Check httpOnly session cookies in priority order
-  const superAdminCookie = req.cookies.get("super_admin_session")?.value;
-  if (superAdminCookie) {
-    const s = verifySignedSession(superAdminCookie);
-    if (s) return s;
+  // 2. Check all httpOnly session cookies in priority order
+  const cookieNames = ["super_admin_session", "event_admin_session", "usher_session"] as const;
+  for (const name of cookieNames) {
+    const val = req.cookies.get(name)?.value;
+    if (val) {
+      const verified = verifySignedSession(val);
+      if (verified) sessions.push(verified);
+    }
   }
 
-  const eventAdminCookie = req.cookies.get("event_admin_session")?.value;
-  if (eventAdminCookie) {
-    const s = verifySignedSession(eventAdminCookie);
-    if (s) return s;
-  }
+  return sessions;
+}
 
-  const usherCookie = req.cookies.get("usher_session")?.value;
-  if (usherCookie) {
-    const s = verifySignedSession(usherCookie);
-    if (s) return s;
-  }
-
-  return null;
+/**
+ * Extracts and verifies the primary caller's session from cookies or Authorization header.
+ */
+export function getRequestAuthSession(req: NextRequest): SessionPayload | null {
+  const sessions = getAllRequestAuthSessions(req);
+  return sessions[0] || null;
 }
 
 /**
  * Verifies that an incoming API request has an active session with one of `allowedRoles`.
- * Also enforces event-level isolation if the session is scoped to a specific `eventId`.
+ * Also enforces event-level isolation if the session is scoped to a specific `eventId`,
+ * while gracefully checking all active cookies when testing multiple roles/events in the same browser.
  */
 export function verifyApiAuthorization(
   req: NextRequest,
   allowedRoles: UserRole[],
   targetEventId?: string
 ): { authorized: boolean; session?: SessionPayload; error?: string; status?: number } {
-  const session = getRequestAuthSession(req);
-  if (!session) {
+  const sessions = getAllRequestAuthSessions(req);
+  if (sessions.length === 0) {
     return {
       authorized: false,
       error: "Authentication required. Please sign in to continue.",
@@ -248,7 +250,8 @@ export function verifyApiAuthorization(
     };
   }
 
-  if (!allowedRoles.includes(session.role)) {
+  const roleMatches = sessions.filter((s) => allowedRoles.includes(s.role));
+  if (roleMatches.length === 0) {
     return {
       authorized: false,
       error: `Insufficient permissions. Required role: ${allowedRoles.join(" or ")}.`,
@@ -256,23 +259,23 @@ export function verifyApiAuthorization(
     };
   }
 
-  // If the operator is an event-specific admin or usher (not super-admin) and has a locked eventId,
-  // prevent cross-event access to another event's data
-  if (
-    session.role !== "super-admin" &&
-    session.eventId &&
-    targetEventId &&
-    session.eventId !== targetEventId &&
-    session.eventSlug !== targetEventId
-  ) {
-    return {
-      authorized: false,
-      error: "Cross-event access denied: Your session is locked to a different event.",
-      status: 403,
-    };
+  for (const session of roleMatches) {
+    if (
+      session.role === "super-admin" ||
+      !session.eventId ||
+      !targetEventId ||
+      session.eventId === targetEventId ||
+      session.eventSlug === targetEventId
+    ) {
+      return { authorized: true, session };
+    }
   }
 
-  return { authorized: true, session };
+  return {
+    authorized: false,
+    error: "Cross-event access denied: Your session is locked to a different event.",
+    status: 403,
+  };
 }
 
 /**

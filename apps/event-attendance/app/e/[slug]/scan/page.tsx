@@ -4,6 +4,8 @@ import { AlertCircle, ArrowLeft } from "lucide-react";
 import { fetchEventById } from "@/lib/repository";
 import { DedicatedEventScannerClient } from "@/components/DedicatedEventScannerClient";
 
+export const dynamic = "force-dynamic";
+
 interface PageProps {
   params: {
     slug: string;
@@ -44,5 +46,7 @@ export default async function DedicatedEventScannerPage({ params }: PageProps) {
     );
   }
 
-  return <DedicatedEventScannerClient event={event} slug={params.slug} />;
+  const { adminPassword: _hiddenPass, usherPin: _hiddenPin, ...safeEvent } = event;
+
+  return <DedicatedEventScannerClient event={safeEvent} slug={params.slug} />;
 }

@@ -4,6 +4,8 @@ import { AlertCircle, ArrowLeft } from "lucide-react";
 import { fetchEventById } from "@/lib/repository";
 import { DedicatedEventAdminClient } from "@/components/DedicatedEventAdminClient";
 
+export const dynamic = "force-dynamic";
+
 interface PageProps {
   params: {
     slug: string;
@@ -44,5 +46,7 @@ export default async function DedicatedEventAdminPage({ params }: PageProps) {
     );
   }
 
-  return <DedicatedEventAdminClient event={event} slug={params.slug} />;
+  const { adminPassword: _hiddenPass, usherPin: _hiddenPin, ...safeEvent } = event;
+
+  return <DedicatedEventAdminClient event={safeEvent} slug={params.slug} />;
 }

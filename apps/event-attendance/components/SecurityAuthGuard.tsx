@@ -30,7 +30,7 @@ interface SecurityAuthGuardProps {
   }) => React.ReactNode;
 }
 
-const PIN_TIMEOUT_SECONDS = 60; // 1-minute verification cycle
+const PIN_TIMEOUT_SECONDS = 30 * 60; // 30-minute verification cycle
 
 export function SecurityAuthGuard({
   targetRole,
@@ -447,7 +447,7 @@ export function SecurityAuthGuard({
   // Session is active: Render the children with the 1-minute monitor + Re-verify challenge modal
   return (
     <>
-      {/* 1-Minute Periodic Re-verify Challenge Modal */}
+      {/* 30-Minute Periodic Re-verify Challenge Modal */}
       {showReverifyModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4">
           <div className="max-w-sm w-full bg-white rounded-3xl border border-slate-200 p-6 shadow-2xl text-center space-y-5 animate-in zoom-in-95 duration-200">
@@ -457,7 +457,7 @@ export function SecurityAuthGuard({
 
             <div className="space-y-1">
               <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[10px] uppercase tracking-wider">
-                1-Minute Security Challenge
+                30-Minute Security Challenge
               </span>
               <h2 className="text-xl font-black text-slate-900 tracking-tight">
                 Session Active Verification

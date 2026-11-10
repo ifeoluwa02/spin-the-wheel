@@ -3,6 +3,8 @@ import { fetchAllEvents, createNewEvent } from "@/lib/repository";
 import { validateCreateEventPayload } from "@/lib/validation";
 import { verifyApiAuthorization } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const events = await fetchAllEvents();

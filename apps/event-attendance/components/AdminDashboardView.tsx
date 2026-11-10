@@ -356,7 +356,9 @@ export function AdminDashboardView({
               <Clock className="w-3.5 h-3.5 text-blue-600" />
               PIN re-verify in:{" "}
               <strong className="text-blue-700">
-                {sessionInfo.secondsRemaining ?? 60}s
+                {sessionInfo.secondsRemaining !== undefined
+                  ? `${Math.floor(sessionInfo.secondsRemaining / 60)}m ${sessionInfo.secondsRemaining % 60}s`
+                  : "30m 0s"}
               </strong>
             </span>
           </div>

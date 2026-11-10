@@ -4,6 +4,8 @@ import { AlertCircle, Calendar, MapPin, ChevronRight, Home } from "lucide-react"
 import { fetchEventById, fetchAllEvents } from "@/lib/repository";
 import { EventRegistrationView } from "@/components/EventRegistrationView";
 
+export const dynamic = "force-dynamic";
+
 interface PageProps {
   params: {
     slug: string;
@@ -90,9 +92,11 @@ export default async function DedicatedEventPage({ params }: PageProps) {
     );
   }
 
+  const { adminPassword: _hiddenPass, usherPin: _hiddenPin, ...safeEvent } = event;
+
   return (
     <EventRegistrationView
-      initialEvent={event}
+      initialEvent={safeEvent}
       lockedMode={true}
       targetSlug={params.slug}
     />

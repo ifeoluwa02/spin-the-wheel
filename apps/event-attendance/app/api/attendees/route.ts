@@ -3,6 +3,8 @@ import { fetchAttendeesByEvent } from "@/lib/repository";
 import { containsMaliciousPayload, sanitizeText } from "@/lib/validation";
 import { verifyApiAuthorization } from "@/lib/auth";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

@@ -102,8 +102,11 @@ export async function POST(req: NextRequest) {
     const { registeredCount, existingDuplicate } =
       await checkEventCapacityAndDuplicate(event.id, email);
 
-    const protocol = req.headers.get("x-forwarded-proto") || "http";
-    const host = req.headers.get("host") || "localhost:3002";
+    const protocol = req.headers.get("x-forwarded-proto") || "https";
+    const host =
+      req.headers.get("x-forwarded-host") ||
+      req.headers.get("host") ||
+      "localhost:3002";
     const appBaseUrl = `${protocol}://${host}`;
 
     if (existingDuplicate) {
