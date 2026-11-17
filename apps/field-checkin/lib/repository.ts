@@ -2,80 +2,181 @@ import {
   collection,
   doc,
   addDoc,
+  setDoc,
   getDoc,
   getDocs,
   updateDoc,
+  runTransaction,
   query,
   where,
   orderBy,
   increment,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { CheckInRecord, CheckOutSubmitPayload, Campaign, StoreLocation } from "./types";
+import { calculateDistanceMeters, evaluateGeofence, isValidCoordinates } from "./geo";
+import type {
+  CheckInRecord,
+  CheckOutSubmitPayload,
+  Campaign,
+  StoreLocation,
+  SurveyRecord,
+  GpsBreadcrumb,
+} from "./types";
 
 const COLLECTION_NAME = "checkins";
+const SURVEYS_COLLECTION = "surveys";
+
+function normalizeSlugKey(val: string): string {
+  return String(val || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-");
+}
+
+export function buildDeterministicCheckInId(
+  campaignId: string,
+  storeCode: string,
+  shiftDate: string
+): string {
+  return `${normalizeSlugKey(campaignId)}__${normalizeSlugKey(storeCode)}__${normalizeSlugKey(shiftDate)}`;
+}
 
 /**
  * Retrieves campaign metadata and stores list from Firestore.
+ * Only falls back to demo Golden Morn campaign when slug === "golden-morn".
  */
 export async function getCampaign(slug: string): Promise<Campaign | null> {
+  const cleanSlug = normalizeSlugKey(slug || "golden-morn");
   try {
-    const snap = await getDoc(doc(db, "campaigns", slug));
+    const snap = await getDoc(doc(db, "campaigns", cleanSlug));
     if (snap.exists()) {
       return { id: snap.id, ...snap.data() } as Campaign;
     }
   } catch (err) {
-    console.warn("Could not fetch campaign:", err);
+    console.warn("Could not fetch campaign from Firestore:", err);
   }
+
+  if (cleanSlug === "golden-morn") {
+    return {
+      id: "golden-morn",
+      name: "Nestlé Golden Morn Activation",
+      brandName: "Golden Morn",
+      activationType: "retail",
+      adminUsername: "goldenmorn",
+      adminPin: "2026",
+      stores: DEFAULT_DEMO_STORES,
+      primaryColor: "#00BFA6",
+      secondaryColor: "#FF6B35",
+      active: true,
+    };
+  }
+
   return null;
 }
 
 /**
- * Returns today's date formatted as YYYY-MM-DD in West Africa Time (UTC+1).
+ * Returns today's date formatted as YYYY-MM-DD in West Africa Time (Africa/Lagos, UTC+1).
+ * Uses Intl.DateTimeFormat to avoid local timezone offset bugs.
  */
-export function getTodayDateStr(): string {
-  const d = new Date();
-  // Adjust to WAT (UTC+1)
-  const utc = d.getTime() + d.getTimezoneOffset() * 60000;
-  const wat = new Date(utc + 3600000);
-  return wat.toISOString().split("T")[0];
+export function getTodayDateStr(date: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Lagos",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  } catch {
+    const utc = date.getTime();
+    const wat = new Date(utc + 3600000);
+    return wat.toISOString().split("T")[0];
+  }
+}
+
+function stripUndefined(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map(stripUndefined);
+  }
+  if (obj && typeof obj === "object") {
+    const clean: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v !== undefined) {
+        clean[k] = stripUndefined(v);
+      }
+    }
+    return clean;
+  }
+  return obj;
 }
 
 /**
- * Creates and records a new on-site check-in in Firestore.
+ * Creates and records a new on-site check-in in Firestore using a deterministic document ID
+ * and a transaction to prevent race-condition duplicate shifts.
  */
 export async function recordCheckIn(
   data: Omit<CheckInRecord, "id" | "createdAt" | "updatedAt">
-): Promise<CheckInRecord> {
+): Promise<{ checkIn: CheckInRecord; alreadyExisted: boolean }> {
   const now = Date.now();
-  const raw = {
-    ...data,
-    createdAt: now,
-    updatedAt: now,
+  const initialBreadcrumb: GpsBreadcrumb = {
+    timestamp: now,
+    lat: data.checkInLat,
+    lng: data.checkInLng,
+    accuracy: data.checkInAccuracy,
+    distanceMeters: data.distanceMeters,
+    inside: true,
   };
 
-  // Strip undefined values which Firestore rejects
-  const cleanData: Record<string, any> = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (v !== undefined) {
-      cleanData[k] = v;
-    }
+  const raw = stripUndefined({
+    ...data,
+    breadcrumbs: data.breadcrumbs || [initialBreadcrumb],
+    lastHeartbeatAt: now,
+    lastLat: data.checkInLat,
+    lastLng: data.checkInLng,
+    lastDistanceMeters: data.distanceMeters,
+    inFencePingCount: 1,
+    outOfFencePingCount: 0,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const detId = buildDeterministicCheckInId(data.campaignId, data.storeCode, data.shiftDate);
+  const docRef = doc(db, COLLECTION_NAME, detId);
+
+  try {
+    const result = await runTransaction(db, async (tx) => {
+      const existingSnap = await tx.get(docRef);
+      if (existingSnap.exists()) {
+        const existingData = existingSnap.data() as CheckInRecord;
+        if (existingData.status !== "checked_out" && existingData.status !== "rejected") {
+          return {
+            checkIn: { ...existingData, id: existingSnap.id },
+            alreadyExisted: true,
+          };
+        }
+      }
+      tx.set(docRef, raw);
+      return {
+        checkIn: { ...(raw as CheckInRecord), id: detId },
+        alreadyExisted: false,
+      };
+    });
+    return result;
+  } catch {
+    // Fallback if transaction fails (e.g. legacy doc id)
+    await setDoc(docRef, raw);
+    return {
+      checkIn: { ...(raw as CheckInRecord), id: detId },
+      alreadyExisted: false,
+    };
   }
-
-  const colRef = collection(db, COLLECTION_NAME);
-  const docRef = await addDoc(colRef, cleanData);
-
-  return {
-    ...cleanData,
-    id: docRef.id,
-  } as CheckInRecord;
 }
 
 /**
- * Records departure / check-out for an active shift.
+ * Records departure / check-out for an active shift, including check-out geofence verification.
  */
 export async function recordCheckOut(
-  payload: CheckOutSubmitPayload
+  payload: CheckOutSubmitPayload,
+  allowedRadius = 200
 ): Promise<CheckInRecord> {
   const docRef = doc(db, COLLECTION_NAME, payload.checkInId);
   const snap = await getDoc(docRef);
@@ -85,6 +186,10 @@ export async function recordCheckOut(
   }
 
   const existing = snap.data() as CheckInRecord;
+  if (existing.status === "checked_out") {
+    return { ...existing, id: snap.id };
+  }
+
   const nowIso = new Date().toISOString();
   const nowTs = Date.now();
 
@@ -102,21 +207,159 @@ export async function recordCheckOut(
     updatedAt: nowTs,
   };
 
-  if (payload.latitude !== undefined) updates.checkOutLat = payload.latitude;
-  if (payload.longitude !== undefined) updates.checkOutLng = payload.longitude;
-  if (payload.notes !== undefined) updates.notes = payload.notes;
+  if (isValidCoordinates(payload.latitude, payload.longitude)) {
+    updates.checkOutLat = payload.latitude;
+    updates.checkOutLng = payload.longitude;
+    if (typeof payload.accuracy === "number") {
+      updates.checkOutAccuracy = payload.accuracy;
+    }
+    if (isValidCoordinates(existing.targetLat, existing.targetLng)) {
+      const evalOut = evaluateGeofence(
+        {
+          latitude: payload.latitude!,
+          longitude: payload.longitude!,
+          accuracy: payload.accuracy,
+        },
+        { latitude: existing.targetLat, longitude: existing.targetLng },
+        allowedRadius
+      );
+      updates.checkOutDistanceMeters = evalOut.distance >= 0 ? evalOut.distance : undefined;
+      updates.checkOutInsideFence = evalOut.inside;
+    }
+  }
 
-  await updateDoc(docRef, updates);
+  if (payload.notes !== undefined) {
+    updates.notes = String(payload.notes).trim().slice(0, 2000);
+  }
+
+  const cleanUpdates = stripUndefined(updates);
+  await updateDoc(docRef, cleanUpdates);
 
   return {
     ...existing,
-    ...updates,
+    ...cleanUpdates,
     id: snap.id,
   };
 }
 
 /**
- * Retrieves today's active check-in record for a specific store if one exists.
+ * Records a live GPS heartbeat during an active shift (Akida-style continuous presence).
+ */
+export async function recordShiftHeartbeat(params: {
+  checkInId: string;
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+  allowedRadius?: number;
+}): Promise<{
+  checkIn: CheckInRecord;
+  inside: boolean;
+  distanceMeters: number;
+}> {
+  const docRef = doc(db, COLLECTION_NAME, params.checkInId);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) {
+    throw new Error("Active shift record not found.");
+  }
+
+  const existing = snap.data() as CheckInRecord;
+  if (existing.status === "checked_out") {
+    throw new Error("Shift is already checked out.");
+  }
+
+  const evalPing = evaluateGeofence(
+    {
+      latitude: params.latitude,
+      longitude: params.longitude,
+      accuracy: params.accuracy,
+    },
+    { latitude: existing.targetLat, longitude: existing.targetLng },
+    params.allowedRadius || 200
+  );
+
+  const now = Date.now();
+  const dist = evalPing.distance >= 0 ? evalPing.distance : 0;
+  const crumb: GpsBreadcrumb = stripUndefined({
+    timestamp: now,
+    lat: params.latitude,
+    lng: params.longitude,
+    accuracy: params.accuracy,
+    distanceMeters: dist,
+    inside: evalPing.inside,
+  });
+
+  const prevCrumbs = Array.isArray(existing.breadcrumbs) ? existing.breadcrumbs : [];
+  const nextCrumbs = [...prevCrumbs.slice(-49), crumb];
+  const inCount = (existing.inFencePingCount || 0) + (evalPing.inside ? 1 : 0);
+  const outCount = (existing.outOfFencePingCount || 0) + (evalPing.inside ? 0 : 1);
+
+  // If BA has accumulated 2+ out-of-fence pings while active, auto-flag shift for supervisor review
+  const nextStatus =
+    !evalPing.inside && outCount >= 2 && existing.status === "verified"
+      ? "flagged"
+      : existing.status;
+
+  const updates = stripUndefined({
+    breadcrumbs: nextCrumbs,
+    lastHeartbeatAt: now,
+    lastLat: params.latitude,
+    lastLng: params.longitude,
+    lastDistanceMeters: dist,
+    inFencePingCount: inCount,
+    outOfFencePingCount: outCount,
+    status: nextStatus,
+    updatedAt: now,
+  });
+
+  await updateDoc(docRef, updates);
+
+  return {
+    checkIn: { ...existing, ...updates, id: snap.id },
+    inside: evalPing.inside,
+    distanceMeters: dist,
+  };
+}
+
+/**
+ * Supervisor review action: approves or rejects a flagged check-in record.
+ */
+export async function reviewCheckInRecord(params: {
+  checkInId: string;
+  decision: "approved" | "rejected";
+  reviewedBy: string;
+  reviewNote?: string;
+}): Promise<CheckInRecord> {
+  const docRef = doc(db, COLLECTION_NAME, params.checkInId);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) {
+    throw new Error("Check-in record not found.");
+  }
+
+  const existing = snap.data() as CheckInRecord;
+  const now = Date.now();
+  const nextStatus =
+    existing.status === "checked_out"
+      ? "checked_out"
+      : params.decision === "approved"
+      ? "verified"
+      : "rejected";
+
+  const updates = stripUndefined({
+    status: nextStatus,
+    reviewStatus: params.decision,
+    reviewedBy: params.reviewedBy.slice(0, 120),
+    reviewedAt: now,
+    reviewNote: params.reviewNote ? params.reviewNote.trim().slice(0, 1000) : undefined,
+    updatedAt: now,
+  });
+
+  await updateDoc(docRef, updates);
+  return { ...existing, ...updates, id: snap.id };
+}
+
+/**
+ * Retrieves today's check-in record for a specific store if one exists.
+ * Prioritizes active shifts over checked-out shifts.
  */
 export async function getStoreTodayCheckIn(
   campaignId: string,
@@ -127,6 +370,14 @@ export async function getStoreTodayCheckIn(
   const cleanCode = storeCode.trim().toLowerCase();
 
   try {
+    // 1. Check deterministic ID first
+    const detId = buildDeterministicCheckInId(campaignId, cleanCode, targetDate);
+    const detSnap = await getDoc(doc(db, COLLECTION_NAME, detId));
+    if (detSnap.exists()) {
+      return { ...(detSnap.data() as CheckInRecord), id: detSnap.id };
+    }
+
+    // 2. Fallback query for legacy auto-ID records
     const q = query(
       collection(db, COLLECTION_NAME),
       where("campaignId", "==", campaignId),
@@ -134,16 +385,34 @@ export async function getStoreTodayCheckIn(
     );
 
     const snap = await getDocs(q);
+    let fallbackMatch: CheckInRecord | null = null;
     for (const d of snap.docs) {
       const data = d.data() as CheckInRecord;
       if (data.storeCode && data.storeCode.trim().toLowerCase() === cleanCode) {
-        return { ...data, id: d.id };
+        const rec = { ...data, id: d.id };
+        if (rec.status !== "checked_out" && rec.status !== "rejected") {
+          return rec;
+        }
+        fallbackMatch = rec;
       }
     }
+    return fallbackMatch;
   } catch (err) {
     console.warn("Could not query store today check-in:", err);
   }
 
+  return null;
+}
+
+export async function getCheckInById(checkInId: string): Promise<CheckInRecord | null> {
+  try {
+    const snap = await getDoc(doc(db, COLLECTION_NAME, checkInId));
+    if (snap.exists()) {
+      return { ...(snap.data() as CheckInRecord), id: snap.id };
+    }
+  } catch (err) {
+    console.warn("Could not fetch check-in by id:", err);
+  }
   return null;
 }
 
@@ -170,7 +439,6 @@ export async function getDailyCheckIns(
       id: d.id,
     }));
   } catch {
-    // Fallback without orderBy in case composite index is not yet built
     try {
       const qFallback = query(
         collection(db, COLLECTION_NAME),
@@ -191,32 +459,154 @@ export async function getDailyCheckIns(
 }
 
 /**
- * Increments or decrements the shift sample/engagement counter (+1 sample).
+ * Atomically increments or decrements the shift sample/engagement counter (+1/-1 sample).
  */
 export async function updateShiftSampleCounter(
   checkInId: string,
   delta: number
 ): Promise<number> {
+  const safeDelta = delta < 0 ? -1 : 1;
   const docRef = doc(db, COLLECTION_NAME, checkInId);
-  await updateDoc(docRef, {
-    samplesLogged: increment(delta),
-    updatedAt: Date.now(),
-  });
 
-  const updatedSnap = await getDoc(docRef);
-  return (updatedSnap.data()?.samplesLogged as number) || 0;
-}
-
-export async function saveCampaign(campaign: Campaign): Promise<void> {
-  const docRef = doc(db, "campaigns", campaign.id || "golden-morn");
-  await updateDoc(docRef, { ...campaign, updatedAt: Date.now() }).catch(async () => {
-    const { setDoc } = await import("firebase/firestore");
-    await setDoc(docRef, { ...campaign, createdAt: Date.now(), updatedAt: Date.now() });
-  });
+  try {
+    return await runTransaction(db, async (tx) => {
+      const currentSnap = await tx.get(docRef);
+      if (!currentSnap.exists()) {
+        throw new Error("Check-in record not found.");
+      }
+      const currentCount = (currentSnap.data()?.samplesLogged as number) || 0;
+      if (safeDelta < 0 && currentCount <= 0) {
+        return 0;
+      }
+      const nextCount = Math.max(0, currentCount + safeDelta);
+      tx.update(docRef, {
+        samplesLogged: increment(safeDelta),
+        updatedAt: Date.now(),
+      });
+      return nextCount;
+    });
+  } catch (err) {
+    const currentSnap = await getDoc(docRef);
+    if (!currentSnap.exists()) {
+      throw new Error("Check-in record not found.");
+    }
+    const currentCount = (currentSnap.data()?.samplesLogged as number) || 0;
+    if (safeDelta < 0 && currentCount <= 0) return 0;
+    await updateDoc(docRef, {
+      samplesLogged: increment(safeDelta),
+      updatedAt: Date.now(),
+    });
+    return Math.max(0, currentCount + safeDelta);
+  }
 }
 
 /**
- * Ground-truthing: updates the lat/lng coordinates for a store in a campaign.
+ * Records a consumer / mother survey response in Firestore "surveys" collection
+ * and increments the linked shift's samplesLogged counter by +1.
+ */
+export async function recordSurvey(
+  data: Omit<SurveyRecord, "id" | "createdAt">
+): Promise<{ survey: SurveyRecord; samplesLogged: number }> {
+  const now = Date.now();
+  const cleanData = stripUndefined({
+    ...data,
+    createdAt: now,
+  });
+
+  const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
+  let samplesLogged = 0;
+
+  if (data.checkInId) {
+    try {
+      samplesLogged = await updateShiftSampleCounter(data.checkInId, 1);
+    } catch (err) {
+      console.warn("Could not increment shift counter after survey:", err);
+    }
+  }
+
+  return {
+    survey: {
+      ...(cleanData as Omit<SurveyRecord, "id">),
+      id: docRef.id,
+    },
+    samplesLogged,
+  };
+}
+
+/**
+ * Retrieves survey submissions for a campaign on a given date (and optionally filtered by checkInId).
+ */
+export async function getDailySurveys(
+  campaignId: string,
+  dateStr?: string,
+  checkInId?: string
+): Promise<SurveyRecord[]> {
+  const targetDate = dateStr || getTodayDateStr();
+
+  try {
+    const q = query(
+      collection(db, SURVEYS_COLLECTION),
+      where("campaignId", "==", campaignId),
+      where("shiftDate", "==", targetDate)
+    );
+    const snap = await getDocs(q);
+    const list = snap.docs.map((d) => ({
+      ...(d.data() as SurveyRecord),
+      id: d.id,
+    }));
+    const filtered = checkInId ? list.filter((s) => s.checkInId === checkInId) : list;
+    return filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch (err) {
+    console.error("Failed to fetch daily surveys:", err);
+    return [];
+  }
+}
+
+export async function getAllCampaigns(): Promise<Campaign[]> {
+  try {
+    const snap = await getDocs(collection(db, "campaigns"));
+    const list = snap.docs.map((d) => ({
+      id: d.id,
+      ...(d.data() as Campaign),
+    }));
+    if (list.length > 0) {
+      return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    }
+  } catch (err) {
+    console.warn("Could not list campaigns from Firestore:", err);
+  }
+  return [
+    {
+      id: "golden-morn",
+      name: "Nestlé Golden Morn Activation",
+      brandName: "Golden Morn",
+      activationType: "retail",
+      adminUsername: "goldenmorn",
+      adminPin: "2026",
+      stores: DEFAULT_DEMO_STORES,
+      primaryColor: "#00BFA6",
+      secondaryColor: "#FF6B35",
+      active: true,
+    },
+  ];
+}
+
+export async function saveCampaign(campaign: Campaign): Promise<Campaign> {
+  const slug = (campaign.id || "golden-morn").trim().toLowerCase().replace(/[^a-z0-9-_]/g, "-");
+  const docRef = doc(db, "campaigns", slug);
+  const now = Date.now();
+  const payload = stripUndefined({
+    ...campaign,
+    id: slug,
+    updatedAt: now,
+    createdAt: campaign.createdAt || now,
+  });
+  await setDoc(docRef, payload, { merge: true });
+  return payload as Campaign;
+}
+
+/**
+ * Ground-truthing: updates the lat/lng coordinates for a store in a campaign using a transaction.
  */
 export async function updateStoreCoordinates(
   campaignId: string,
@@ -224,19 +614,22 @@ export async function updateStoreCoordinates(
   lat: number,
   lng: number
 ): Promise<boolean> {
+  if (!isValidCoordinates(lat, lng)) return false;
   try {
     const docRef = doc(db, "campaigns", campaignId);
-    const snap = await getDoc(docRef);
-    if (!snap.exists()) return false;
-    const campaign = snap.data() as Campaign;
-    const stores = (campaign.stores || []).map((s) => {
-      const code = s.storeCode || (s as any).code || s.id;
-      if (code === storeCode) {
-        return { ...s, lat, lng };
-      }
-      return s;
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(docRef);
+      if (!snap.exists()) throw new Error("Campaign not found");
+      const campaign = snap.data() as Campaign;
+      const stores = (campaign.stores || []).map((s) => {
+        const code = s.storeCode || (s as any).code || s.id;
+        if (code === storeCode) {
+          return { ...s, lat, lng };
+        }
+        return s;
+      });
+      tx.update(docRef, { stores, updatedAt: Date.now() });
     });
-    await updateDoc(docRef, { stores, updatedAt: Date.now() });
     return true;
   } catch (err) {
     console.error("Failed to update store coordinates:", err);
@@ -260,7 +653,7 @@ export const DEFAULT_DEMO_STORES: StoreLocation[] = [
     isActive: true,
     lat: 6.7148,
     lng: 3.4025,
-    geofenceRadius: 150,
+    geofenceRadius: 200,
   },
   {
     id: "exp-marketing-ikeja",
@@ -274,7 +667,7 @@ export const DEFAULT_DEMO_STORES: StoreLocation[] = [
     isActive: true,
     lat: 6.5702,
     lng: 3.3496,
-    geofenceRadius: 100,
+    geofenceRadius: 200,
   },
   {
     id: "spar-ilupeju",
@@ -338,7 +731,6 @@ export const DEFAULT_DEMO_STORES: StoreLocation[] = [
  * Seeds the campaign with realistic pre-configured geotagged stores.
  */
 export async function seedDemoStores(campaignId = "golden-morn"): Promise<StoreLocation[]> {
-  const { setDoc } = await import("firebase/firestore");
   const docRef = doc(db, "campaigns", campaignId);
   const snap = await getDoc(docRef);
 
@@ -356,4 +748,3 @@ export async function seedDemoStores(campaignId = "golden-morn"): Promise<StoreL
   await setDoc(docRef, campaignData, { merge: true });
   return DEFAULT_DEMO_STORES;
 }
-

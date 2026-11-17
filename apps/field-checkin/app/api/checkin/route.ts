@@ -3,48 +3,130 @@ import {
   getCampaign,
   recordCheckIn,
   recordCheckOut,
+  recordShiftHeartbeat,
+  reviewCheckInRecord,
+  getCheckInById,
   getDailyCheckIns,
   getStoreTodayCheckIn,
   updateShiftSampleCounter,
+  recordSurvey,
+  getDailySurveys,
   getTodayDateStr,
 } from "@/lib/repository";
-import { verifyPassword } from "@/lib/auth";
-import { evaluateGeofence } from "@/lib/geo";
-import type { CheckInRecord } from "@/lib/types";
+import {
+  verifyPassword,
+  createSessionToken,
+  getRequestSession,
+  setSessionCookie,
+  BA_SHIFT_COOKIE_NAME,
+  checkRateLimit,
+  resetRateLimit,
+  getClientIp,
+  computeSha256Hex,
+} from "@/lib/auth";
+import {
+  evaluateGeofence,
+  evaluateGpsTelemetry,
+  isValidCoordinates,
+  calculateDistanceMeters,
+} from "@/lib/geo";
+import type { CheckInRecord, CheckInStatus, SurveyType, TasteFeedback } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+function isAuthorizedForShift(
+  request: NextRequest,
+  checkInId: string,
+  campaignId?: string
+): boolean {
+  const session = getRequestSession(request, true);
+  if (!session) return false;
+  if (session.role === "superadmin") return true;
+  if (session.role === "supervisor") {
+    return !campaignId || session.campaignId?.toLowerCase() === campaignId.toLowerCase();
+  }
+  if (session.role === "ba") {
+    return session.checkInId === checkInId;
+  }
+  return false;
+}
+
 /**
- * GET /api/checkin?campaignId=...&date=...&storeCode=...
- * Returns today's checkins for supervisor table or checks a store's status.
+ * GET /api/checkin?campaignId=...&date=...&storeCode=...&checkInId=...
+ * - Supervisor table queries require an authenticated Supervisor or Superadmin session.
+ * - Single shift lookup by `checkInId` validates the BA's active shift and returns shift + surveys.
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const campaignId = searchParams.get("campaignId");
+    const campaignId = searchParams.get("campaignId")?.trim().toLowerCase();
     const dateStr = searchParams.get("date") || getTodayDateStr();
     const storeCode = searchParams.get("storeCode");
+    const checkInId = searchParams.get("checkInId");
 
     if (!campaignId) {
       return NextResponse.json({ error: "campaignId is required." }, { status: 400 });
     }
 
-    if (storeCode) {
-      const activeRecord = await getStoreTodayCheckIn(campaignId, storeCode, dateStr);
-      return NextResponse.json({ success: true, checkIn: activeRecord });
+    if (checkInId) {
+      const [shift, surveys] = await Promise.all([
+        getCheckInById(checkInId),
+        getDailySurveys(campaignId, dateStr, checkInId),
+      ]);
+      return NextResponse.json({
+        success: true,
+        checkIn: shift,
+        surveys,
+        date: dateStr,
+      });
     }
 
-    const records = await getDailyCheckIns(campaignId, dateStr);
-    return NextResponse.json({ success: true, records, date: dateStr });
+    if (storeCode) {
+      const activeRecord = await getStoreTodayCheckIn(campaignId, storeCode, dateStr);
+      const session = getRequestSession(request, true);
+      const isSupervisor =
+        session &&
+        (session.role === "superadmin" ||
+          (session.role === "supervisor" && session.campaignId?.toLowerCase() === campaignId));
+
+      return NextResponse.json({
+        success: true,
+        hasActiveShift: Boolean(activeRecord && activeRecord.status !== "checked_out"),
+        checkIn: isSupervisor ? activeRecord : null,
+      });
+    }
+
+    // Full daily check-ins + surveys require Supervisor or Superadmin authentication
+    const session = getRequestSession(request, false);
+    const isAuthorized =
+      session &&
+      (session.role === "superadmin" ||
+        (session.role === "supervisor" && session.campaignId?.toLowerCase() === campaignId));
+
+    if (!isAuthorized) {
+      return NextResponse.json(
+        { error: "Supervisor authentication required to view attendance records." },
+        { status: 401 }
+      );
+    }
+
+    const [records, surveys] = await Promise.all([
+      getDailyCheckIns(campaignId, dateStr),
+      getDailySurveys(campaignId, dateStr),
+    ]);
+    return NextResponse.json({ success: true, records, surveys, date: dateStr });
   } catch (err: any) {
     console.error("GET /api/checkin error:", err);
-    return NextResponse.json({ error: err.message || "Failed to retrieve check-in records." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to retrieve check-in records." },
+      { status: 500 }
+    );
   }
 }
 
 /**
  * POST /api/checkin
- * Handles check_in, check_out, and sample_counter updates.
+ * Handles check_in, heartbeat, check_out, sample_counter, submit_survey, and review_checkin.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -53,39 +135,85 @@ export async function POST(request: NextRequest) {
 
     // ── 1. CHECK-IN ACTION ──
     if (action === "check_in" || !action) {
-      const { campaignId, storeCode, baName, baPhone, pin, latitude, longitude, accuracy, photoUrl, isSimulated } = body;
+      const {
+        campaignId,
+        storeCode,
+        baName,
+        baPhone,
+        pin,
+        latitude,
+        longitude,
+        accuracy,
+        timestamp,
+        gpsSamples,
+        photoUrl,
+        deviceId,
+        isSimulated,
+      } = body;
 
-      if (!campaignId || !storeCode || !baName?.trim()) {
+      const cleanCampaignId = String(campaignId || "").trim().toLowerCase();
+      if (!cleanCampaignId || !storeCode || !baName?.trim()) {
         return NextResponse.json(
           { error: "Campaign ID, store code, and BA name are required." },
           { status: 400 }
         );
       }
 
-      if (typeof latitude !== "number" || typeof longitude !== "number") {
+      if (!isValidCoordinates(latitude, longitude)) {
         return NextResponse.json(
           { error: "Valid GPS latitude and longitude are required." },
           { status: 400 }
         );
       }
 
-      const campaign = await getCampaign(campaignId);
+      const demoAllowed = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
+      if (isSimulated && !demoAllowed) {
+        return NextResponse.json(
+          { error: "Simulated GPS check-in is disabled outside demo mode." },
+          { status: 403 }
+        );
+      }
+
+      // Validate live selfie photo evidence format & size
+      if (
+        !photoUrl ||
+        typeof photoUrl !== "string" ||
+        !photoUrl.startsWith("data:image/") ||
+        photoUrl.length > 900_000
+      ) {
+        return NextResponse.json(
+          { error: "A valid live camera selfie (under 900 KB) is required for check-in." },
+          { status: 400 }
+        );
+      }
+
+      const ip = getClientIp(request);
+      const cleanCode = String(storeCode).trim().toLowerCase();
+      const rateKey = `checkin:${ip}:${cleanCampaignId}:${cleanCode}`;
+      const rateCheck = checkRateLimit(rateKey, 10, 15 * 60 * 1000);
+      if (!rateCheck.allowed) {
+        return NextResponse.json(
+          {
+            error: `Too many failed check-in attempts for this store. Retry in ${rateCheck.retryAfterSec}s.`,
+          },
+          { status: 429 }
+        );
+      }
+
+      const campaign = await getCampaign(cleanCampaignId);
       if (!campaign) {
         return NextResponse.json({ error: "Campaign not found." }, { status: 404 });
       }
 
-      const cleanCode = String(storeCode).trim().toLowerCase();
       const normCode = cleanCode.replace(/[^a-z0-9]/g, "");
 
+      // Canonical store ID / storeCode lookup only (no fuzzy name matching)
       const store = (campaign.stores || []).find((s) => {
         const sCode = (s.storeCode || (s as any).code || "").trim().toLowerCase();
         const sId = (s.id || "").trim().toLowerCase();
-        const sName = (s.name || "").trim().toLowerCase();
-
         if (sCode === cleanCode || sId === cleanCode) return true;
         if (normCode && sCode.replace(/[^a-z0-9]/g, "") === normCode) return true;
         if (normCode && sId.replace(/[^a-z0-9]/g, "") === normCode) return true;
-        if (sName === cleanCode) return true;
         return false;
       });
 
@@ -94,98 +222,391 @@ export async function POST(request: NextRequest) {
       }
 
       if (store.isActive === false || (store as any).active === false) {
-        return NextResponse.json({ error: "This store location is currently deactivated." }, { status: 403 });
+        return NextResponse.json(
+          { error: "This store location is currently deactivated." },
+          { status: 403 }
+        );
       }
 
-      // Verify PIN if set on store or campaign
-      const effectivePin = (store.pin && store.pin.trim()) || ((campaign as any).adminPin && (campaign as any).adminPin.trim()) || "";
-      if (effectivePin) {
-        const inputPin = String(pin || "").trim();
-        if (!verifyPassword(inputPin, effectivePin)) {
-          return NextResponse.json({ error: "Incorrect BA access PIN." }, { status: 401 });
-        }
+      // Verify BA Username (mandatory if configured on store) & store-specific Password / PIN
+      const expectedBaUser = (store.baUsername || "").trim().toLowerCase();
+      const inputBaUser = String(body.baUsername || "").trim().toLowerCase();
+      if (expectedBaUser && inputBaUser !== expectedBaUser) {
+        return NextResponse.json(
+          { error: `Incorrect or missing BA username for ${store.name}.` },
+          { status: 401 }
+        );
+      }
+
+      const effectivePin =
+        (store.baPassword && store.baPassword.trim()) ||
+        (store.pin && store.pin.trim()) ||
+        "1234";
+      const inputPin = String(pin || "").trim();
+      if (!verifyPassword(inputPin, effectivePin)) {
+        return NextResponse.json(
+          { error: "Incorrect BA password or access PIN for this location." },
+          { status: 401 }
+        );
+      }
+
+      // Credentials verified -> clear rate limit bucket
+      resetRateLimit(rateKey);
+
+      // Require configured store GPS coordinates (never fall back to user's own position)
+      if (!isValidCoordinates(store.lat, store.lng)) {
+        return NextResponse.json(
+          {
+            error: `Store GPS coordinates are not configured for ${store.name}. Ask a supervisor to calibrate this venue.`,
+          },
+          { status: 400 }
+        );
+      }
+
+      const targetLat = store.lat!;
+      const targetLng = store.lng!;
+      const radius = typeof store.geofenceRadius === "number" ? store.geofenceRadius : 200;
+
+      const evalResult = evaluateGeofence(
+        { latitude, longitude, accuracy, timestamp },
+        { latitude: targetLat, longitude: targetLng },
+        radius,
+        store.polygon
+      );
+
+      if (!evalResult.inside) {
+        return NextResponse.json(
+          {
+            error: evalResult.message,
+            evaluation: evalResult,
+          },
+          { status: 403 }
+        );
       }
 
       // Check if store already has an active check-in today
+      const canonicalStoreCode = store.storeCode || (store as any).code || store.id || storeCode;
       const todayStr = getTodayDateStr();
-      const existing = await getStoreTodayCheckIn(campaignId, store.code || storeCode, todayStr);
-      if (existing && existing.status !== "checked_out") {
-        return NextResponse.json({
+      const existing = await getStoreTodayCheckIn(cleanCampaignId, canonicalStoreCode, todayStr);
+      if (existing && existing.status !== "checked_out" && existing.status !== "rejected") {
+        const shiftToken = createSessionToken({
+          role: "ba",
+          username: inputBaUser || baName.trim().toLowerCase(),
+          campaignId: cleanCampaignId,
+          storeCode: canonicalStoreCode,
+          checkInId: existing.id,
+          baName: existing.baName,
+        });
+        const res = NextResponse.json({
           success: true,
           alreadyCheckedIn: true,
           checkIn: existing,
+          shiftToken,
           message: "A shift is already active for this store today.",
         });
+        setSessionCookie(res, shiftToken, BA_SHIFT_COOKIE_NAME);
+        return res;
       }
 
-      // Geofence calculation
-      // If store has no GPS coordinates configured, we accept coordinates as base ground truth
-      const targetLat = typeof store.lat === "number" ? store.lat : latitude;
-      const targetLng = typeof store.lng === "number" ? store.lng : longitude;
-      const radius = typeof store.geofenceRadius === "number" ? store.geofenceRadius : 100;
-
-      const evalResult = evaluateGeofence(
-        { latitude, longitude, accuracy },
-        { latitude: targetLat, longitude: targetLng },
-        radius
+      // Analyze GPS telemetry & spoofing signals
+      const telemetry = evaluateGpsTelemetry(
+        { latitude, longitude, accuracy, timestamp },
+        Array.isArray(gpsSamples) ? gpsSamples : undefined,
+        Boolean(isSimulated)
       );
 
-      const status = evalResult.status === "verified" || evalResult.status === "drift" ? "verified" : "flagged";
+      // Persist "flagged" status if indoor drift, simulated demo mode, or high spoof risk
+      const status: CheckInStatus =
+        evalResult.status === "drift" ||
+        Boolean(isSimulated) ||
+        telemetry.spoofRisk === "high"
+          ? "flagged"
+          : "verified";
+
+      const photoSha256 = computeSha256Hex(photoUrl);
 
       const record: Omit<CheckInRecord, "id" | "createdAt" | "updatedAt"> = {
-        campaignId,
-        storeCode: store.code || storeCode,
+        campaignId: cleanCampaignId,
+        storeCode: canonicalStoreCode,
         storeName: store.name,
-        baName: baName.trim(),
-        baPhone: (baPhone || "").trim(),
+        baName: baName.trim().slice(0, 150),
+        baUsername: inputBaUser || undefined,
+        baPhone: String(baPhone || "").trim().slice(0, 40),
         shiftDate: todayStr,
         checkInTime: new Date().toISOString(),
         checkInLat: latitude,
         checkInLng: longitude,
-        checkInAccuracy: accuracy,
+        checkInAccuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
         targetLat,
         targetLng,
         distanceMeters: evalResult.distance,
         status,
-        photoUrl: photoUrl || undefined,
+        photoUrl,
+        photoSha256,
+        isSimulated: Boolean(isSimulated),
+        spoofRisk: telemetry.spoofRisk,
+        spoofReasons: telemetry.spoofReasons.length > 0 ? telemetry.spoofReasons : undefined,
+        deviceId: deviceId ? String(deviceId).trim().slice(0, 100) : undefined,
         samplesLogged: 0,
       };
 
-      const created = await recordCheckIn(record);
+      const { checkIn: created, alreadyExisted } = await recordCheckIn(record);
+
+      const shiftToken = createSessionToken({
+        role: "ba",
+        username: inputBaUser || baName.trim().toLowerCase(),
+        campaignId: cleanCampaignId,
+        storeCode: canonicalStoreCode,
+        checkInId: created.id,
+        baName: created.baName,
+      });
+
+      const res = NextResponse.json({
+        success: true,
+        alreadyCheckedIn: alreadyExisted,
+        checkIn: created,
+        shiftToken,
+        evaluation: evalResult,
+        telemetry,
+        isSimulated: Boolean(isSimulated),
+      });
+      setSessionCookie(res, shiftToken, BA_SHIFT_COOKIE_NAME);
+      return res;
+    }
+
+    // ── 2. CONTINUOUS PRESENCE HEARTBEAT ACTION (Akida Live Tracking Parity) ──
+    if (action === "heartbeat") {
+      const { checkInId, latitude, longitude, accuracy } = body;
+      if (!checkInId || !isValidCoordinates(latitude, longitude)) {
+        return NextResponse.json(
+          { error: "checkInId and valid GPS coordinates are required for heartbeat." },
+          { status: 400 }
+        );
+      }
+
+      if (!isAuthorizedForShift(request, checkInId)) {
+        return NextResponse.json(
+          { error: "Unauthorized shift session for heartbeat." },
+          { status: 401 }
+        );
+      }
+
+      const result = await recordShiftHeartbeat({
+        checkInId,
+        latitude,
+        longitude,
+        accuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
+      });
 
       return NextResponse.json({
         success: true,
-        checkIn: created,
-        evaluation: evalResult,
-        isSimulated: Boolean(isSimulated),
+        checkIn: result.checkIn,
+        inside: result.inside,
+        distanceMeters: result.distanceMeters,
       });
     }
 
-    // ── 2. CHECK-OUT ACTION ──
+    // ── 3. CHECK-OUT ACTION ──
     if (action === "check_out") {
-      const { checkInId, latitude, longitude, notes } = body;
+      const { checkInId, latitude, longitude, accuracy, notes } = body;
       if (!checkInId) {
         return NextResponse.json({ error: "checkInId is required." }, { status: 400 });
       }
 
-      const updated = await recordCheckOut({ checkInId, latitude, longitude, notes });
+      if (!isAuthorizedForShift(request, checkInId)) {
+        return NextResponse.json(
+          { error: "Unauthorized to check out this shift." },
+          { status: 401 }
+        );
+      }
+
+      const updated = await recordCheckOut({
+        checkInId,
+        latitude,
+        longitude,
+        accuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
+        notes,
+      });
       return NextResponse.json({ success: true, checkIn: updated });
     }
 
-    // ── 3. SAMPLE COUNTER INCREMENT ──
+    // ── 4. SAMPLE COUNTER INCREMENT / DECREMENT ──
     if (action === "sample_counter") {
       const { checkInId, delta } = body;
       if (!checkInId) {
         return NextResponse.json({ error: "checkInId is required." }, { status: 400 });
       }
 
-      const newTotal = await updateShiftSampleCounter(checkInId, Number(delta) || 1);
+      if (!isAuthorizedForShift(request, checkInId)) {
+        return NextResponse.json(
+          { error: "Unauthorized to update sample counter for this shift." },
+          { status: 401 }
+        );
+      }
+
+      const safeDelta = Number(delta) < 0 ? -1 : 1;
+      const newTotal = await updateShiftSampleCounter(checkInId, safeDelta);
       return NextResponse.json({ success: true, samplesLogged: newTotal });
+    }
+
+    // ── 5. SUBMIT CONSUMER / MOTHER SURVEY (With Auto Geotagging) ──
+    if (action === "submit_survey") {
+      const {
+        campaignId,
+        checkInId,
+        storeCode,
+        storeName,
+        baName,
+        surveyType,
+        respondentName,
+        respondentPhone,
+        productSampled,
+        tasteFeedback,
+        purchasedOnShelf,
+        packsPurchased,
+        motherStage,
+        dueOrBirthDate,
+        diaperSizeIssued,
+        currentBrandUsed,
+        latitude,
+        longitude,
+        accuracy,
+        notes,
+      } = body;
+
+      if (!campaignId || !checkInId || !storeCode || !respondentName?.trim()) {
+        return NextResponse.json(
+          { error: "Campaign, active shift, store, and respondent name are required." },
+          { status: 400 }
+        );
+      }
+
+      if (!isAuthorizedForShift(request, checkInId, campaignId)) {
+        return NextResponse.json(
+          { error: "Unauthorized shift session. Please sign in to your shift again." },
+          { status: 401 }
+        );
+      }
+
+      const shiftRecord = await getCheckInById(checkInId);
+      if (!shiftRecord || shiftRecord.status === "checked_out" || shiftRecord.status === "rejected") {
+        return NextResponse.json(
+          { error: "Cannot submit surveys to a closed or rejected shift." },
+          { status: 400 }
+        );
+      }
+
+      const hasCoords = isValidCoordinates(latitude, longitude);
+      let surveyDistance: number | undefined;
+      if (hasCoords && isValidCoordinates(shiftRecord.targetLat, shiftRecord.targetLng)) {
+        const d = calculateDistanceMeters(
+          { latitude, longitude },
+          { latitude: shiftRecord.targetLat, longitude: shiftRecord.targetLng }
+        );
+        if (d !== Infinity) surveyDistance = d;
+      }
+
+      const mode: SurveyType = surveyType === "hospital" ? "hospital" : "retail";
+      const validFeedback: TasteFeedback[] = ["loved_it", "good", "neutral", "disliked"];
+
+      const { survey, samplesLogged } = await recordSurvey({
+        campaignId: String(campaignId).trim().toLowerCase(),
+        checkInId: String(checkInId).trim(),
+        storeCode: String(storeCode).trim(),
+        storeName: String(storeName || shiftRecord.storeName || storeCode).trim(),
+        baName: String(baName || shiftRecord.baName || "BA").trim(),
+        shiftDate: shiftRecord.shiftDate || getTodayDateStr(),
+        surveyType: mode,
+        respondentName: String(respondentName).trim().slice(0, 120),
+        respondentPhone: String(respondentPhone || "").trim().slice(0, 40),
+        productSampled:
+          mode === "retail" && productSampled
+            ? String(productSampled).trim().slice(0, 120)
+            : undefined,
+        tasteFeedback:
+          mode === "retail" && validFeedback.includes(tasteFeedback) ? tasteFeedback : undefined,
+        purchasedOnShelf: mode === "retail" ? Boolean(purchasedOnShelf) : undefined,
+        packsPurchased:
+          mode === "retail" && purchasedOnShelf
+            ? Math.max(1, Math.min(100, Number(packsPurchased) || 1))
+            : undefined,
+        motherStage:
+          mode === "hospital" && (motherStage === "expectant" || motherStage === "nursing")
+            ? motherStage
+            : undefined,
+        dueOrBirthDate:
+          mode === "hospital" && dueOrBirthDate
+            ? String(dueOrBirthDate).trim().slice(0, 50)
+            : undefined,
+        diaperSizeIssued:
+          mode === "hospital" &&
+          (diaperSizeIssued === "Newborn (Size 1)" ||
+            diaperSizeIssued === "Size 2" ||
+            diaperSizeIssued === "Size 3")
+            ? diaperSizeIssued
+            : undefined,
+        currentBrandUsed:
+          mode === "hospital" && currentBrandUsed
+            ? String(currentBrandUsed).trim().slice(0, 80)
+            : undefined,
+        lat: hasCoords ? latitude : undefined,
+        lng: hasCoords ? longitude : undefined,
+        accuracy: hasCoords && typeof accuracy === "number" ? Math.round(accuracy) : undefined,
+        distanceMeters: surveyDistance,
+        notes: notes ? String(notes).trim().slice(0, 500) : undefined,
+      });
+
+      return NextResponse.json({
+        success: true,
+        survey,
+        samplesLogged,
+      });
+    }
+
+    // ── 6. SUPERVISOR REVIEW FLAGGED CHECK-IN (Approve / Reject) ──
+    if (action === "review_checkin") {
+      const { checkInId, decision, reviewNote, campaignId } = body;
+      const session = getRequestSession(request, false);
+      if (
+        !session ||
+        (session.role !== "superadmin" &&
+          !(
+            session.role === "supervisor" &&
+            (!campaignId || session.campaignId?.toLowerCase() === String(campaignId).toLowerCase())
+          ))
+      ) {
+        return NextResponse.json(
+          { error: "Supervisor authentication required to review flagged check-ins." },
+          { status: 401 }
+        );
+      }
+
+      if (!checkInId || (decision !== "approved" && decision !== "rejected")) {
+        return NextResponse.json(
+          { error: "checkInId and valid decision ('approved' | 'rejected') are required." },
+          { status: 400 }
+        );
+      }
+
+      const updated = await reviewCheckInRecord({
+        checkInId,
+        decision,
+        reviewedBy: session.username,
+        reviewNote,
+      });
+
+      return NextResponse.json({
+        success: true,
+        checkIn: updated,
+      });
     }
 
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
   } catch (err: any) {
     console.error("POST /api/checkin error:", err);
-    return NextResponse.json({ error: err.message || "Failed to process check-in request." }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to process check-in request." },
+      { status: 500 }
+    );
   }
 }

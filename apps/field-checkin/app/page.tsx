@@ -7,14 +7,30 @@ import {
   MapPin, ShieldCheck, CheckCircle2, AlertTriangle,
   Camera, Clock, RefreshCw, X, ChevronRight, Navigation,
   Smartphone, Award, User, Phone, LogOut, Plus, Minus,
+  ClipboardList, ListChecks, Send, ShoppingBag, HeartPulse,
 } from "lucide-react";
-import type { Campaign, StoreLocation, CheckInRecord, GeoPoint } from "@/lib/types";
-import { getCampaign, updateStoreCoordinates } from "@/lib/repository";
+import type { Campaign, StoreLocation, CheckInRecord, GeoPoint, SurveyRecord, SurveyType, TasteFeedback } from "@/lib/types";
 import { evaluateGeofence, formatDistance } from "@/lib/geo";
 import { drawGpsWatermark } from "@/lib/watermark";
 import GeofenceMap from "@/components/GeofenceMap";
 
 type DemoMode = "real" | "on_site" | "out_of_bounds";
+
+interface OfflineQueuedSurvey {
+  id: string;
+  queuedAt: number;
+  payload: Record<string, any>;
+}
+
+function getOrCreateDeviceId(): string {
+  if (typeof window === "undefined") return "server";
+  let id = localStorage.getItem("field_ops_device_id");
+  if (!id) {
+    id = `dev_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
+    localStorage.setItem("field_ops_device_id", id);
+  }
+  return id;
+}
 
 function CheckInContent() {
   const searchParams = useSearchParams();
@@ -27,6 +43,7 @@ function CheckInContent() {
 
   // Form inputs
   const [baName, setBaName] = useState("");
+  const [baUsername, setBaUsername] = useState("");
   const [baPhone, setBaPhone] = useState("");
   const [baPin, setBaPin] = useState("");
 
@@ -44,32 +61,83 @@ function CheckInContent() {
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [watermarking, setWatermarking] = useState(false);
-  const [calibratingPin, setCalibratingPin] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
-  // Active shift state (persisted to localStorage)
+  // Active shift state (persisted to localStorage + validated against server)
   const [activeShift, setActiveShift] = useState<CheckInRecord | null>(null);
+  const [shiftToken, setShiftToken] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [shiftElapsed, setShiftElapsed] = useState("");
+  const [heartbeatPinging, setHeartbeatPinging] = useState(false);
+
+  // Rolling GPS multi-fix buffer for anti-spoofing telemetry
+  const gpsSamplesRef = useRef<GeoPoint[]>([]);
+
+  // Offline Queue & Network Status (Akida Offline Auto-Sync Parity)
+  const [isOnline, setIsOnline] = useState(true);
+  const [offlineQueue, setOfflineQueue] = useState<OfflineQueuedSurvey[]>([]);
+  const [syncingOffline, setSyncingOffline] = useState(false);
 
   // Sample counter incrementing state
   const [counterLoading, setCounterLoading] = useState(false);
 
-  // ── Load Campaign ──
+  // Separate Survey Architecture state (Active Shift Tabs: "survey" | "submissions" | "shift")
+  const [activeTab, setActiveTab] = useState<"survey" | "submissions" | "shift">("survey");
+  const [shiftSurveys, setShiftSurveys] = useState<SurveyRecord[]>([]);
+  const [surveyMode, setSurveyMode] = useState<SurveyType>("retail");
+  const [respondentName, setRespondentName] = useState("");
+  const [respondentPhone, setRespondentPhone] = useState("");
+  const [productSampled, setProductSampled] = useState("Golden Morn Maize & Soya (45g)");
+  const [tasteFeedback, setTasteFeedback] = useState<TasteFeedback>("loved_it");
+  const [purchasedOnShelf, setPurchasedOnShelf] = useState(false);
+  const [packsPurchased, setPacksPurchased] = useState(1);
+  const [motherStage, setMotherStage] = useState<"expectant" | "nursing">("nursing");
+  const [dueOrBirthDate, setDueOrBirthDate] = useState("");
+  const [diaperSizeIssued, setDiaperSizeIssued] = useState<"Newborn (Size 1)" | "Size 2" | "Size 3">("Newborn (Size 1)");
+  const [currentBrandUsed, setCurrentBrandUsed] = useState("Molfix");
+  const [surveyNotes, setSurveyNotes] = useState("");
+  const [surveySubmitting, setSurveySubmitting] = useState(false);
+  const [surveySuccessMsg, setSurveySuccessMsg] = useState("");
+  const [surveyErrorMsg, setSurveyErrorMsg] = useState("");
+
+  function getShiftAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (shiftToken) {
+      headers["Authorization"] = `Bearer ${shiftToken}`;
+    }
+    return headers;
+  }
+
+  // ── Load Campaign via Sanitized Public API & Re-validate Cached Shift ──
   useEffect(() => {
     async function load() {
       try {
         setLoadingCampaign(true);
-        const data = await getCampaign(campaignSlug);
+        const res = await fetch(`/api/campaigns?slug=${encodeURIComponent(campaignSlug)}&public=1`);
+        const json = await res.json();
+        const data: Campaign | null = res.ok && json.success ? json.campaign : null;
         setCampaign(data);
+        if (data?.activationType === "hospital" || data?.activationType === "retail") {
+          setSurveyMode(data.activationType);
+        }
+
+        const cachedToken = localStorage.getItem(`active_shift_token_${campaignSlug}`) || "";
+        if (cachedToken) setShiftToken(cachedToken);
+
+        const cachedQueue = localStorage.getItem(`offline_queue_${campaignSlug}`);
+        if (cachedQueue) {
+          try {
+            setOfflineQueue(JSON.parse(cachedQueue));
+          } catch {}
+        }
 
         // Check if BA already has an active shift saved locally
         const cached = localStorage.getItem(`active_shift_${campaignSlug}`);
         if (cached) {
           try {
-            const parsed = JSON.parse(cached);
+            const parsed = JSON.parse(cached) as CheckInRecord;
             setActiveShift(parsed);
           } catch {}
         }
@@ -81,6 +149,67 @@ function CheckInContent() {
     }
     load();
   }, [campaignSlug]);
+
+  // ── Online / Offline Detection & Auto-Sync ──
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsOnline(navigator.onLine);
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, []);
+
+  async function syncOfflineQueue() {
+    if (syncingOffline || offlineQueue.length === 0 || !activeShift) return;
+    setSyncingOffline(true);
+    const remaining: OfflineQueuedSurvey[] = [];
+    for (const item of offlineQueue) {
+      try {
+        const res = await fetch("/api/checkin", {
+          method: "POST",
+          headers: getShiftAuthHeaders(),
+          body: JSON.stringify(item.payload),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (data.survey) {
+            setShiftSurveys((prev) => [
+              data.survey,
+              ...prev.filter((s) => s.id !== item.id && s.id !== data.survey.id),
+            ]);
+          }
+          if (typeof data.samplesLogged === "number") {
+            const updatedShift = { ...activeShift, samplesLogged: data.samplesLogged };
+            setActiveShift(updatedShift);
+            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
+          }
+        } else if (res.status >= 500) {
+          remaining.push(item);
+        }
+      } catch {
+        remaining.push(item);
+      }
+    }
+    setOfflineQueue(remaining);
+    if (remaining.length > 0) {
+      localStorage.setItem(`offline_queue_${campaignSlug}`, JSON.stringify(remaining));
+    } else {
+      localStorage.removeItem(`offline_queue_${campaignSlug}`);
+    }
+    setSyncingOffline(false);
+  }
+
+  useEffect(() => {
+    if (isOnline && offlineQueue.length > 0 && activeShift) {
+      syncOfflineQueue();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, activeShift?.id]);
 
   // ── Shift Elapsed Timer ──
   useEffect(() => {
@@ -107,6 +236,172 @@ function CheckInContent() {
     return () => clearInterval(interval);
   }, [activeShift]);
 
+  // ── Load Shift Surveys & Re-validate Active Shift against Server ──
+  useEffect(() => {
+    if (!activeShift?.id) {
+      setShiftSurveys([]);
+      return;
+    }
+    async function loadShiftSurveys() {
+      try {
+        const res = await fetch(
+          `/api/checkin?campaignId=${encodeURIComponent(campaignSlug)}&checkInId=${encodeURIComponent(activeShift!.id)}`
+        );
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (data.checkIn) {
+            if (data.checkIn.status === "checked_out" || data.checkIn.status === "rejected") {
+              localStorage.removeItem(`active_shift_${campaignSlug}`);
+              localStorage.removeItem(`active_shift_token_${campaignSlug}`);
+              setActiveShift(null);
+              return;
+            }
+            setActiveShift(data.checkIn);
+            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
+          }
+          if (Array.isArray(data.surveys)) {
+            setShiftSurveys(data.surveys);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not load shift surveys:", err);
+      }
+    }
+    loadShiftSurveys();
+  }, [activeShift?.id, campaignSlug]);
+
+  // ── Submit Consumer / Mother Survey (With Auto Geotagging & Offline Queue Fallback) ──
+  async function handleSurveySubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeShift || !respondentName.trim()) return;
+
+    setSurveySubmitting(true);
+    setSurveyErrorMsg("");
+    setSurveySuccessMsg("");
+
+    const surveyPayload = {
+      action: "submit_survey",
+      campaignId: campaignSlug,
+      checkInId: activeShift.id,
+      storeCode: activeShift.storeCode,
+      storeName: activeShift.storeName,
+      baName: activeShift.baName,
+      surveyType: surveyMode,
+      respondentName: respondentName.trim(),
+      respondentPhone: respondentPhone.trim(),
+      productSampled: surveyMode === "retail" ? productSampled : undefined,
+      tasteFeedback: surveyMode === "retail" ? tasteFeedback : undefined,
+      purchasedOnShelf: surveyMode === "retail" ? purchasedOnShelf : undefined,
+      packsPurchased: surveyMode === "retail" && purchasedOnShelf ? packsPurchased : undefined,
+      motherStage: surveyMode === "hospital" ? motherStage : undefined,
+      dueOrBirthDate: surveyMode === "hospital" ? dueOrBirthDate.trim() : undefined,
+      diaperSizeIssued: surveyMode === "hospital" ? diaperSizeIssued : undefined,
+      currentBrandUsed: surveyMode === "hospital" ? currentBrandUsed : undefined,
+      latitude: coords?.latitude ?? activeShift.lastLat ?? activeShift.checkInLat,
+      longitude: coords?.longitude ?? activeShift.lastLng ?? activeShift.checkInLng,
+      accuracy: coords?.accuracy ?? activeShift.checkInAccuracy,
+      notes: surveyNotes.trim() || undefined,
+    };
+
+    const queueOfflineSurvey = () => {
+      const tempId = `offline_${Date.now()}`;
+      const newItem: OfflineQueuedSurvey = {
+        id: tempId,
+        queuedAt: Date.now(),
+        payload: surveyPayload,
+      };
+      const nextQueue = [...offlineQueue, newItem];
+      setOfflineQueue(nextQueue);
+      localStorage.setItem(`offline_queue_${campaignSlug}`, JSON.stringify(nextQueue));
+
+      const optimisticSurvey: SurveyRecord = {
+        id: tempId,
+        campaignId: campaignSlug,
+        checkInId: activeShift.id,
+        storeCode: activeShift.storeCode,
+        storeName: activeShift.storeName,
+        baName: activeShift.baName,
+        shiftDate: activeShift.shiftDate,
+        surveyType: surveyMode,
+        respondentName: respondentName.trim(),
+        respondentPhone: respondentPhone.trim(),
+        productSampled: surveyPayload.productSampled,
+        tasteFeedback: surveyPayload.tasteFeedback,
+        purchasedOnShelf: surveyPayload.purchasedOnShelf,
+        packsPurchased: surveyPayload.packsPurchased,
+        motherStage: surveyPayload.motherStage,
+        dueOrBirthDate: surveyPayload.dueOrBirthDate,
+        diaperSizeIssued: surveyPayload.diaperSizeIssued,
+        currentBrandUsed: surveyPayload.currentBrandUsed,
+        lat: surveyPayload.latitude,
+        lng: surveyPayload.longitude,
+        accuracy: surveyPayload.accuracy,
+        notes: surveyPayload.notes,
+        createdAt: Date.now(),
+      };
+      setShiftSurveys((prev) => [optimisticSurvey, ...prev]);
+      const updatedShift = { ...activeShift, samplesLogged: (activeShift.samplesLogged || 0) + 1 };
+      setActiveShift(updatedShift);
+      localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
+
+      const savedName = respondentName.trim();
+      setRespondentName("");
+      setRespondentPhone("");
+      setPurchasedOnShelf(false);
+      setPacksPurchased(1);
+      setDueOrBirthDate("");
+      setSurveyNotes("");
+      setSurveySuccessMsg(`📦 Saved offline for ${savedName}! Will auto-sync when signal returns.`);
+      setTimeout(() => setSurveySuccessMsg(""), 5000);
+    };
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      queueOfflineSurvey();
+      setSurveySubmitting(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/checkin", {
+        method: "POST",
+        headers: getShiftAuthHeaders(),
+        body: JSON.stringify(surveyPayload),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setSurveyErrorMsg(data.error || "Failed to save survey response.");
+        return;
+      }
+
+      if (data.survey) {
+        setShiftSurveys((prev) => [data.survey, ...prev]);
+      }
+      const nextCount = typeof data.samplesLogged === "number" && data.samplesLogged > 0
+        ? data.samplesLogged
+        : (activeShift.samplesLogged || 0) + 1;
+      const updatedShift = { ...activeShift, samplesLogged: nextCount };
+      setActiveShift(updatedShift);
+      localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
+
+      // Reset respondent fields for the next person
+      const savedName = respondentName.trim();
+      setRespondentName("");
+      setRespondentPhone("");
+      setPurchasedOnShelf(false);
+      setPacksPurchased(1);
+      setDueOrBirthDate("");
+      setSurveyNotes("");
+      setSurveySuccessMsg(`✅ Survey saved for ${savedName}! Ready for next respondent.`);
+      setTimeout(() => setSurveySuccessMsg(""), 4000);
+    } catch (err) {
+      console.warn("Network unreachable during survey submit — queueing offline:", err);
+      queueOfflineSurvey();
+    } finally {
+      setSurveySubmitting(false);
+    }
+  }
+
   // ── Acquire GPS Coordinates (or apply demo mode) ──
   function acquireLocation(mode: DemoMode = demoMode, store = selectedStore) {
     setGpsError("");
@@ -115,11 +410,14 @@ function CheckInContent() {
       // Simulate on-site: 25 meters offset from store target
       const lat = store?.lat ?? 6.7148;
       const lng = store?.lng ?? 3.4025;
-      setCoords({
+      const fix: GeoPoint = {
         latitude: lat + 0.00015,
         longitude: lng + 0.00012,
         accuracy: 8,
-      });
+        timestamp: Date.now(),
+      };
+      setCoords(fix);
+      gpsSamplesRef.current = [...gpsSamplesRef.current.slice(-4), fix];
       return;
     }
 
@@ -127,11 +425,14 @@ function CheckInContent() {
       // Simulate 600m away
       const lat = store?.lat ?? 6.7148;
       const lng = store?.lng ?? 3.4025;
-      setCoords({
+      const fix: GeoPoint = {
         latitude: lat + 0.0055,
         longitude: lng + 0.0048,
         accuracy: 15,
-      });
+        timestamp: Date.now(),
+      };
+      setCoords(fix);
+      gpsSamplesRef.current = [...gpsSamplesRef.current.slice(-4), fix];
       return;
     }
 
@@ -144,11 +445,14 @@ function CheckInContent() {
     setGpsLoading(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setCoords({
+        const fix: GeoPoint = {
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: Math.round(pos.coords.accuracy),
-        });
+          timestamp: pos.timestamp || Date.now(),
+        };
+        setCoords(fix);
+        gpsSamplesRef.current = [...gpsSamplesRef.current.slice(-4), fix];
         setGpsLoading(false);
       },
       (err) => {
@@ -166,18 +470,22 @@ function CheckInContent() {
     }
   }, [selectedStore, demoMode]);
 
-  // Live GPS stream (Real GPS mode only) — keeps the blue dot moving on the map
+  // Live GPS stream (Real GPS mode) — keeps the blue dot moving & collects multi-fix telemetry
   useEffect(() => {
-    if (demoMode !== "real" || !selectedStore || activeShift) return;
+    if (demoMode !== "real") return;
+    if (!selectedStore && !activeShift) return;
     if (typeof navigator === "undefined" || !navigator.geolocation) return;
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        setCoords({
+        const fix: GeoPoint = {
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: Math.round(pos.coords.accuracy),
-        });
+          timestamp: pos.timestamp || Date.now(),
+        };
+        setCoords(fix);
+        gpsSamplesRef.current = [...gpsSamplesRef.current.slice(-4), fix];
         setGpsError("");
       },
       () => {
@@ -187,6 +495,43 @@ function CheckInContent() {
     );
     return () => navigator.geolocation.clearWatch(watchId);
   }, [demoMode, selectedStore, activeShift]);
+
+  // ── Continuous Presence Heartbeat While Shift Is Active (Every 3 minutes) ──
+  async function sendPresenceHeartbeat(manual = false) {
+    if (!activeShift || !coords) return;
+    if (manual) setHeartbeatPinging(true);
+    try {
+      const res = await fetch("/api/checkin", {
+        method: "POST",
+        headers: getShiftAuthHeaders(),
+        body: JSON.stringify({
+          action: "heartbeat",
+          checkInId: activeShift.id,
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          accuracy: coords.accuracy,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.checkIn) {
+        setActiveShift(data.checkIn);
+        localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
+      }
+    } catch (err) {
+      console.warn("Heartbeat ping skipped (offline):", err);
+    } finally {
+      if (manual) setHeartbeatPinging(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!activeShift?.id) return;
+    const timer = setInterval(() => {
+      sendPresenceHeartbeat(false);
+    }, 3 * 60 * 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeShift?.id, coords?.latitude, coords?.longitude]);
 
   // ── Camera Selfie Handlers (Real webcam snap, zero file picker) ──
   async function startCamera() {
@@ -284,7 +629,7 @@ function CheckInContent() {
         accuracy: coords?.accuracy,
         targetLat: selectedStore?.lat,
         targetLng: selectedStore?.lng,
-        geofenceRadius: selectedStore?.geofenceRadius || 100,
+        geofenceRadius: selectedStore?.geofenceRadius || 200,
         distanceMeters: geofence?.distance,
         status: geofence?.status ?? "pending",
         timestamp: snapTime,
@@ -318,44 +663,30 @@ function CheckInContent() {
     };
   }, []);
 
-  // ── Geofence Evaluation ──
+  // ── Geofence Evaluation (Never fall back to user's own position if store is uncalibrated) ──
   const storeTarget: GeoPoint = {
-    latitude: selectedStore?.lat ?? (coords?.latitude || 6.7148),
-    longitude: selectedStore?.lng ?? (coords?.longitude || 3.4025),
+    latitude: typeof selectedStore?.lat === "number" ? selectedStore.lat : NaN,
+    longitude: typeof selectedStore?.lng === "number" ? selectedStore.lng : NaN,
   };
 
-  const geofence = coords
-    ? evaluateGeofence(coords, storeTarget, selectedStore?.geofenceRadius || 100)
-    : null;
+  const activeRadius = selectedStore?.geofenceRadius || 200;
 
-  // Ground-truthing: calibrate store pin to exact current device GPS
-  async function handleCalibratePin() {
-    if (!selectedStore || !coords) return;
-    const storeCode = selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "";
-    setCalibratingPin(true);
-    try {
-      const ok = await updateStoreCoordinates(campaignSlug, storeCode, coords.latitude, coords.longitude);
-      if (ok) {
-        const updatedStore = { ...selectedStore, lat: coords.latitude, lng: coords.longitude };
-        setSelectedStore(updatedStore);
-        if (campaign) {
-          const updatedStores = (campaign.stores || []).map((s) =>
-            (s.storeCode || (s as any).code || s.id) === storeCode ? updatedStore : s
-          );
-          setCampaign({ ...campaign, stores: updatedStores });
-        }
-      }
-    } catch (err) {
-      console.error("Calibrate pin error:", err);
-    } finally {
-      setCalibratingPin(false);
-    }
-  }
+  const geofence = coords && selectedStore
+    ? evaluateGeofence(coords, storeTarget, activeRadius, selectedStore.polygon)
+    : null;
 
   // ── Submit Check-In ──
   async function handleCheckInSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedStore || !baName.trim() || !coords) return;
+
+    if (!geofence?.inside) {
+      setSubmitError(
+        geofence?.message ||
+          `🚫 You are ${formatDistance(geofence?.distance || 0)} away from ${selectedStore.name}. You must be within the ${activeRadius}m radius to check in.`
+      );
+      return;
+    }
 
     if (!photoDataUrl) {
       setSubmitError("📸 A live selfie snapshot is required for verification before check-in.");
@@ -375,11 +706,15 @@ function CheckInContent() {
           campaignId: campaignSlug,
           storeCode: selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "",
           baName: baName.trim(),
+          baUsername: baUsername.trim(),
           baPhone: baPhone.trim(),
           pin: baPin.trim(),
           latitude: coords.latitude,
           longitude: coords.longitude,
           accuracy: coords.accuracy,
+          timestamp: coords.timestamp || Date.now(),
+          gpsSamples: gpsSamplesRef.current,
+          deviceId: getOrCreateDeviceId(),
           photoUrl: photoDataUrl || undefined,
           isSimulated: demoMode !== "real",
         }),
@@ -392,6 +727,10 @@ function CheckInContent() {
         return;
       }
 
+      if (data.shiftToken) {
+        setShiftToken(data.shiftToken);
+        localStorage.setItem(`active_shift_token_${campaignSlug}`, data.shiftToken);
+      }
       setActiveShift(data.checkIn);
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
     } catch (err: any) {
@@ -410,7 +749,7 @@ function CheckInContent() {
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getShiftAuthHeaders(),
         body: JSON.stringify({
           action: "sample_counter",
           checkInId: activeShift.id,
@@ -440,22 +779,27 @@ function CheckInContent() {
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getShiftAuthHeaders(),
         body: JSON.stringify({
           action: "check_out",
           checkInId: activeShift.id,
           latitude: coords?.latitude,
           longitude: coords?.longitude,
+          accuracy: coords?.accuracy,
         }),
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
         localStorage.removeItem(`active_shift_${campaignSlug}`);
+        localStorage.removeItem(`active_shift_token_${campaignSlug}`);
+        setShiftToken("");
         setActiveShift(null);
         setSelectedStore(null);
         setPhotoDataUrl(null);
         alert(`Shift completed! Total hours: ${data.checkIn.hoursWorked || 0} hrs. Samples: ${data.checkIn.samplesLogged || 0}`);
+      } else {
+        alert(data.error || "Could not check out shift.");
       }
     } catch (err) {
       console.error("Checkout failed:", err);
@@ -477,57 +821,60 @@ function CheckInContent() {
   }
 
   const stores = campaign?.stores || [];
+  const isDemoEnv = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
   return (
     <div className="min-h-screen bg-[#080E1A] text-white flex flex-col justify-between selection:bg-teal-500 selection:text-black">
-      {/* ── Demo Simulator Bar ── */}
-      <div className="bg-slate-900/90 border-b border-white/10 px-3 py-2 flex items-center justify-between gap-2 flex-wrap text-xs">
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
-          <span className="font-bold text-white/80">Demo Simulator:</span>
+      {/* ── Demo Simulator Bar (Only shown when NEXT_PUBLIC_DEMO_MODE=true) ── */}
+      {isDemoEnv && (
+        <div className="bg-slate-900/90 border-b border-white/10 px-3 py-2 flex items-center justify-between gap-2 flex-wrap text-xs">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+            <span className="font-bold text-white/80">Demo Simulator:</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => { setDemoMode("on_site"); acquireLocation("on_site"); }}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
+                demoMode === "on_site"
+                  ? "bg-emerald-500 text-black shadow-sm"
+                  : "bg-white/5 text-white/60 hover:text-white"
+              }`}
+            >
+              📍 On-Site (25m)
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDemoMode("out_of_bounds"); acquireLocation("out_of_bounds"); }}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
+                demoMode === "out_of_bounds"
+                  ? "bg-amber-500 text-black shadow-sm"
+                  : "bg-white/5 text-white/60 hover:text-white"
+              }`}
+            >
+              🚶 600m Away
+            </button>
+            <button
+              type="button"
+              onClick={() => { setDemoMode("real"); acquireLocation("real"); }}
+              className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
+                demoMode === "real"
+                  ? "bg-teal-500 text-black shadow-sm"
+                  : "bg-white/5 text-white/60 hover:text-white"
+              }`}
+            >
+              🛰️ Real GPS
+            </button>
+            <Link
+              href={`/dashboard?c=${campaignSlug}`}
+              className="ml-1 sm:ml-2 px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold bg-teal-500/15 hover:bg-teal-500/25 text-teal-300 border border-teal-500/30 transition-all flex items-center gap-1"
+            >
+              📊 Ops Hub
+            </Link>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => { setDemoMode("on_site"); acquireLocation("on_site"); }}
-            className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
-              demoMode === "on_site"
-                ? "bg-emerald-500 text-black shadow-sm"
-                : "bg-white/5 text-white/60 hover:text-white"
-            }`}
-          >
-            📍 On-Site (25m)
-          </button>
-          <button
-            type="button"
-            onClick={() => { setDemoMode("out_of_bounds"); acquireLocation("out_of_bounds"); }}
-            className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
-              demoMode === "out_of_bounds"
-                ? "bg-amber-500 text-black shadow-sm"
-                : "bg-white/5 text-white/60 hover:text-white"
-            }`}
-          >
-            🚶 600m Away
-          </button>
-          <button
-            type="button"
-            onClick={() => { setDemoMode("real"); acquireLocation("real"); }}
-            className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold transition-all ${
-              demoMode === "real"
-                ? "bg-teal-500 text-black shadow-sm"
-                : "bg-white/5 text-white/60 hover:text-white"
-            }`}
-          >
-            🛰️ Real GPS
-          </button>
-          <Link
-            href={`/dashboard?c=${campaignSlug}`}
-            className="ml-1 sm:ml-2 px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold bg-teal-500/15 hover:bg-teal-500/25 text-teal-300 border border-teal-500/30 transition-all flex items-center gap-1"
-          >
-            📊 Ops Hub
-          </Link>
-        </div>
-      </div>
+      )}
 
       {/* ── Main Content Container ── */}
       <main className="max-w-md w-full mx-auto p-4 sm:p-5 flex-1 flex flex-col justify-center">
@@ -550,84 +897,540 @@ function CheckInContent() {
         </div>
 
         {/* ─────────────────────────────────────────────────────────────
-            VIEW A: ACTIVE SHIFT PAD (Already Checked In)
+            VIEW A: SEPARATE "SURVEY" & SHIFT ARCHITECTURE (Checked In)
            ───────────────────────────────────────────────────────────── */}
         {activeShift ? (
           <div className="space-y-4 animate-fadeIn">
-            <div className="p-5 rounded-3xl bg-white/[0.03] border border-teal-500/30 backdrop-blur-xl shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 transform translate-x-4 -translate-y-4 w-28 h-28 bg-teal-500/10 rounded-full blur-2xl pointer-events-none" />
-
-              <div className="flex items-center justify-between pb-3 border-b border-white/10">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-xs font-black uppercase tracking-wider text-emerald-300">
-                    Active Shift
+            {/* Offline Sync Status Bar (Akida Offline Parity) */}
+            {(!isOnline || offlineQueue.length > 0) && (
+              <div className="px-3.5 py-2.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-amber-300 font-bold">
+                  <span className={`w-2 h-2 rounded-full ${isOnline ? "bg-teal-400" : "bg-amber-400 animate-pulse"}`} />
+                  <span>
+                    {!isOnline
+                      ? `Offline Mode · ${offlineQueue.length} queued`
+                      : `${offlineQueue.length} offline survey(s) ready to sync`}
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs font-mono text-white/70">
-                  <Clock className="w-3.5 h-3.5 text-teal-400" />
-                  <span>{shiftElapsed}</span>
-                </div>
+                {isOnline && offlineQueue.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={syncingOffline}
+                    onClick={syncOfflineQueue}
+                    className="px-2.5 py-1 rounded-lg bg-amber-400 text-black font-black text-[10px] uppercase tracking-wider cursor-pointer"
+                  >
+                    {syncingOffline ? "Syncing..." : "Sync Now"}
+                  </button>
+                )}
               </div>
+            )}
 
-              {/* Store & BA Details */}
-              <div className="py-3 space-y-1">
-                <h2 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
-                  {activeShift.storeName}
-                </h2>
-                <div className="flex items-center gap-2 text-xs text-white/60">
-                  <User className="w-3.5 h-3.5 text-white/40" />
-                  <span>{activeShift.baName}</span>
-                  <span>·</span>
-                  <span className="font-mono text-teal-400">{activeShift.storeCode}</span>
+            {/* Compact Active Shift Status Strip */}
+            <div className="px-4 py-3 rounded-2xl bg-white/[0.04] border border-teal-500/30 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`w-2 h-2 rounded-full animate-pulse flex-shrink-0 ${
+                      activeShift.status === "flagged" ? "bg-amber-400" : "bg-emerald-400"
+                    }`}
+                  />
+                  <span className="text-xs font-black text-white truncate">
+                    {activeShift.storeName}
+                  </span>
+                  {activeShift.status === "flagged" && (
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      FLAGGED
+                    </span>
+                  )}
                 </div>
-                <div className="pt-1 flex items-center gap-2 text-[11px] font-mono text-white/50">
-                  <span>Checked In: {new Date(activeShift.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                  <span>·</span>
-                  <span className="text-emerald-400">GPS: {activeShift.distanceMeters}m</span>
-                </div>
-              </div>
-
-              {/* ── Sample / Engagement Counter Pad ── */}
-              <div className="my-4 p-4 rounded-2xl bg-white/[0.02] border border-white/10 text-center space-y-3">
-                <p className="text-xs font-bold uppercase tracking-wider text-white/60">
-                  Samples / Engagements Logged
+                <p className="text-[11px] text-white/50 truncate mt-0.5">
+                  {activeShift.baName} · <span className="text-teal-300 font-mono">{shiftSurveys.length} surveys</span> · <span className="font-mono">{activeShift.samplesLogged ?? 0} total</span>
                 </p>
-                <div className="text-5xl font-black text-white font-mono tracking-tight">
-                  {activeShift.samplesLogged ?? 0}
-                </div>
-                <div className="flex items-center justify-center gap-3 pt-1">
-                  <button
-                    type="button"
-                    disabled={counterLoading || (activeShift.samplesLogged || 0) <= 0}
-                    onClick={() => handleCounterDelta(-1)}
-                    className="w-12 h-12 rounded-2xl bg-white/5 border border-white/15 text-white flex items-center justify-center hover:bg-white/10 transition-all disabled:opacity-30 cursor-pointer"
-                  >
-                    <Minus className="w-5 h-5" />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={counterLoading}
-                    onClick={() => handleCounterDelta(1)}
-                    className="px-6 h-12 rounded-2xl bg-teal-500 hover:bg-teal-400 text-black font-black text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer"
-                  >
-                    <Plus className="w-5 h-5 stroke-[3]" />
-                    <span>Log Sample (+1)</span>
-                  </button>
-                </div>
               </div>
+              <div className="flex items-center gap-1.5 text-xs font-mono text-teal-300 bg-teal-500/10 border border-teal-500/20 px-2.5 py-1 rounded-xl flex-shrink-0">
+                <Clock className="w-3.5 h-3.5" />
+                <span>{shiftElapsed}</span>
+              </div>
+            </div>
 
-              {/* End Shift Button */}
+            {/* 3-Tab Navigation Bar: Survey Form | Submissions | My Shift */}
+            <div className="grid grid-cols-3 gap-1.5 p-1.5 rounded-2xl bg-slate-900/90 border border-white/10">
               <button
                 type="button"
-                disabled={submitting}
-                onClick={handleCheckOutSubmit}
-                className="w-full py-3.5 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                onClick={() => setActiveTab("survey")}
+                className={`py-2.5 px-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === "survey"
+                    ? "bg-teal-500 text-black shadow-md shadow-teal-500/20"
+                    : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
               >
-                <LogOut className="w-4 h-4" />
-                <span>End Shift & Check Out</span>
+                <ClipboardList className="w-3.5 h-3.5" />
+                <span>Survey</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("submissions")}
+                className={`py-2.5 px-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === "submissions"
+                    ? "bg-teal-500 text-black shadow-md shadow-teal-500/20"
+                    : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+                <span>Logs ({shiftSurveys.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab("shift")}
+                className={`py-2.5 px-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  activeTab === "shift"
+                    ? "bg-teal-500 text-black shadow-md shadow-teal-500/20"
+                    : "text-white/60 hover:text-white hover:bg-white/5"
+                }`}
+              >
+                <MapPin className="w-3.5 h-3.5" />
+                <span>My Shift</span>
               </button>
             </div>
+
+            {/* ── TAB 1: DEDICATED CONSUMER / MOTHER SURVEY FORM ── */}
+            {activeTab === "survey" && (
+              <form
+                onSubmit={handleSurveySubmit}
+                className="p-5 rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl space-y-4"
+              >
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
+                  <div>
+                    <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                      Consumer Engagement Survey
+                    </h2>
+                    <p className="text-[11px] text-white/50">
+                      Record each shopper or mother interaction separately
+                    </p>
+                  </div>
+                  {/* Retail vs Hospital Mode Switcher */}
+                  <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-white/10">
+                    <button
+                      type="button"
+                      onClick={() => setSurveyMode("retail")}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        surveyMode === "retail"
+                          ? "bg-teal-500 text-black"
+                          : "text-white/50 hover:text-white"
+                      }`}
+                    >
+                      <ShoppingBag className="w-3 h-3" />
+                      <span>Retail</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSurveyMode("hospital")}
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        surveyMode === "hospital"
+                          ? "bg-teal-500 text-black"
+                          : "text-white/50 hover:text-white"
+                      }`}
+                    >
+                      <HeartPulse className="w-3 h-3" />
+                      <span>Clinic</span>
+                    </button>
+                  </div>
+                </div>
+
+                {surveySuccessMsg && (
+                  <div className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+                    {surveySuccessMsg}
+                  </div>
+                )}
+
+                {surveyErrorMsg && (
+                  <div className="p-3 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-bold">
+                    {surveyErrorMsg}
+                  </div>
+                )}
+
+                {/* Respondent Name & Phone */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                      {surveyMode === "hospital" ? "Mother's Full Name" : "Shopper Name"} <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder={surveyMode === "hospital" ? "e.g. Mrs. Ngozi Eze" : "e.g. Kunle Adeyemi"}
+                      value={respondentName}
+                      onChange={(e) => setRespondentName(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                      Phone Number
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="e.g. 08031234567"
+                      value={respondentPhone}
+                      onChange={(e) => setRespondentPhone(e.target.value)}
+                      className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Mode-Specific Survey Fields */}
+                {surveyMode === "retail" ? (
+                  <div className="space-y-3 pt-1">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                        SKU / Variant Sampled
+                      </label>
+                      <select
+                        value={productSampled}
+                        onChange={(e) => setProductSampled(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none"
+                      >
+                        <option value="Golden Morn Maize & Soya (45g)">Golden Morn Maize & Soya (45g)</option>
+                        <option value="Golden Morn Maize & Soya (300g)">Golden Morn Maize & Soya (300g)</option>
+                        <option value="Golden Morn Puffs">Golden Morn Puffs</option>
+                        <option value="Multi-Grain Variant">Multi-Grain Variant</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1.5">
+                        Taste & Product Feedback
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[
+                          { id: "loved_it", label: "😍 Loved It" },
+                          { id: "good", label: "👍 Good" },
+                          { id: "neutral", label: "😐 Neutral" },
+                          { id: "disliked", label: "👎 Disliked" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setTasteFeedback(opt.id as TasteFeedback)}
+                            className={`py-2 px-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                              tasteFeedback === opt.id
+                                ? "bg-teal-500/20 border-teal-400 text-teal-300"
+                                : "bg-white/5 border-white/10 text-white/60 hover:text-white"
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/10 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold text-white">Purchased on Shelf?</p>
+                        <p className="text-[10px] text-white/50">Did the shopper buy a pack after sampling?</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPurchasedOnShelf(!purchasedOnShelf)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                            purchasedOnShelf
+                              ? "bg-emerald-500 text-black"
+                              : "bg-white/10 text-white/60"
+                          }`}
+                        >
+                          {purchasedOnShelf ? "YES · Bought" : "NO"}
+                        </button>
+                        {purchasedOnShelf && (
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={packsPurchased}
+                            onChange={(e) => setPacksPurchased(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-16 px-2 py-1.5 rounded-xl text-xs font-mono text-center text-white bg-slate-900 border border-emerald-500/40"
+                            title="Number of packs purchased"
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3 pt-1">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMotherStage("nursing")}
+                        className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                          motherStage === "nursing"
+                            ? "bg-teal-500/20 border-teal-400 text-teal-300"
+                            : "bg-white/5 border-white/10 text-white/60"
+                        }`}
+                      >
+                        👶 Nursing Mother
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMotherStage("expectant")}
+                        className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                          motherStage === "expectant"
+                            ? "bg-teal-500/20 border-teal-400 text-teal-300"
+                            : "bg-white/5 border-white/10 text-white/60"
+                        }`}
+                      >
+                        🤰 Expectant (ANC)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                          {motherStage === "expectant" ? "Expected Due Date (EDD)" : "Baby Age / DOB"}
+                        </label>
+                        <input
+                          type="text"
+                          placeholder={motherStage === "expectant" ? "e.g. Dec 2026 / 7 Months" : "e.g. 6 Weeks Old"}
+                          value={dueOrBirthDate}
+                          onChange={(e) => setDueOrBirthDate(e.target.value)}
+                          className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                          Sample Kit Size Issued
+                        </label>
+                        <select
+                          value={diaperSizeIssued}
+                          onChange={(e) => setDiaperSizeIssued(e.target.value as any)}
+                          className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none"
+                        >
+                          <option value="Newborn (Size 1)">Newborn (Size 1)</option>
+                          <option value="Size 2">Size 2 (Mini)</option>
+                          <option value="Size 3">Size 3 (Midi)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                        Current Diaper Brand Used
+                      </label>
+                      <select
+                        value={currentBrandUsed}
+                        onChange={(e) => setCurrentBrandUsed(e.target.value)}
+                        className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none"
+                      >
+                        <option value="Molfix">Molfix</option>
+                        <option value="Pampers">Pampers</option>
+                        <option value="Huggies">Huggies</option>
+                        <option value="Bebem">Bebem</option>
+                        <option value="Kisskids">Kisskids</option>
+                        <option value="First-Time Mother / None">First-Time Mother / None</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Optional Notes / Comments */}
+                <div>
+                  <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                    Consumer Comment / Notes (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Any specific feedback or question..."
+                    value={surveyNotes}
+                    onChange={(e) => setSurveyNotes(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={surveySubmitting || !respondentName.trim()}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-400 to-emerald-400 hover:from-teal-300 hover:to-emerald-300 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-lg shadow-teal-500/20 disabled:opacity-40 cursor-pointer"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>{surveySubmitting ? "Saving Survey..." : "Submit Survey & Next Respondent"}</span>
+                </button>
+              </form>
+            )}
+
+            {/* ── TAB 2: SURVEY SUBMISSIONS LIST (Plus Fast Crowd Tally) ── */}
+            {activeTab === "submissions" && (
+              <div className="p-5 rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                  <div>
+                    <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                      Shift Survey Submissions ({shiftSurveys.length})
+                    </h2>
+                    <p className="text-[11px] text-white/50">
+                      Total samples/engagements today: <span className="text-teal-300 font-mono font-bold">{activeShift.samplesLogged ?? 0}</span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={counterLoading || (activeShift.samplesLogged || 0) <= 0}
+                      onClick={() => handleCounterDelta(-1)}
+                      className="w-8 h-8 rounded-xl bg-white/5 border border-white/15 text-white flex items-center justify-center hover:bg-white/10 disabled:opacity-30 cursor-pointer"
+                      title="Decrement sample count"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={counterLoading}
+                      onClick={() => handleCounterDelta(1)}
+                      className="px-2.5 h-8 rounded-xl bg-teal-500/20 border border-teal-500/40 text-teal-300 font-bold text-[11px] flex items-center gap-1 hover:bg-teal-500/30 cursor-pointer"
+                      title="Quick +1 cup tally without survey"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Quick +1 Cup</span>
+                    </button>
+                  </div>
+                </div>
+
+                {shiftSurveys.length === 0 ? (
+                  <div className="py-10 text-center space-y-2">
+                    <p className="text-xs text-white/40">No detailed surveys submitted in this shift yet.</p>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("survey")}
+                      className="px-4 py-2 rounded-xl bg-teal-500/15 border border-teal-500/30 text-teal-300 text-xs font-bold cursor-pointer"
+                    >
+                      + Start First Survey
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                    {shiftSurveys.map((s) => (
+                      <div
+                        key={s.id}
+                        className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-start justify-between gap-2 text-xs"
+                      >
+                        <div className="space-y-0.5 min-w-0">
+                          <div className="font-bold text-white flex items-center gap-2">
+                            <span className="truncate">{s.respondentName}</span>
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/25 uppercase">
+                              {s.surveyType}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-white/60">
+                            {s.surveyType === "hospital"
+                              ? `${s.motherStage === "expectant" ? "🤰 Expectant" : "👶 Nursing"} · ${s.diaperSizeIssued || "Kit"} · Uses ${s.currentBrandUsed || "N/A"}`
+                              : `${s.productSampled || "Sample"} · ${s.tasteFeedback?.replace("_", " ") || "good"} ${s.purchasedOnShelf ? `· 🛒 Bought (${s.packsPurchased || 1})` : ""}`}
+                          </div>
+                          {s.notes && <p className="text-[10px] text-white/40 italic">"{s.notes}"</p>}
+                        </div>
+                        <span className="text-[10px] font-mono text-white/40 flex-shrink-0">
+                          {new Date(s.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── TAB 3: MY SHIFT & CHECK-OUT DETAILS ── */}
+            {activeTab === "shift" && (
+              <div className="p-5 rounded-3xl bg-white/[0.03] border border-teal-500/30 backdrop-blur-xl shadow-2xl space-y-4">
+                <div className="space-y-1">
+                  <span
+                    className={`text-[10px] font-mono uppercase tracking-wider ${
+                      activeShift.status === "flagged" ? "text-amber-400" : "text-emerald-400"
+                    }`}
+                  >
+                    {activeShift.status === "flagged"
+                      ? "🟡 Flagged for Supervisor Review (Drift / Telemetry)"
+                      : "🟢 Verified Within Store Geofence"}
+                  </span>
+                  <h2 className="text-lg font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
+                    {activeShift.storeName}
+                  </h2>
+                  <div className="flex items-center gap-2 text-xs text-white/60">
+                    <User className="w-3.5 h-3.5 text-white/40" />
+                    <span>{activeShift.baName}</span>
+                    <span>·</span>
+                    <span className="font-mono text-teal-400">{activeShift.storeCode}</span>
+                  </div>
+                  <div className="pt-1 flex items-center gap-2 text-[11px] font-mono text-white/50 flex-wrap">
+                    <span>Checked In: {new Date(activeShift.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                    <span>·</span>
+                    <span className="text-emerald-400">Arrival GPS: {activeShift.distanceMeters}m</span>
+                  </div>
+                </div>
+
+                {/* Live Presence Heartbeat Card */}
+                <div className="p-3 rounded-2xl bg-black/30 border border-white/10 flex items-center justify-between gap-2 text-xs">
+                  <div className="space-y-0.5">
+                    <p className="font-bold text-white flex items-center gap-1.5">
+                      <Navigation className="w-3.5 h-3.5 text-teal-400" />
+                      <span>Shift Presence Breadcrumbs</span>
+                    </p>
+                    <p className="text-[10px] font-mono text-white/50">
+                      {activeShift.inFencePingCount || 1} in-fence pings
+                      {activeShift.lastHeartbeatAt
+                        ? ` · Last: ${new Date(activeShift.lastHeartbeatAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                        : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={heartbeatPinging || !coords}
+                    onClick={() => sendPresenceHeartbeat(true)}
+                    className="px-2.5 py-1.5 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 font-bold text-[10px] font-mono cursor-pointer disabled:opacity-40"
+                  >
+                    {heartbeatPinging ? "Pinging..." : "📍 Ping Presence"}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/10 text-center">
+                    <p className="text-[10px] uppercase font-bold text-white/50">Surveys Completed</p>
+                    <p className="text-2xl font-black text-teal-300 font-mono mt-0.5">{shiftSurveys.length}</p>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-white/[0.02] border border-white/10 text-center">
+                    <p className="text-[10px] uppercase font-bold text-white/50">Total Samples</p>
+                    <p className="text-2xl font-black text-white font-mono mt-0.5">{activeShift.samplesLogged ?? 0}</p>
+                  </div>
+                </div>
+
+                {activeShift.photoUrl && (
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-white/50">
+                        Morning GPS-Stamped Selfie Proof
+                      </p>
+                      {activeShift.photoSha256 && (
+                        <span className="text-[9px] font-mono text-emerald-400">
+                          SHA-256: {activeShift.photoSha256.slice(0, 10)}…
+                        </span>
+                      )}
+                    </div>
+                    <img
+                      src={activeShift.photoUrl}
+                      alt="Morning check-in proof"
+                      className="w-full max-h-48 object-cover rounded-2xl border border-white/15"
+                    />
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={handleCheckOutSubmit}
+                  className="w-full py-3.5 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>End Shift & Check Out</span>
+                </button>
+              </div>
+            )}
           </div>
         ) : (
           /* ─────────────────────────────────────────────────────────────
@@ -657,8 +1460,9 @@ function CheckInContent() {
                     const st = stores.find((s) => (s.storeCode || (s as any).code || s.id || "") === val);
                     setSelectedStore(st || null);
                     setPhotoDataUrl(null); // watermark is location-bound; force a fresh snap
-                    if (st?.baName && !baName) setBaName(st.baName);
-                    if (st?.baPhone && !baPhone) setBaPhone(st.baPhone);
+                    if (st?.baName) setBaName(st.baName);
+                    if (st?.baUsername) setBaUsername(st.baUsername);
+                    if (st?.baPhone) setBaPhone(st.baPhone);
                   }}
                   className="w-full px-3.5 py-3 rounded-2xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none transition-all cursor-pointer"
                 >
@@ -675,7 +1479,36 @@ function CheckInContent() {
                 </select>
               </div>
 
-              {/* 2. BA Identity & PIN */}
+              {/* 2. BA Login Credentials (Username / Staff ID & Password) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    BA Username / Staff ID
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. ifeoluwa or staff ID"
+                    value={baUsername}
+                    onChange={(e) => setBaUsername(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                    Password / Access PIN <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Enter password or PIN"
+                    value={baPin}
+                    onChange={(e) => setBaPin(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono tracking-widest text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* BA Full Name & Phone */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
@@ -692,31 +1525,16 @@ function CheckInContent() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                    Store Access PIN
+                    Phone Number
                   </label>
                   <input
-                    type="text"
-                    maxLength={8}
-                    placeholder="1234"
-                    value={baPin}
-                    onChange={(e) => setBaPin(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono tracking-widest text-amber-300 text-center bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                    type="tel"
+                    placeholder="e.g. 08012345678"
+                    value={baPhone}
+                    onChange={(e) => setBaPhone(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
                   />
                 </div>
-              </div>
-
-              {/* Phone (Optional) */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                  Phone Number (Optional)
-                </label>
-                <input
-                  type="tel"
-                  placeholder="e.g. 08012345678"
-                  value={baPhone}
-                  onChange={(e) => setBaPhone(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                />
               </div>
 
               {/* 3. Live Geofence Status Card */}
@@ -752,7 +1570,7 @@ function CheckInContent() {
                           className="h-48 mb-2"
                           targetLat={selectedStore.lat}
                           targetLng={selectedStore.lng}
-                          radius={selectedStore.geofenceRadius || 100}
+                          radius={activeRadius}
                           targetLabel={selectedStore.name}
                           userLat={coords?.latitude}
                           userLng={coords?.longitude}
@@ -769,22 +1587,6 @@ function CheckInContent() {
                         <span className="text-white/70">±{coords?.accuracy || 10}m</span>
                       </div>
 
-                      {/* Ground-truthing action when testing on real GPS */}
-                      {demoMode === "real" && coords && selectedStore && (
-                        <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[11px]">
-                          <span className="text-white/50">At this location now?</span>
-                          <button
-                            type="button"
-                            disabled={calibratingPin}
-                            onClick={handleCalibratePin}
-                            className="font-mono font-bold text-teal-300 hover:text-white bg-teal-500/15 hover:bg-teal-500/25 px-2.5 py-1 rounded-lg border border-teal-500/30 transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                            title="Lock store pin to your phone's exact GPS coordinates"
-                          >
-                            <span>🎯 {calibratingPin ? "Pinning..." : "Pin Store to My Exact GPS"}</span>
-                          </button>
-                        </div>
-                      )}
-
                       {/* Evaluation Badge */}
                       <div className="pt-1">
                         {geofence.status === "verified" ? (
@@ -800,7 +1602,7 @@ function CheckInContent() {
                         ) : (
                           <div className="p-2 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs font-bold flex items-center gap-2">
                             <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-400" />
-                            <span>🔴 Outside Geofence ({formatDistance(geofence.distance)} away)</span>
+                            <span>🔴 Outside {activeRadius}m Geofence ({formatDistance(geofence.distance)} away)</span>
                           </div>
                         )}
                       </div>
@@ -993,13 +1795,18 @@ function CheckInContent() {
               <button
                 type="submit"
                 id="checkin-submit-btn"
-                disabled={submitting || watermarking || !selectedStore || !baName.trim() || !coords}
+                disabled={submitting || watermarking || !selectedStore || !baName.trim() || !coords || !geofence?.inside}
                 className="w-full py-3.5 rounded-2xl bg-teal-500 hover:bg-teal-400 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl shadow-teal-500/20 disabled:opacity-40 cursor-pointer active:scale-[0.99]"
               >
                 {submitting ? (
                   <>
                     <span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
                     <span>Verifying On-Site Attendance...</span>
+                  </>
+                ) : geofence && !geofence.inside ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>Outside {activeRadius}m Geofence — Move Closer</span>
                   </>
                 ) : !photoDataUrl ? (
                   <>
@@ -1019,8 +1826,16 @@ function CheckInContent() {
       </main>
 
       {/* ── Footer ── */}
-      <footer className="text-center py-4 text-[10px] text-white/30 font-mono">
-        Field Operations Verification Engine · Active Campaign: {campaignSlug}
+      <footer className="text-center py-4 text-[10px] text-white/30 font-mono flex items-center justify-center gap-2 flex-wrap">
+        <span>Field Operations Verification Engine · Active Campaign: {campaignSlug}</span>
+        <span>·</span>
+        <Link href={`/dashboard?c=${campaignSlug}`} className="text-teal-400/70 hover:text-teal-300 underline">
+          Supervisor Ops Hub
+        </Link>
+        <span>·</span>
+        <Link href="/superadmin" className="text-amber-400/70 hover:text-amber-300 underline">
+          Superadmin Console
+        </Link>
       </footer>
     </div>
   );
