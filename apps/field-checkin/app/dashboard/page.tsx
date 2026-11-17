@@ -5,50 +5,70 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ShieldCheck, Smartphone, RefreshCw, LogOut,
-  Building2, Users, Activity, Lock, ArrowUpRight,
+  Lock, ArrowUpRight, User, KeyRound, Eye, EyeOff, Settings,
 } from "lucide-react";
 import type { Campaign } from "@/lib/types";
-import { getCampaign } from "@/lib/repository";
 import FieldDashboard from "@/components/FieldDashboard";
 
 function FieldOpsDashboardContent() {
   const searchParams = useSearchParams();
-  const campaignSlug = searchParams.get("c") || "golden-morn";
+  const campaignSlug = (searchParams.get("c") || "golden-morn").trim().toLowerCase();
 
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Simple supervisor gate
+  // Supervisor Username & Password gate (verified server-side)
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authToken, setAuthToken] = useState<string>("");
+  const [supervisorUsername, setSupervisorUsername] = useState("");
   const [supervisorPin, setSupervisorPin] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
   useEffect(() => {
-    // Check local storage for active session
-    const savedAuth = localStorage.getItem(`field_ops_auth_${campaignSlug}`);
-    if (savedAuth === "true") {
-      setIsAuthenticated(true);
-    }
-
-    async function loadCampaign() {
+    async function initDashboard() {
       setLoading(true);
       setError("");
       try {
-        const data = await getCampaign(campaignSlug);
-        if (data) {
-          setCampaign(data);
+        // 1. Verify existing session cookie / Bearer token against /api/auth
+        const savedToken = localStorage.getItem(`field_ops_token_${campaignSlug}`) || "";
+        const authHeaders: Record<string, string> = {};
+        if (savedToken) {
+          authHeaders["Authorization"] = `Bearer ${savedToken}`;
+        }
+
+        const authRes = await fetch("/api/auth", { headers: authHeaders });
+        if (authRes.ok) {
+          const authData = await authRes.json();
+          const user = authData.user;
+          if (
+            authData.authenticated &&
+            user &&
+            (user.role === "superadmin" ||
+              (user.role === "supervisor" &&
+                user.campaignId?.toLowerCase() === campaignSlug))
+          ) {
+            setIsAuthenticated(true);
+            setAuthToken(savedToken);
+          } else {
+            localStorage.removeItem(`field_ops_token_${campaignSlug}`);
+          }
         } else {
-          // Fallback demo campaign object if slug not found
-          setCampaign({
-            id: campaignSlug,
-            name: "Nestlé Golden Morn Activation",
-            brandName: "Golden Morn",
-            stores: [],
-            primaryColor: "#00BFA6",
-            secondaryColor: "#FF6B35",
-            active: true,
-          });
+          localStorage.removeItem(`field_ops_token_${campaignSlug}`);
+        }
+
+        // 2. Load campaign metadata via API
+        const campRes = await fetch(
+          `/api/campaigns?slug=${encodeURIComponent(campaignSlug)}`,
+          { headers: authHeaders }
+        );
+        if (campRes.ok) {
+          const campData = await campRes.json();
+          if (campData.campaign) {
+            setCampaign(campData.campaign);
+          }
         }
       } catch (err: any) {
         setError(err.message || "Failed to load campaign.");
@@ -57,25 +77,51 @@ function FieldOpsDashboardContent() {
       }
     }
 
-    loadCampaign();
+    initDashboard();
   }, [campaignSlug]);
 
-  function handleLogin(e: React.FormEvent) {
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setAuthError("");
+    setAuthLoading(true);
 
-    const correctPin = ((campaign as any)?.adminPin || "2026").trim();
-    if (supervisorPin.trim() === correctPin || supervisorPin.trim() === "admin" || supervisorPin.trim() === "1234") {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: "supervisor",
+          campaignId: campaignSlug,
+          username: supervisorUsername.trim(),
+          password: supervisorPin.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setAuthError(data.error || "Invalid Supervisor username or password.");
+        return;
+      }
+      if (data.token) {
+        setAuthToken(data.token);
+        localStorage.setItem(`field_ops_token_${campaignSlug}`, data.token);
+      }
       setIsAuthenticated(true);
-      localStorage.setItem(`field_ops_auth_${campaignSlug}`, "true");
-    } else {
-      setAuthError("Invalid Supervisor Access PIN. Please try again.");
+    } catch {
+      setAuthError("Network error while verifying credentials.");
+    } finally {
+      setAuthLoading(false);
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth", { method: "DELETE" });
+    } catch {}
     setIsAuthenticated(false);
+    setAuthToken("");
+    localStorage.removeItem(`field_ops_token_${campaignSlug}`);
     localStorage.removeItem(`field_ops_auth_${campaignSlug}`);
+    setSupervisorUsername("");
     setSupervisorPin("");
   }
 
@@ -107,12 +153,20 @@ function FieldOpsDashboardContent() {
                 </span>
               </div>
               <p className="text-xs text-slate-400 truncate">
-                Brand Ambassador Attendance & Geofenced Timesheets
+                Brand Ambassador Attendance, Live Geofence Map & Flagged Review Queue
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2.5 flex-shrink-0">
+            <Link
+              href="/superadmin"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/25 text-xs font-semibold transition"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Superadmin</span>
+            </Link>
+
             <Link
               href={`/?c=${campaignSlug}`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 text-xs font-semibold transition"
@@ -125,7 +179,7 @@ function FieldOpsDashboardContent() {
             {isAuthenticated && (
               <button
                 onClick={handleLogout}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-semibold transition"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 text-xs font-semibold transition cursor-pointer"
                 title="Log out of supervisor dashboard"
               >
                 <LogOut className="w-3.5 h-3.5" />
@@ -138,6 +192,12 @@ function FieldOpsDashboardContent() {
 
       {/* ── Main Content Area ── */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+        {error && (
+          <div className="mb-4 p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-red-300 text-xs">
+            {error}
+          </div>
+        )}
+
         {!isAuthenticated ? (
           /* ── Supervisor Authentication Gate ── */
           <div className="max-w-md mx-auto my-12 bg-white/[0.03] border border-white/10 backdrop-blur-2xl rounded-2xl p-6 sm:p-8 shadow-2xl">
@@ -147,26 +207,54 @@ function FieldOpsDashboardContent() {
 
             <div className="text-center mb-6">
               <h2 className="text-lg font-black text-white tracking-tight">
-                Supervisor Access
+                Supervisor Sign In
               </h2>
               <p className="text-xs text-slate-400 mt-1">
-                Enter your campaign supervisor PIN to access verified attendance, GPS records, and timesheet exports.
+                Sign in with your campaign supervisor username and password to access verified attendance, live team tracking, and survey exports.
               </p>
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                  Supervisor PIN
+                  Supervisor Username
                 </label>
-                <input
-                  type="password"
-                  value={supervisorPin}
-                  onChange={(e) => setSupervisorPin(e.target.value)}
-                  placeholder="Enter 4-digit PIN"
-                  className="w-full px-4 py-3 bg-black/40 border border-white/15 rounded-xl text-white text-center text-lg tracking-widest font-mono placeholder:text-slate-600 focus:outline-none focus:border-teal-400 transition"
-                  autoFocus
-                />
+                <div className="relative">
+                  <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    required
+                    value={supervisorUsername}
+                    onChange={(e) => setSupervisorUsername(e.target.value)}
+                    placeholder="e.g. supervisor or goldenmorn"
+                    className="w-full pl-10 pr-4 py-3 bg-black/40 border border-white/15 rounded-xl text-white text-xs focus:outline-none focus:border-teal-400 transition"
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                  Password
+                </label>
+                <div className="relative">
+                  <KeyRound className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    required
+                    value={supervisorPin}
+                    onChange={(e) => setSupervisorPin(e.target.value)}
+                    placeholder="Enter password"
+                    className="w-full pl-10 pr-10 py-3 bg-black/40 border border-white/15 rounded-xl text-white text-xs focus:outline-none focus:border-teal-400 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
 
               {authError && (
@@ -177,20 +265,11 @@ function FieldOpsDashboardContent() {
 
               <button
                 type="submit"
-                className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 shadow-lg shadow-teal-500/20 transition active:scale-[0.98]"
+                disabled={authLoading}
+                className="w-full py-3 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 shadow-lg shadow-teal-500/20 transition active:scale-[0.98] disabled:opacity-50 cursor-pointer"
               >
-                Access Field Dashboard
+                {authLoading ? "Signing In..." : "Sign In to Field Dashboard"}
               </button>
-
-              <div className="pt-2 text-center">
-                <button
-                  type="button"
-                  onClick={() => setIsAuthenticated(true)}
-                  className="text-xs text-slate-500 hover:text-slate-300 underline"
-                >
-                  Quick Demo Preview Mode
-                </button>
-              </div>
             </form>
           </div>
         ) : (
@@ -199,6 +278,7 @@ function FieldOpsDashboardContent() {
             <FieldDashboard
               campaign={campaign}
               campaignSlug={campaignSlug}
+              authToken={authToken}
               onUpdateCampaign={(up) => setCampaign(up)}
             />
           )

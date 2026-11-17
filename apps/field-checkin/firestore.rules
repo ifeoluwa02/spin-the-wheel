@@ -2,29 +2,359 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: campaigns
+    // Document ID: {campaignId} (slug, e.g., "golden-morn")
+    // Fields:
+    //   - id: string (optional, <= 100 chars) - campaign identifier
+    //   - name: string (required, 1..200 chars) - campaign display name
+    //   - brandName: string (optional, <= 200 chars) - brand name
+    //   - activationType: string (optional, 'retail' | 'hospital')
+    //   - stores: list (optional, <= 500 items) - array of store configurations
+    //   - primaryColor: string (optional, <= 30 chars)
+    //   - secondaryColor: string (optional, <= 30 chars)
+    //   - backgroundColor: string (optional, <= 30 chars)
+    //   - active: bool (optional)
+    //   - createdAt: number (optional)
+    //   - updatedAt: number (optional)
+    //
+    // Collection: checkins
+    // Document ID: {checkInId} (auto-generated)
+    // Fields:
+    //   - campaignId: string (required, immutable, 1..100 chars)
+    //   - storeCode: string (required, immutable, 1..100 chars)
+    //   - storeName: string (required, immutable, 1..200 chars)
+    //   - baName: string (required, immutable, 1..200 chars)
+    //   - baPhone: string (optional, <= 50 chars)
+    //   - baUsername: string (optional, <= 100 chars)
+    //   - shiftDate: string (required, immutable, size 10, YYYY-MM-DD)
+    //   - checkInTime: string (required, immutable, 1..50 chars)
+    //   - checkInLat: number (required, immutable, -90..90)
+    //   - checkInLng: number (required, immutable, -180..180)
+    //   - checkInAccuracy: number (optional, >= 0)
+    //   - targetLat: number (required, immutable, -90..90)
+    //   - targetLng: number (required, immutable, -180..180)
+    //   - distanceMeters: number (required, immutable, >= 0)
+    //   - status: string (required, 'verified' | 'flagged' on create, 'checked_out' on checkout, 'rejected' on review)
+    //   - photoUrl: string (optional, <= 950000 chars)
+    //   - photoSha256: string (optional, immutable, <= 128 chars)
+    //   - isSimulated: bool (optional)
+    //   - spoofRisk: string (optional, 'low' | 'medium' | 'high')
+    //   - spoofReasons: list (optional, <= 25 items)
+    //   - deviceId: string (optional, <= 120 chars)
+    //   - breadcrumbs: list (optional, <= 60 items)
+    //   - lastHeartbeatAt: number (optional, >= 0)
+    //   - lastLat: number (optional, -90..90)
+    //   - lastLng: number (optional, -180..180)
+    //   - lastDistanceMeters: number (optional, >= 0)
+    //   - inFencePingCount: number (optional, >= 0)
+    //   - outOfFencePingCount: number (optional, >= 0)
+    //   - samplesLogged: number (required, 0 on create, incremented/decremented by 1)
+    //   - notes: string (optional, <= 2000 chars)
+    //   - checkOutTime: string (optional, 1..50 chars)
+    //   - checkOutLat: number (optional, -90..90)
+    //   - checkOutLng: number (optional, -180..180)
+    //   - checkOutAccuracy: number (optional, >= 0)
+    //   - checkOutDistanceMeters: number (optional, >= 0)
+    //   - checkOutInsideFence: bool (optional)
+    //   - hoursWorked: number (optional, >= 0)
+    //   - reviewStatus: string (optional, 'approved' | 'rejected')
+    //   - reviewedBy: string (optional, <= 120 chars)
+    //   - reviewedAt: number (optional, > 0)
+    //   - reviewNote: string (optional, <= 1000 chars)
+    //   - createdAt: number (required, immutable, > 0)
+    //   - updatedAt: number (required, > 0)
+    //
+    // Collection: surveys
+    // Document ID: {surveyId} (auto-generated, immutable)
+    // Fields:
+    //   - campaignId: string (required, 1..100 chars)
+    //   - checkInId: string (required, 1..100 chars)
+    //   - storeCode: string (required, 1..100 chars)
+    //   - storeName: string (required, <= 200 chars)
+    //   - baName: string (required, <= 200 chars)
+    //   - shiftDate: string (required, size 10, YYYY-MM-DD)
+    //   - surveyType: string (required, 'retail' | 'hospital')
+    //   - respondentName: string (required, 1..150 chars)
+    //   - respondentPhone: string (optional, <= 50 chars)
+    //   - productSampled: string (optional, <= 200 chars)
+    //   - tasteFeedback: string (optional, 'loved_it' | 'good' | 'neutral' | 'disliked')
+    //   - purchasedOnShelf: bool (optional)
+    //   - packsPurchased: number (optional, >= 0)
+    //   - motherStage: string (optional, 'expectant' | 'nursing')
+    //   - dueOrBirthDate: string (optional, <= 50 chars)
+    //   - diaperSizeIssued: string (optional, <= 50 chars)
+    //   - currentBrandUsed: string (optional, <= 150 chars)
+    //   - notes: string (optional, <= 2000 chars)
+    //   - lat: number (optional, -90..90)
+    //   - lng: number (optional, -180..180)
+    //   - accuracy: number (optional, >= 0)
+    //   - distanceMeters: number (optional, >= 0)
+    //   - createdAt: number (required, > 0)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions & Domain Validators
+    // ===============================================================
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidLat(val) {
+      return val is number && val >= -90 && val <= 90;
+    }
+
+    function isValidLng(val) {
+      return val is number && val >= -180 && val <= 180;
+    }
+
+    function isValidShiftDate(val) {
+      return val is string && val.size() == 10 && val.matches("^\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    function isValidCampaign(data) {
+      return data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 200
+        && (!('id' in data) || (data.id is string && data.id.size() <= 100))
+        && (!('brandName' in data) || (data.brandName is string && data.brandName.size() <= 200))
+        && (!('activationType' in data) || (data.activationType in ['retail', 'hospital']))
+        && (!('stores' in data) || (data.stores is list && data.stores.size() <= 500))
+        && (!('active' in data) || (data.active is bool))
+        && (!('primaryColor' in data) || (data.primaryColor is string && data.primaryColor.size() <= 30))
+        && (!('secondaryColor' in data) || (data.secondaryColor is string && data.secondaryColor.size() <= 30))
+        && (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 30))
+        && (!('adminUsername' in data) || (data.adminUsername is string && data.adminUsername.size() <= 100))
+        && (!('adminPassword' in data) || (data.adminPassword is string && data.adminPassword.size() <= 200))
+        && (!('adminPin' in data) || (data.adminPin is string && data.adminPin.size() <= 200))
+        && (!('createdAt' in data) || (data.createdAt is number && data.createdAt >= 0))
+        && (!('updatedAt' in data) || (data.updatedAt is number && data.updatedAt >= 0));
+    }
+
+    function isValidCheckInCreate(data) {
+      return hasRequiredFields([
+          'campaignId',
+          'storeCode',
+          'storeName',
+          'baName',
+          'shiftDate',
+          'checkInTime',
+          'checkInLat',
+          'checkInLng',
+          'targetLat',
+          'targetLng',
+          'distanceMeters',
+          'status',
+          'samplesLogged',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.campaignId is string && data.campaignId.size() >= 1 && data.campaignId.size() <= 100
+        && data.storeCode is string && data.storeCode.size() >= 1 && data.storeCode.size() <= 100
+        && data.storeName is string && data.storeName.size() >= 1 && data.storeName.size() <= 200
+        && data.baName is string && data.baName.size() >= 1 && data.baName.size() <= 200
+        && isValidShiftDate(data.shiftDate)
+        && data.checkInTime is string && data.checkInTime.size() >= 1 && data.checkInTime.size() <= 50
+        && isValidLat(data.checkInLat) && isValidLng(data.checkInLng)
+        && isValidLat(data.targetLat) && isValidLng(data.targetLng)
+        && data.distanceMeters is number && data.distanceMeters >= 0
+        && data.status in ['verified', 'flagged']
+        && data.samplesLogged is number && data.samplesLogged == 0
+        && data.createdAt is number && data.createdAt > 0
+        && data.updatedAt is number && data.updatedAt > 0
+        && (!('baPhone' in data) || (data.baPhone is string && data.baPhone.size() <= 50))
+        && (!('baUsername' in data) || (data.baUsername is string && data.baUsername.size() <= 100))
+        && (!('checkInAccuracy' in data) || (data.checkInAccuracy is number && data.checkInAccuracy >= 0))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 950000))
+        && (!('photoSha256' in data) || (data.photoSha256 is string && data.photoSha256.size() <= 128))
+        && (!('isSimulated' in data) || (data.isSimulated is bool))
+        && (!('spoofRisk' in data) || (data.spoofRisk in ['low', 'medium', 'high']))
+        && (!('spoofReasons' in data) || (data.spoofReasons is list && data.spoofReasons.size() <= 25))
+        && (!('deviceId' in data) || (data.deviceId is string && data.deviceId.size() <= 120))
+        && (!('breadcrumbs' in data) || (data.breadcrumbs is list && data.breadcrumbs.size() <= 60))
+        && (!('lastHeartbeatAt' in data) || (data.lastHeartbeatAt is number && data.lastHeartbeatAt >= 0))
+        && (!('lastLat' in data) || isValidLat(data.lastLat))
+        && (!('lastLng' in data) || isValidLng(data.lastLng))
+        && (!('lastDistanceMeters' in data) || (data.lastDistanceMeters is number && data.lastDistanceMeters >= 0))
+        && (!('inFencePingCount' in data) || (data.inFencePingCount is number && data.inFencePingCount >= 0))
+        && (!('outOfFencePingCount' in data) || (data.outOfFencePingCount is number && data.outOfFencePingCount >= 0));
+    }
+
+    function isCheckInCoreImmutable() {
+      return areImmutableFieldsUnchanged([
+        'campaignId',
+        'storeCode',
+        'storeName',
+        'baName',
+        'shiftDate',
+        'checkInTime',
+        'checkInLat',
+        'checkInLng',
+        'targetLat',
+        'targetLng',
+        'distanceMeters',
+        'createdAt',
+        'photoSha256'
+      ]);
+    }
+
+    function isValidSampleCounterUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['samplesLogged', 'updatedAt'])
+        && request.resource.data.samplesLogged is number
+        && request.resource.data.samplesLogged >= 0
+        && request.resource.data.updatedAt is number
+        && (
+          request.resource.data.samplesLogged == resource.data.samplesLogged + 1
+          || request.resource.data.samplesLogged == resource.data.samplesLogged - 1
+        );
+    }
+
+    function isValidCheckOutUpdate() {
+      return resource.data.status != 'checked_out'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'checkOutTime',
+          'status',
+          'hoursWorked',
+          'updatedAt',
+          'checkOutLat',
+          'checkOutLng',
+          'checkOutAccuracy',
+          'checkOutDistanceMeters',
+          'checkOutInsideFence',
+          'notes'
+        ])
+        && request.resource.data.status == 'checked_out'
+        && request.resource.data.checkOutTime is string
+        && request.resource.data.checkOutTime.size() >= 1
+        && request.resource.data.checkOutTime.size() <= 50
+        && request.resource.data.hoursWorked is number
+        && request.resource.data.hoursWorked >= 0
+        && request.resource.data.updatedAt is number
+        && (!('checkOutLat' in request.resource.data) || isValidLat(request.resource.data.checkOutLat))
+        && (!('checkOutLng' in request.resource.data) || isValidLng(request.resource.data.checkOutLng))
+        && (!('checkOutAccuracy' in request.resource.data) || (request.resource.data.checkOutAccuracy is number && request.resource.data.checkOutAccuracy >= 0))
+        && (!('checkOutDistanceMeters' in request.resource.data) || (request.resource.data.checkOutDistanceMeters is number && request.resource.data.checkOutDistanceMeters >= 0))
+        && (!('checkOutInsideFence' in request.resource.data) || (request.resource.data.checkOutInsideFence is bool))
+        && (!('notes' in request.resource.data) || (request.resource.data.notes is string && request.resource.data.notes.size() <= 2000));
+    }
+
+    function isValidHeartbeatUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastHeartbeatAt',
+          'lastLat',
+          'lastLng',
+          'lastDistanceMeters',
+          'inFencePingCount',
+          'outOfFencePingCount',
+          'breadcrumbs',
+          'status',
+          'updatedAt'
+        ])
+        && request.resource.data.updatedAt is number
+        && (!('lastHeartbeatAt' in request.resource.data) || (request.resource.data.lastHeartbeatAt is number && request.resource.data.lastHeartbeatAt >= 0))
+        && (!('lastLat' in request.resource.data) || isValidLat(request.resource.data.lastLat))
+        && (!('lastLng' in request.resource.data) || isValidLng(request.resource.data.lastLng))
+        && (!('lastDistanceMeters' in request.resource.data) || (request.resource.data.lastDistanceMeters is number && request.resource.data.lastDistanceMeters >= 0))
+        && (!('inFencePingCount' in request.resource.data) || (request.resource.data.inFencePingCount is number && request.resource.data.inFencePingCount >= 0))
+        && (!('outOfFencePingCount' in request.resource.data) || (request.resource.data.outOfFencePingCount is number && request.resource.data.outOfFencePingCount >= 0))
+        && (!('breadcrumbs' in request.resource.data) || (request.resource.data.breadcrumbs is list && request.resource.data.breadcrumbs.size() <= 60))
+        && (!('status' in request.resource.data) || (request.resource.data.status in ['verified', 'flagged', 'checked_out']));
+    }
+
+    function isValidSupervisorReviewUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'reviewStatus',
+          'reviewedBy',
+          'reviewedAt',
+          'reviewNote',
+          'updatedAt'
+        ])
+        && request.resource.data.status in ['verified', 'flagged', 'rejected', 'checked_out']
+        && request.resource.data.reviewStatus in ['approved', 'rejected']
+        && request.resource.data.reviewedBy is string && request.resource.data.reviewedBy.size() <= 120
+        && request.resource.data.reviewedAt is number && request.resource.data.reviewedAt > 0
+        && (!('reviewNote' in request.resource.data) || (request.resource.data.reviewNote is string && request.resource.data.reviewNote.size() <= 1000))
+        && request.resource.data.updatedAt is number;
+    }
+
+    function isValidSurveyCreate(data) {
+      return hasRequiredFields([
+          'campaignId',
+          'checkInId',
+          'storeCode',
+          'storeName',
+          'baName',
+          'shiftDate',
+          'surveyType',
+          'respondentName',
+          'createdAt'
+        ])
+        && data.campaignId is string && data.campaignId.size() >= 1 && data.campaignId.size() <= 100
+        && data.checkInId is string && data.checkInId.size() >= 1 && data.checkInId.size() <= 100
+        && data.storeCode is string && data.storeCode.size() >= 1 && data.storeCode.size() <= 100
+        && data.storeName is string && data.storeName.size() <= 200
+        && data.baName is string && data.baName.size() <= 200
+        && isValidShiftDate(data.shiftDate)
+        && data.surveyType in ['retail', 'hospital']
+        && data.respondentName is string && data.respondentName.size() >= 1 && data.respondentName.size() <= 150
+        && data.createdAt is number && data.createdAt > 0
+        && (!('respondentPhone' in data) || (data.respondentPhone is string && data.respondentPhone.size() <= 50))
+        && (!('productSampled' in data) || (data.productSampled is string && data.productSampled.size() <= 200))
+        && (!('tasteFeedback' in data) || (data.tasteFeedback in ['loved_it', 'good', 'neutral', 'disliked']))
+        && (!('purchasedOnShelf' in data) || (data.purchasedOnShelf is bool))
+        && (!('packsPurchased' in data) || (data.packsPurchased is number && data.packsPurchased >= 0))
+        && (!('motherStage' in data) || (data.motherStage in ['expectant', 'nursing']))
+        && (!('dueOrBirthDate' in data) || (data.dueOrBirthDate is string && data.dueOrBirthDate.size() <= 50))
+        && (!('diaperSizeIssued' in data) || (data.diaperSizeIssued is string && data.diaperSizeIssued.size() <= 50))
+        && (!('currentBrandUsed' in data) || (data.currentBrandUsed is string && data.currentBrandUsed.size() <= 150))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000))
+        && (!('lat' in data) || isValidLat(data.lat))
+        && (!('lng' in data) || isValidLng(data.lng))
+        && (!('accuracy' in data) || (data.accuracy is number && data.accuracy >= 0))
+        && (!('distanceMeters' in data) || (data.distanceMeters is number && data.distanceMeters >= 0));
+    }
+
     // ── Field Campaigns & Store Configurations ──
     match /campaigns/{campaignId} {
-      // Anyone with the app can read campaign metadata & store geofence targets
       allow read: if true;
-      // Campaign creation & store updates restricted to supervisor/admin sessions
-      allow create, update, delete: if true; // Enforced via API route validation
+      allow create, update: if isValidCampaign(request.resource.data);
+      allow delete: if false;
     }
 
     // ── Check-In & Attendance Records ──
     match /checkins/{checkInId} {
-      // Read allowed for dashboard queries filtered by campaignId & shiftDate
       allow read: if true;
+      allow create: if isValidCheckInCreate(request.resource.data);
+      allow update: if isCheckInCoreImmutable()
+                    && (
+                      isValidSampleCounterUpdate()
+                      || isValidCheckOutUpdate()
+                      || isValidHeartbeatUpdate()
+                      || isValidSupervisorReviewUpdate()
+                    );
+      allow delete: if false;
+    }
 
-      // Create allowed for Brand Ambassadors clocking in
-      allow create: if request.resource.data.campaignId is string
-                    && request.resource.data.storeCode is string
-                    && request.resource.data.baName is string
-                    && request.resource.data.checkInLat is number
-                    && request.resource.data.checkInLng is number;
+    // ── Consumer & Hospital Survey Submissions ──
+    match /surveys/{surveyId} {
+      allow read: if true;
+      allow create: if isValidSurveyCreate(request.resource.data);
+      allow update, delete: if false;
+    }
 
-      // Update allowed for clocking out or logging sample counts
-      allow update: if true;
-      allow delete: if false; // Audit logs must not be deleted
+    // ── Default Deny ──
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
