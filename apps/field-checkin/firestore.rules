@@ -137,6 +137,7 @@ service cloud.firestore {
         && (!('stores' in data) || (data.stores is list && data.stores.size() <= 500))
         && (!('surveyQuestions' in data) || (data.surveyQuestions is list && data.surveyQuestions.size() <= 30))
         && (!('active' in data) || (data.active is bool))
+        && (!('geofenceEnabled' in data) || (data.geofenceEnabled is bool))
         && (!('primaryColor' in data) || (data.primaryColor is string && data.primaryColor.size() <= 30))
         && (!('secondaryColor' in data) || (data.secondaryColor is string && data.secondaryColor.size() <= 30))
         && (!('backgroundColor' in data) || (data.backgroundColor is string && data.backgroundColor.size() <= 30))

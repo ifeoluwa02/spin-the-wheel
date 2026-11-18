@@ -38,6 +38,7 @@ export default function SuperAdminPage() {
   const [newBrand, setNewBrand] = useState("");
   const [newSlug, setNewSlug] = useState("");
   const [newType, setNewType] = useState<SurveyType>("retail");
+  const [newGeofenceEnabled, setNewGeofenceEnabled] = useState(true);
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPass, setNewAdminPass] = useState("");
   const [seedStarter, setSeedStarter] = useState(false);
@@ -184,6 +185,7 @@ export default function SuperAdminPage() {
           name: newName.trim(),
           brandName: newBrand.trim() || newName.trim(),
           activationType: newType,
+          geofenceEnabled: newGeofenceEnabled,
           adminUsername: newAdminUser.trim() || `${slug.split("-")[0]}_admin`,
           adminPassword: newAdminPass.trim() || "2026",
           adminPin: newAdminPass.trim() || "2026",
@@ -205,11 +207,37 @@ export default function SuperAdminPage() {
       setNewSlug("");
       setNewAdminUser("");
       setNewAdminPass("");
+      setNewGeofenceEnabled(true);
       setSeedStarter(false);
     } catch {
       setCreateError("Network error while creating brand event.");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleToggleCampaignGeofence(c: Campaign) {
+    const nextEnabled = c.geofenceEnabled === false ? true : false;
+    try {
+      const res = await fetch("/api/campaigns", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          ...c,
+          geofenceEnabled: nextEnabled,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCampaigns((prev) =>
+          prev.map((item) => (item.id === data.campaign.id ? data.campaign : item))
+        );
+        if (managingCampaign?.id === data.campaign.id) {
+          setManagingCampaign(data.campaign);
+        }
+      }
+    } catch (err) {
+      console.error("Toggle geofence error:", err);
     }
   }
 
@@ -562,6 +590,23 @@ export default function SuperAdminPage() {
                             <span className="font-mono font-bold text-white">{storeCount} venues</span>
                           </div>
                           <div className="flex items-center justify-between">
+                            <span className="text-white/50">Geofence Rule:</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCampaignGeofence(c)}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold border transition cursor-pointer ${
+                                c.geofenceEnabled !== false
+                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25"
+                                  : "bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25"
+                              }`}
+                              title="Click to toggle GPS Geofence requirement ON or OFF for this event"
+                            >
+                              {c.geofenceEnabled !== false
+                                ? "📍 ON (200m Fence)"
+                                : "⚡ OFF (Direct Check-In)"}
+                            </button>
+                          </div>
+                          <div className="flex items-center justify-between">
                             <span className="text-white/50">Supervisor User:</span>
                             <span className="font-mono text-amber-300">{c.adminUsername || "supervisor"}</span>
                           </div>
@@ -779,15 +824,27 @@ export default function SuperAdminPage() {
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-white/70 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={seedStarter}
-                  onChange={(e) => setSeedStarter(e.target.checked)}
-                  className="rounded border-white/20"
-                />
-                <span>Pre-load starter demo locations (can be edited or deleted anytime)</span>
-              </label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-xs text-white/85 font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newGeofenceEnabled}
+                    onChange={(e) => setNewGeofenceEnabled(e.target.checked)}
+                    className="rounded border-white/20 accent-teal-400"
+                  />
+                  <span>Enable GPS Geofence Verification (Require BAs to be on-site within radius)</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs text-white/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={seedStarter}
+                    onChange={(e) => setSeedStarter(e.target.checked)}
+                    className="rounded border-white/20 accent-teal-400"
+                  />
+                  <span>Pre-load starter demo locations (can be edited or deleted anytime)</span>
+                </label>
+              </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button

@@ -47,6 +47,7 @@ export interface Campaign {
   name: string;
   brandName?: string;
   activationType?: SurveyType;
+  geofenceEnabled?: boolean;
   adminUsername?: string;
   adminPassword?: string;
   adminPin?: string;

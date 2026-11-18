@@ -109,6 +109,7 @@ export async function POST(request: NextRequest) {
       name,
       brandName,
       activationType,
+      geofenceEnabled,
       adminUsername,
       adminPassword,
       adminPin,
@@ -151,6 +152,11 @@ export async function POST(request: NextRequest) {
     }
 
     const existing = await getCampaign(slug);
+    const resolvedGeofenceEnabled =
+      typeof geofenceEnabled === "boolean"
+        ? geofenceEnabled
+        : existing?.geofenceEnabled !== false;
+
     const rawStores: StoreLocation[] = Array.isArray(stores)
       ? stores
       : existing?.stores || (seedDefaultStores ? DEFAULT_DEMO_STORES : []);
@@ -158,15 +164,20 @@ export async function POST(request: NextRequest) {
     // Validate & normalize stores (coordinates, radius bounds, hashed credentials)
     const validatedStores: StoreLocation[] = [];
     for (const s of rawStores) {
-      const lat = Number(s.lat);
-      const lng = Number(s.lng);
+      let lat = Number(s.lat);
+      let lng = Number(s.lng);
       if (!isValidCoordinates(lat, lng)) {
-        return NextResponse.json(
-          {
-            error: `Invalid GPS coordinates for venue "${s.name || s.storeCode}". Please provide valid latitude and longitude.`,
-          },
-          { status: 400 }
-        );
+        if (!resolvedGeofenceEnabled) {
+          lat = 6.5244;
+          lng = 3.3792;
+        } else {
+          return NextResponse.json(
+            {
+              error: `Invalid GPS coordinates for venue "${s.name || s.storeCode}". Please provide valid latitude and longitude.`,
+            },
+            { status: 400 }
+          );
+        }
       }
 
       const clampedRadius = Math.min(
@@ -221,6 +232,7 @@ export async function POST(request: NextRequest) {
       name: String(name).trim().slice(0, 150),
       brandName: String(brandName || name).trim().slice(0, 120),
       activationType: resolvedActivationType,
+      geofenceEnabled: resolvedGeofenceEnabled,
       adminUsername: String(
         adminUsername || existing?.adminUsername || `${slug.split("-")[0]}_admin`
       )
