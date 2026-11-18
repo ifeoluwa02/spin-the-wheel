@@ -9,7 +9,8 @@ import {
   Smartphone, Award, User, Phone, LogOut, Plus, Minus,
   ClipboardList, ListChecks, Send, ShoppingBag, HeartPulse,
 } from "lucide-react";
-import type { Campaign, StoreLocation, CheckInRecord, GeoPoint, SurveyRecord, SurveyType, TasteFeedback } from "@/lib/types";
+import type { Campaign, StoreLocation, CheckInRecord, GeoPoint, SurveyRecord, SurveyType, TasteFeedback, SurveyQuestion } from "@/lib/types";
+import { DEFAULT_HOSPITAL_QUESTIONS } from "@/lib/survey-templates";
 import { evaluateGeofence, formatDistance } from "@/lib/geo";
 import { drawGpsWatermark } from "@/lib/watermark";
 import GeofenceMap from "@/components/GeofenceMap";
@@ -64,6 +65,11 @@ function CheckInContent() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
 
+  // BA Sign-In Gate state (Step 1: Sign In -> Step 2: Geofenced Check-In -> Step 3: Survey -> Check-Out)
+  const [baAuthenticated, setBaAuthenticated] = useState(false);
+  const [baSignInLoading, setBaSignInLoading] = useState(false);
+  const [baSignInError, setBaSignInError] = useState("");
+
   // Active shift state (persisted to localStorage + validated against server)
   const [activeShift, setActiveShift] = useState<CheckInRecord | null>(null);
   const [shiftToken, setShiftToken] = useState<string>("");
@@ -97,6 +103,10 @@ function CheckInContent() {
   const [dueOrBirthDate, setDueOrBirthDate] = useState("");
   const [diaperSizeIssued, setDiaperSizeIssued] = useState<"Newborn (Size 1)" | "Size 2" | "Size 3">("Newborn (Size 1)");
   const [currentBrandUsed, setCurrentBrandUsed] = useState("Molfix");
+  const [clinicType, setClinicType] = useState("ANC");
+  const [hospitalName, setHospitalName] = useState("");
+  const [marketingConsent, setMarketingConsent] = useState<boolean | null>(null);
+  const [customAnswers, setCustomAnswers] = useState<Record<string, string>>({});
   const [surveyNotes, setSurveyNotes] = useState("");
   const [surveySubmitting, setSurveySubmitting] = useState(false);
   const [surveySuccessMsg, setSurveySuccessMsg] = useState("");
@@ -126,6 +136,44 @@ function CheckInContent() {
         const cachedToken = localStorage.getItem(`active_shift_token_${campaignSlug}`) || "";
         if (cachedToken) setShiftToken(cachedToken);
 
+        // Verify existing BA session cookie / token
+        let verifiedBaStoreCode = "";
+        try {
+          const authRes = await fetch("/api/auth?role=ba", {
+            headers: cachedToken ? { Authorization: `Bearer ${cachedToken}` } : {},
+          });
+          if (authRes.ok) {
+            const authJson = await authRes.json();
+            const u = authJson.user;
+            if (
+              authJson.authenticated &&
+              u?.role === "ba" &&
+              u?.campaignId?.toLowerCase() === campaignSlug.toLowerCase()
+            ) {
+              setBaAuthenticated(true);
+              verifiedBaStoreCode = String(u.storeCode || "").toLowerCase();
+              setBaName(u.baName || u.username || "BA");
+              if (u.username) setBaUsername(u.username);
+              if (u.storeCode && data?.stores) {
+                const matchedStore = data.stores.find(
+                  (s) =>
+                    (s.storeCode || (s as any).code || s.id || "").toLowerCase() ===
+                      verifiedBaStoreCode ||
+                    (s.baUsername || "").toLowerCase() === String(u.username || "").toLowerCase()
+                );
+                if (matchedStore) {
+                  setSelectedStore(matchedStore);
+                  if (matchedStore.baName && !u.baName) setBaName(matchedStore.baName);
+                  if (matchedStore.baPhone) setBaPhone(matchedStore.baPhone);
+                }
+              }
+            }
+          } else {
+            localStorage.removeItem(`active_shift_token_${campaignSlug}`);
+            setShiftToken("");
+          }
+        } catch {}
+
         const cachedQueue = localStorage.getItem(`offline_queue_${campaignSlug}`);
         if (cachedQueue) {
           try {
@@ -133,12 +181,16 @@ function CheckInContent() {
           } catch {}
         }
 
-        // Check if BA already has an active shift saved locally
+        // Check if BA already has an active shift saved locally (must match signed-in store)
         const cached = localStorage.getItem(`active_shift_${campaignSlug}`);
-        if (cached) {
+        if (cached && verifiedBaStoreCode) {
           try {
             const parsed = JSON.parse(cached) as CheckInRecord;
-            setActiveShift(parsed);
+            if ((parsed.storeCode || "").toLowerCase() === verifiedBaStoreCode) {
+              setActiveShift(parsed);
+            } else {
+              localStorage.removeItem(`active_shift_${campaignSlug}`);
+            }
           } catch {}
         }
       } catch (err) {
@@ -245,7 +297,8 @@ function CheckInContent() {
     async function loadShiftSurveys() {
       try {
         const res = await fetch(
-          `/api/checkin?campaignId=${encodeURIComponent(campaignSlug)}&checkInId=${encodeURIComponent(activeShift!.id)}`
+          `/api/checkin?campaignId=${encodeURIComponent(campaignSlug)}&checkInId=${encodeURIComponent(activeShift!.id)}`,
+          { headers: shiftToken ? { Authorization: `Bearer ${shiftToken}` } : {} }
         );
         const data = await res.json();
         if (res.ok && data.success) {
@@ -270,10 +323,79 @@ function CheckInContent() {
     loadShiftSurveys();
   }, [activeShift?.id, campaignSlug]);
 
+  // Active configured questions: campaign-level custom questions, or default Hospital (ANC/IMC + Consent) when in hospital mode
+  const activeQuestions: SurveyQuestion[] | null =
+    campaign?.surveyQuestions && campaign.surveyQuestions.length > 0
+      ? campaign.surveyQuestions
+      : surveyMode === "hospital"
+      ? DEFAULT_HOSPITAL_QUESTIONS
+      : null;
+
+  // Initialize auto-filled defaults when activeShift or activeQuestions change
+  useEffect(() => {
+    if (!activeShift) return;
+    if (!hospitalName) {
+      setHospitalName(activeShift.storeName || "");
+    }
+    if (activeQuestions) {
+      setCustomAnswers((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const q of activeQuestions) {
+          if (q.autoFillStoreName && !next[q.id]) {
+            next[q.id] = activeShift.storeName || "";
+            changed = true;
+          } else if (q.type === "select" && q.options?.length && !next[q.id]) {
+            next[q.id] = q.options[0];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeShift?.id, campaign?.id, surveyMode]);
+
   // ── Submit Consumer / Mother Survey (With Auto Geotagging & Offline Queue Fallback) ──
   async function handleSurveySubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!activeShift || !respondentName.trim()) return;
+    if (!activeShift) return;
+
+    // Extract name/phone/clinic/hospital/consent cleanly from either customQuestions or standard fields
+    let resolvedName = respondentName.trim();
+    let resolvedPhone = respondentPhone.trim();
+    let resolvedClinic = clinicType;
+    let resolvedHospital = hospitalName.trim() || activeShift.storeName;
+    let resolvedConsent = marketingConsent;
+    let resolvedConsentLabel: string | undefined;
+
+    if (activeQuestions) {
+      const nameQ = activeQuestions.find(
+        (q) =>
+          q.id.includes("name") && !q.id.includes("hospital") && !q.id.includes("store")
+      ) || activeQuestions[0];
+      const phoneQ = activeQuestions.find((q) => q.type === "tel" || q.id.includes("phone"));
+      const clinicQ = activeQuestions.find((q) => q.id.includes("clinic"));
+      const hospitalQ = activeQuestions.find(
+        (q) => q.autoFillStoreName || q.id.includes("hospital")
+      );
+      const consentQ = activeQuestions.find((q) => q.type === "radio_consent");
+
+      if (nameQ) resolvedName = (customAnswers[nameQ.id] || "").trim();
+      if (phoneQ) resolvedPhone = (customAnswers[phoneQ.id] || "").trim();
+      if (clinicQ) resolvedClinic = (customAnswers[clinicQ.id] || "ANC").trim();
+      if (hospitalQ) resolvedHospital = (customAnswers[hospitalQ.id] || activeShift.storeName).trim();
+      if (consentQ) {
+        const ans = customAnswers[consentQ.id] || "";
+        resolvedConsentLabel = ans || undefined;
+        resolvedConsent = ans.toLowerCase().startsWith("yes");
+      }
+    }
+
+    if (!resolvedName) {
+      setSurveyErrorMsg("Please enter the respondent's name.");
+      return;
+    }
 
     setSurveySubmitting(true);
     setSurveyErrorMsg("");
@@ -287,20 +409,44 @@ function CheckInContent() {
       storeName: activeShift.storeName,
       baName: activeShift.baName,
       surveyType: surveyMode,
-      respondentName: respondentName.trim(),
-      respondentPhone: respondentPhone.trim(),
-      productSampled: surveyMode === "retail" ? productSampled : undefined,
-      tasteFeedback: surveyMode === "retail" ? tasteFeedback : undefined,
-      purchasedOnShelf: surveyMode === "retail" ? purchasedOnShelf : undefined,
-      packsPurchased: surveyMode === "retail" && purchasedOnShelf ? packsPurchased : undefined,
-      motherStage: surveyMode === "hospital" ? motherStage : undefined,
-      dueOrBirthDate: surveyMode === "hospital" ? dueOrBirthDate.trim() : undefined,
-      diaperSizeIssued: surveyMode === "hospital" ? diaperSizeIssued : undefined,
-      currentBrandUsed: surveyMode === "hospital" ? currentBrandUsed : undefined,
+      respondentName: resolvedName,
+      respondentPhone: resolvedPhone,
+      productSampled: !activeQuestions && surveyMode === "retail" ? productSampled : undefined,
+      tasteFeedback: !activeQuestions && surveyMode === "retail" ? tasteFeedback : undefined,
+      purchasedOnShelf: !activeQuestions && surveyMode === "retail" ? purchasedOnShelf : undefined,
+      packsPurchased:
+        !activeQuestions && surveyMode === "retail" && purchasedOnShelf ? packsPurchased : undefined,
+      clinicType: surveyMode === "hospital" ? resolvedClinic : undefined,
+      hospitalName: surveyMode === "hospital" ? resolvedHospital : undefined,
+      marketingConsent:
+        typeof resolvedConsent === "boolean" ? resolvedConsent : undefined,
+      marketingConsentLabel: resolvedConsentLabel,
+      surveyAnswers: activeQuestions ? customAnswers : undefined,
       latitude: coords?.latitude ?? activeShift.lastLat ?? activeShift.checkInLat,
       longitude: coords?.longitude ?? activeShift.lastLng ?? activeShift.checkInLng,
       accuracy: coords?.accuracy ?? activeShift.checkInAccuracy,
       notes: surveyNotes.trim() || undefined,
+    };
+
+    const resetSurveyFields = () => {
+      setRespondentName("");
+      setRespondentPhone("");
+      setPurchasedOnShelf(false);
+      setPacksPurchased(1);
+      setDueOrBirthDate("");
+      setMarketingConsent(null);
+      setSurveyNotes("");
+      if (activeQuestions) {
+        const nextAns: Record<string, string> = {};
+        for (const q of activeQuestions) {
+          if (q.autoFillStoreName) {
+            nextAns[q.id] = activeShift.storeName || "";
+          } else if (q.type === "select" && q.options?.length) {
+            nextAns[q.id] = q.options[0];
+          }
+        }
+        setCustomAnswers(nextAns);
+      }
     };
 
     const queueOfflineSurvey = () => {
@@ -323,16 +469,17 @@ function CheckInContent() {
         baName: activeShift.baName,
         shiftDate: activeShift.shiftDate,
         surveyType: surveyMode,
-        respondentName: respondentName.trim(),
-        respondentPhone: respondentPhone.trim(),
+        respondentName: resolvedName,
+        respondentPhone: resolvedPhone,
         productSampled: surveyPayload.productSampled,
         tasteFeedback: surveyPayload.tasteFeedback,
         purchasedOnShelf: surveyPayload.purchasedOnShelf,
         packsPurchased: surveyPayload.packsPurchased,
-        motherStage: surveyPayload.motherStage,
-        dueOrBirthDate: surveyPayload.dueOrBirthDate,
-        diaperSizeIssued: surveyPayload.diaperSizeIssued,
-        currentBrandUsed: surveyPayload.currentBrandUsed,
+        clinicType: surveyPayload.clinicType,
+        hospitalName: surveyPayload.hospitalName,
+        marketingConsent: surveyPayload.marketingConsent,
+        marketingConsentLabel: surveyPayload.marketingConsentLabel,
+        surveyAnswers: surveyPayload.surveyAnswers,
         lat: surveyPayload.latitude,
         lng: surveyPayload.longitude,
         accuracy: surveyPayload.accuracy,
@@ -344,14 +491,8 @@ function CheckInContent() {
       setActiveShift(updatedShift);
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
 
-      const savedName = respondentName.trim();
-      setRespondentName("");
-      setRespondentPhone("");
-      setPurchasedOnShelf(false);
-      setPacksPurchased(1);
-      setDueOrBirthDate("");
-      setSurveyNotes("");
-      setSurveySuccessMsg(`📦 Saved offline for ${savedName}! Will auto-sync when signal returns.`);
+      resetSurveyFields();
+      setSurveySuccessMsg(`📦 Saved offline for ${resolvedName}! Will auto-sync when signal returns.`);
       setTimeout(() => setSurveySuccessMsg(""), 5000);
     };
 
@@ -384,15 +525,8 @@ function CheckInContent() {
       setActiveShift(updatedShift);
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
 
-      // Reset respondent fields for the next person
-      const savedName = respondentName.trim();
-      setRespondentName("");
-      setRespondentPhone("");
-      setPurchasedOnShelf(false);
-      setPacksPurchased(1);
-      setDueOrBirthDate("");
-      setSurveyNotes("");
-      setSurveySuccessMsg(`✅ Survey saved for ${savedName}! Ready for next respondent.`);
+      resetSurveyFields();
+      setSurveySuccessMsg(`✅ Survey saved for ${resolvedName}! Ready for next respondent.`);
       setTimeout(() => setSurveySuccessMsg(""), 4000);
     } catch (err) {
       console.warn("Network unreachable during survey submit — queueing offline:", err);
@@ -675,7 +809,75 @@ function CheckInContent() {
     ? evaluateGeofence(coords, storeTarget, activeRadius, selectedStore.polygon)
     : null;
 
-  // ── Submit Check-In ──
+  // ── Step 1: BA Sign-In Handler ──
+  async function handleBaSignIn(e: React.FormEvent) {
+    e.preventDefault();
+    if (!baUsername.trim() || !baPin.trim()) return;
+    setBaSignInLoading(true);
+    setBaSignInError("");
+
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: "ba",
+          campaignId: campaignSlug,
+          username: baUsername.trim(),
+          password: baPin.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setBaSignInError(data.error || "Invalid BA username or password.");
+        return;
+      }
+
+      if (data.token) {
+        setShiftToken(data.token);
+        localStorage.setItem(`active_shift_token_${campaignSlug}`, data.token);
+      }
+      if (data.store) {
+        setSelectedStore(data.store);
+      } else if (data.user?.storeCode) {
+        const matched = stores.find(
+          (s) =>
+            (s.storeCode || (s as any).code || s.id || "").toLowerCase() ===
+            String(data.user.storeCode).toLowerCase()
+        );
+        if (matched) setSelectedStore(matched);
+      }
+      setBaName(data.user?.baName || data.store?.baName || baUsername.trim() || "BA");
+      setBaPhone(data.user?.baPhone || data.store?.baPhone || "");
+      setBaAuthenticated(true);
+      if (data.activeShift) {
+        setActiveShift(data.activeShift);
+        localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.activeShift));
+      } else {
+        setActiveShift(null);
+        localStorage.removeItem(`active_shift_${campaignSlug}`);
+      }
+    } catch {
+      setBaSignInError("Network error while signing in. Please try again.");
+    } finally {
+      setBaSignInLoading(false);
+    }
+  }
+
+  async function handleBaSignOut() {
+    try {
+      await fetch("/api/auth?role=ba", { method: "DELETE" });
+    } catch {}
+    localStorage.removeItem(`active_shift_token_${campaignSlug}`);
+    localStorage.removeItem(`active_shift_${campaignSlug}`);
+    setShiftToken("");
+    setBaAuthenticated(false);
+    setActiveShift(null);
+    setPhotoDataUrl(null);
+    setBaPin("");
+  }
+
+  // ── Step 2: Submit Check-In ──
   async function handleCheckInSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedStore || !baName.trim() || !coords) return;
@@ -700,7 +902,7 @@ function CheckInContent() {
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getShiftAuthHeaders(),
         body: JSON.stringify({
           action: "check_in",
           campaignId: campaignSlug,
@@ -1051,16 +1253,106 @@ function CheckInContent() {
                   </div>
                 )}
 
+                {activeQuestions ? (
+                  /* ── Dynamic Superadmin-Configured / Hospital (ANC-IMC + Consent) Survey Questions ── */
+                  <div className="space-y-3.5">
+                    {activeQuestions.map((q) => {
+                      const val = customAnswers[q.id] ?? "";
+                      if (q.type === "select") {
+                        return (
+                          <div key={q.id}>
+                            <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                              {q.label} {q.required && <span className="text-red-400">*</span>}
+                            </label>
+                            <select
+                              required={q.required}
+                              value={val || (q.options?.[0] ?? "")}
+                              onChange={(e) =>
+                                setCustomAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                              }
+                              className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none cursor-pointer"
+                            >
+                              {(q.options || []).map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      if (q.type === "radio_consent") {
+                        return (
+                          <div
+                            key={q.id}
+                            className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/15 space-y-2.5"
+                          >
+                            <p className="text-xs text-white/85 leading-relaxed font-medium">
+                              {q.label} {q.required && <span className="text-red-400">*</span>}
+                            </p>
+                            <div className="space-y-2">
+                              {(q.options || []).map((opt) => {
+                                const selected = val === opt;
+                                return (
+                                  <label
+                                    key={opt}
+                                    className={`flex items-start gap-2.5 p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                                      selected
+                                        ? "bg-teal-500/15 border-teal-400 text-teal-200"
+                                        : "bg-black/30 border-white/10 text-white/70 hover:border-white/25"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`consent_${q.id}`}
+                                      required={q.required}
+                                      checked={selected}
+                                      onChange={() =>
+                                        setCustomAnswers((prev) => ({ ...prev, [q.id]: opt }))
+                                      }
+                                      className="mt-0.5 accent-teal-400"
+                                    />
+                                    <span>{opt}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={q.id}>
+                          <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
+                            {q.label} {q.required && <span className="text-red-400">*</span>}
+                          </label>
+                          <input
+                            type={q.type === "tel" ? "tel" : "text"}
+                            required={q.required}
+                            placeholder={q.placeholder || ""}
+                            value={val}
+                            onChange={(e) =>
+                              setCustomAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                            }
+                            className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <>
                 {/* Respondent Name & Phone */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
-                      {surveyMode === "hospital" ? "Mother's Full Name" : "Shopper Name"} <span className="text-red-400">*</span>
+                      Shopper Name <span className="text-red-400">*</span>
                     </label>
                     <input
                       type="text"
                       required
-                      placeholder={surveyMode === "hospital" ? "e.g. Mrs. Ngozi Eze" : "e.g. Kunle Adeyemi"}
+                      placeholder="e.g. Kunle Adeyemi"
                       value={respondentName}
                       onChange={(e) => setRespondentName(e.target.value)}
                       className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
@@ -1080,8 +1372,7 @@ function CheckInContent() {
                   </div>
                 </div>
 
-                {/* Mode-Specific Survey Fields */}
-                {surveyMode === "retail" ? (
+                {/* Retail Survey Fields */}
                   <div className="space-y-3 pt-1">
                     <div>
                       <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
@@ -1157,81 +1448,7 @@ function CheckInContent() {
                       </div>
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-3 pt-1">
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setMotherStage("nursing")}
-                        className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                          motherStage === "nursing"
-                            ? "bg-teal-500/20 border-teal-400 text-teal-300"
-                            : "bg-white/5 border-white/10 text-white/60"
-                        }`}
-                      >
-                        👶 Nursing Mother
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMotherStage("expectant")}
-                        className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                          motherStage === "expectant"
-                            ? "bg-teal-500/20 border-teal-400 text-teal-300"
-                            : "bg-white/5 border-white/10 text-white/60"
-                        }`}
-                      >
-                        🤰 Expectant (ANC)
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
-                          {motherStage === "expectant" ? "Expected Due Date (EDD)" : "Baby Age / DOB"}
-                        </label>
-                        <input
-                          type="text"
-                          placeholder={motherStage === "expectant" ? "e.g. Dec 2026 / 7 Months" : "e.g. 6 Weeks Old"}
-                          value={dueOrBirthDate}
-                          onChange={(e) => setDueOrBirthDate(e.target.value)}
-                          className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
-                          Sample Kit Size Issued
-                        </label>
-                        <select
-                          value={diaperSizeIssued}
-                          onChange={(e) => setDiaperSizeIssued(e.target.value as any)}
-                          className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none"
-                        >
-                          <option value="Newborn (Size 1)">Newborn (Size 1)</option>
-                          <option value="Size 2">Size 2 (Mini)</option>
-                          <option value="Size 3">Size 3 (Midi)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
-                        Current Diaper Brand Used
-                      </label>
-                      <select
-                        value={currentBrandUsed}
-                        onChange={(e) => setCurrentBrandUsed(e.target.value)}
-                        className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none"
-                      >
-                        <option value="Molfix">Molfix</option>
-                        <option value="Pampers">Pampers</option>
-                        <option value="Huggies">Huggies</option>
-                        <option value="Bebem">Bebem</option>
-                        <option value="Kisskids">Kisskids</option>
-                        <option value="First-Time Mother / None">First-Time Mother / None</option>
-                      </select>
-                    </div>
-                  </div>
+                  </>
                 )}
 
                 {/* Optional Notes / Comments */}
@@ -1250,7 +1467,7 @@ function CheckInContent() {
 
                 <button
                   type="submit"
-                  disabled={surveySubmitting || !respondentName.trim()}
+                  disabled={surveySubmitting || (!activeQuestions && !respondentName.trim())}
                   className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-400 to-emerald-400 hover:from-teal-300 hover:to-emerald-300 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-lg shadow-teal-500/20 disabled:opacity-40 cursor-pointer"
                 >
                   <Send className="w-4 h-4" />
@@ -1321,7 +1538,9 @@ function CheckInContent() {
                           </div>
                           <div className="text-[11px] text-white/60">
                             {s.surveyType === "hospital"
-                              ? `${s.motherStage === "expectant" ? "🤰 Expectant" : "👶 Nursing"} · ${s.diaperSizeIssued || "Kit"} · Uses ${s.currentBrandUsed || "N/A"}`
+                              ? s.clinicType
+                                ? `${s.clinicType} · ${s.hospitalName || s.storeName} · ${s.marketingConsent ? "✅ Consented" : s.marketingConsent === false ? "❌ Opted Out" : ""}`
+                                : `${s.motherStage === "expectant" ? "🤰 Expectant" : "👶 Nursing"} · ${s.diaperSizeIssued || "Kit"} · Uses ${s.currentBrandUsed || "N/A"}`
                               : `${s.productSampled || "Sample"} · ${s.tasteFeedback?.replace("_", " ") || "good"} ${s.purchasedOnShelf ? `· 🛒 Bought (${s.packsPurchased || 1})` : ""}`}
                           </div>
                           {s.notes && <p className="text-[10px] text-white/40 italic">"{s.notes}"</p>}
@@ -1432,12 +1651,93 @@ function CheckInContent() {
               </div>
             )}
           </div>
+        ) : !baAuthenticated ? (
+          /* ─────────────────────────────────────────────────────────────
+             VIEW 0: BA SIGN-IN GATE (Username + Password only)
+             ───────────────────────────────────────────────────────────── */
+          <form onSubmit={handleBaSignIn} className="space-y-4">
+            <div className="p-5 rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl space-y-4">
+              <div className="pb-2 border-b border-white/10">
+                <h2 className="text-sm font-black text-white uppercase tracking-wider">
+                  Step 1 · Brand Ambassador Sign In
+                </h2>
+                <p className="text-[11px] text-white/50 mt-0.5">
+                  Sign in with your assigned username and password. Your clinic, name, and phone are loaded automatically.
+                </p>
+              </div>
+
+              {baSignInError && (
+                <div className="p-3 rounded-2xl text-xs font-semibold bg-red-500/15 border border-red-500/30 text-red-300 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{baSignInError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                  BA Username / Staff ID <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="e.g. chidinma or store code"
+                  value={baUsername}
+                  onChange={(e) => setBaUsername(e.target.value)}
+                  className="w-full px-3.5 py-3 rounded-xl text-xs font-mono text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
+                  Password / Access PIN <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter password or PIN"
+                  value={baPin}
+                  onChange={(e) => setBaPin(e.target.value)}
+                  className="w-full px-3.5 py-3 rounded-xl text-xs font-mono tracking-widest text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={baSignInLoading || !baUsername.trim() || !baPin.trim()}
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-teal-400 to-emerald-400 hover:from-teal-300 hover:to-emerald-300 text-black font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl shadow-teal-500/20 disabled:opacity-40 cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>{baSignInLoading ? "Signing In..." : "Sign In"}</span>
+              </button>
+            </div>
+          </form>
         ) : (
           /* ─────────────────────────────────────────────────────────────
-             VIEW B: CHECK-IN FORM (Not Yet Checked In)
+             VIEW B: GEOFENCE & LIVE SELFIE CHECK-IN (Signed In, Not Yet Checked In)
              ───────────────────────────────────────────────────────────── */
           <form onSubmit={handleCheckInSubmit} className="space-y-4">
             <div className="p-5 rounded-3xl bg-white/[0.03] border border-white/10 backdrop-blur-xl shadow-2xl space-y-4">
+
+              {/* Signed-In BA & Venue Banner */}
+              <div className="p-3 rounded-2xl bg-teal-500/10 border border-teal-500/25 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-teal-300">
+                    Step 2 · Signed In as {baName}
+                  </p>
+                  <p className="text-xs font-black text-white truncate">
+                    {selectedStore?.name || "Selected Venue"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleBaSignOut}
+                  className="px-2.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-[10px] font-bold text-white/80 hover:text-white flex items-center gap-1 cursor-pointer flex-shrink-0"
+                >
+                  <LogOut className="w-3 h-3" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
 
               {/* Error Banner */}
               {submitError && (
@@ -1446,96 +1746,6 @@ function CheckInContent() {
                   <span>{submitError}</span>
                 </div>
               )}
-
-              {/* 1. Pick Assigned Store */}
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1.5">
-                  1. Select Assigned Store <span className="text-red-400">*</span>
-                </label>
-                <select
-                  required
-                  value={selectedStore ? (selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "") : ""}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    const st = stores.find((s) => (s.storeCode || (s as any).code || s.id || "") === val);
-                    setSelectedStore(st || null);
-                    setPhotoDataUrl(null); // watermark is location-bound; force a fresh snap
-                    if (st?.baName) setBaName(st.baName);
-                    if (st?.baUsername) setBaUsername(st.baUsername);
-                    if (st?.baPhone) setBaPhone(st.baPhone);
-                  }}
-                  className="w-full px-3.5 py-3 rounded-2xl text-xs text-white bg-slate-900 border border-white/15 focus:border-teal-400 focus:outline-none transition-all cursor-pointer"
-                >
-                  <option value="">-- Choose your store location --</option>
-                  {stores.map((s) => {
-                    const code = s.storeCode || (s as any).code || s.id || "";
-                    const locationLabel = s.state || (s as any).city || "";
-                    return (
-                      <option key={s.id || code} value={code} className="bg-slate-900 text-white py-1">
-                        {s.name} {locationLabel ? `· ${locationLabel}` : ""} ({code})
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {/* 2. BA Login Credentials (Username / Staff ID & Password) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                    BA Username / Staff ID
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. ifeoluwa or staff ID"
-                    value={baUsername}
-                    onChange={(e) => setBaUsername(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                    Password / Access PIN <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    placeholder="Enter password or PIN"
-                    value={baPin}
-                    onChange={(e) => setBaPin(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl text-xs font-mono tracking-widest text-amber-300 bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* BA Full Name & Phone */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                    BA Full Name <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Chidinma Okonkwo"
-                    value={baName}
-                    onChange={(e) => setBaName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-white/60 mb-1">
-                    Phone Number
-                  </label>
-                  <input
-                    type="tel"
-                    placeholder="e.g. 08012345678"
-                    value={baPhone}
-                    onChange={(e) => setBaPhone(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
-                  />
-                </div>
-              </div>
 
               {/* 3. Live Geofence Status Card */}
               {selectedStore && (

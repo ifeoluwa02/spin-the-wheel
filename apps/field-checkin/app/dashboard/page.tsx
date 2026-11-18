@@ -115,7 +115,7 @@ function FieldOpsDashboardContent() {
 
   async function handleLogout() {
     try {
-      await fetch("/api/auth", { method: "DELETE" });
+      await fetch("/api/auth?role=admin", { method: "DELETE" });
     } catch {}
     setIsAuthenticated(false);
     setAuthToken("");

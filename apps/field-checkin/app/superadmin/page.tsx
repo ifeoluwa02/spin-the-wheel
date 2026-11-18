@@ -2,13 +2,20 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
-import type { Campaign, StoreLocation, SurveyType } from "@/lib/types";
+import type {
+  Campaign,
+  StoreLocation,
+  SurveyType,
+  SurveyQuestion,
+  SurveyQuestionType,
+} from "@/lib/types";
 import { NIGERIAN_STATES } from "@/lib/types";
+import { DEFAULT_HOSPITAL_QUESTIONS } from "@/lib/survey-templates";
 import {
   ShieldCheck, Lock, User, Eye, EyeOff, Plus, Building2,
   MapPin, ExternalLink, Copy, Check, Trash2, Navigation,
   ShoppingBag, HeartPulse, RefreshCw, LogOut, Settings,
-  Smartphone, Users, KeyRound,
+  Smartphone, Users, KeyRound, ClipboardList, Sparkles,
 } from "lucide-react";
 
 export default function SuperAdminPage() {
@@ -52,6 +59,15 @@ export default function SuperAdminPage() {
   const [baPhone, setBaPhone] = useState("");
   const [savingStore, setSavingStore] = useState(false);
   const [gpsFetching, setGpsFetching] = useState(false);
+
+  // ── Survey Questions Builder Modal State ──
+  const [questionsCampaign, setQuestionsCampaign] = useState<Campaign | null>(null);
+  const [draftQuestions, setDraftQuestions] = useState<SurveyQuestion[]>([]);
+  const [savingQuestions, setSavingQuestions] = useState(false);
+  const [newQLabel, setNewQLabel] = useState("");
+  const [newQType, setNewQType] = useState<SurveyQuestionType>("text");
+  const [newQOptions, setNewQOptions] = useState("");
+  const [newQRequired, setNewQRequired] = useState(true);
 
   function getAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -138,7 +154,7 @@ export default function SuperAdminPage() {
 
   async function handleLogout() {
     try {
-      await fetch("/api/auth", { method: "DELETE" });
+      await fetch("/api/auth?role=admin", { method: "DELETE" });
     } catch {}
     localStorage.removeItem("field_ops_superadmin_token");
     setIsAuthenticated(false);
@@ -457,6 +473,15 @@ export default function SuperAdminPage() {
               >
                 {authLoading ? "Verifying Credentials..." : "Sign In to Superadmin"}
               </button>
+
+              <div className="pt-2 text-center border-t border-white/10">
+                <Link
+                  href="/superadmin/setup"
+                  className="text-xs text-teal-400 hover:text-teal-300 underline font-semibold"
+                >
+                  First-time deployment? Set up Superadmin password →
+                </Link>
+              </div>
             </form>
           </div>
         ) : (
@@ -552,14 +577,34 @@ export default function SuperAdminPage() {
                       </div>
 
                       <div className="space-y-2 pt-2 border-t border-white/10">
-                        <button
-                          type="button"
-                          onClick={() => setManagingCampaign(c)}
-                          className="w-full py-2.5 px-3 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 text-xs font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
-                        >
-                          <Settings className="w-3.5 h-3.5" />
-                          <span>Manage Locations & BAs ({storeCount})</span>
-                        </button>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setManagingCampaign(c)}
+                            className="py-2.5 px-2.5 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 border border-teal-500/30 text-teal-300 text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          >
+                            <Settings className="w-3.5 h-3.5" />
+                            <span>Venues ({storeCount})</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuestionsCampaign(c);
+                              setDraftQuestions(
+                                c.surveyQuestions && c.surveyQuestions.length > 0
+                                  ? c.surveyQuestions
+                                  : c.activationType === "hospital"
+                                  ? DEFAULT_HOSPITAL_QUESTIONS
+                                  : []
+                              );
+                            }}
+                            className="py-2.5 px-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          >
+                            <ClipboardList className="w-3.5 h-3.5" />
+                            <span>Questions ({c.surveyQuestions?.length || (c.activationType === "hospital" ? DEFAULT_HOSPITAL_QUESTIONS.length : 0)})</span>
+                          </button>
+                        </div>
 
                         <div className="grid grid-cols-3 gap-1.5">
                           <Link
@@ -907,7 +952,7 @@ export default function SuperAdminPage() {
               </div>
 
               {/* Assigned BA Login Credentials */}
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10">
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 pt-2 border-t border-white/10">
                 <div>
                   <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">
                     Assigned BA Full Name
@@ -918,6 +963,18 @@ export default function SuperAdminPage() {
                     value={baName}
                     onChange={(e) => setBaName(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl text-xs text-white bg-black/40 border border-white/15"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">
+                    BA Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. 08031234567"
+                    value={baPhone}
+                    onChange={(e) => setBaPhone(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono text-white bg-black/40 border border-white/15"
                   />
                 </div>
                 <div>
@@ -1008,6 +1065,264 @@ export default function SuperAdminPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL 3: CONFIGURE SURVEY QUESTIONS ── */}
+      {questionsCampaign && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto"
+          onClick={() => setQuestionsCampaign(null)}
+        >
+          <div
+            className="max-w-3xl w-full rounded-3xl bg-[#0B1528] border border-white/20 p-6 space-y-5 shadow-2xl my-8 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-white/10 gap-3 flex-wrap">
+              <div>
+                <h3 className="text-base font-black text-white">
+                  {questionsCampaign.name} · Survey Questions
+                </h3>
+                <p className="text-xs text-white/50">
+                  Configure the exact questions BAs collect on-site during this activation
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDraftQuestions(DEFAULT_HOSPITAL_QUESTIONS)}
+                  className="px-3 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Load Hospital (ANC/IMC + Consent)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuestionsCampaign(null)}
+                  className="px-3 py-1.5 rounded-xl bg-white/10 text-xs font-bold text-white/70 hover:text-white cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {/* Existing / Draft Questions List */}
+            <div className="space-y-2.5">
+              {draftQuestions.length === 0 ? (
+                <div className="p-6 rounded-2xl bg-white/[0.02] border border-dashed border-white/15 text-center text-xs text-white/50">
+                  No custom questions configured yet. The default {questionsCampaign.activationType || "retail"} form will be used unless you add questions below or load the Hospital template.
+                </div>
+              ) : (
+                draftQuestions.map((q, idx) => (
+                  <div
+                    key={q.id}
+                    className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 space-y-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/25">
+                            #{idx + 1} · {q.type}
+                          </span>
+                          <label className="flex items-center gap-1 text-[10px] text-white/60 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(q.required)}
+                              onChange={(e) => {
+                                const next = [...draftQuestions];
+                                next[idx] = { ...q, required: e.target.checked };
+                                setDraftQuestions(next);
+                              }}
+                            />
+                            <span>Required</span>
+                          </label>
+                          {q.type === "text" && (
+                            <label className="flex items-center gap-1 text-[10px] text-white/60 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(q.autoFillStoreName)}
+                                onChange={(e) => {
+                                  const next = [...draftQuestions];
+                                  next[idx] = { ...q, autoFillStoreName: e.target.checked };
+                                  setDraftQuestions(next);
+                                }}
+                              />
+                              <span>Auto-fill Hospital/Store Name</span>
+                            </label>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={q.label}
+                          onChange={(e) => {
+                            const next = [...draftQuestions];
+                            next[idx] = { ...q, label: e.target.value };
+                            setDraftQuestions(next);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-xs text-white bg-black/40 border border-white/15 focus:border-teal-400 focus:outline-none"
+                        />
+                        {(q.type === "select" || q.type === "radio_consent") && (
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-white/40 mb-1">
+                              Options (one per line or comma-separated)
+                            </label>
+                            <textarea
+                              rows={2}
+                              value={(q.options || []).join("\n")}
+                              onChange={(e) => {
+                                const next = [...draftQuestions];
+                                const opts = e.target.value
+                                  .split(/\n|,/)
+                                  .map((o) => o.trim())
+                                  .filter(Boolean);
+                                next[idx] = { ...q, options: opts };
+                                setDraftQuestions(next);
+                              }}
+                              className="w-full px-3 py-1.5 rounded-xl text-xs text-amber-200 bg-black/40 border border-white/15 focus:border-teal-400 focus:outline-none"
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraftQuestions((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        className="p-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-300 cursor-pointer"
+                        title="Remove question"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Add New Question Form */}
+            <div className="p-4 rounded-2xl bg-black/30 border border-white/10 space-y-3">
+              <p className="text-xs font-black uppercase tracking-wider text-teal-300">
+                + Add Question
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="sm:col-span-2">
+                  <input
+                    type="text"
+                    placeholder="Question label (e.g. CLINIC or MOTHER'S NAME)"
+                    value={newQLabel}
+                    onChange={(e) => setNewQLabel(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs text-white bg-black/40 border border-white/15"
+                  />
+                </div>
+                <select
+                  value={newQType}
+                  onChange={(e) => setNewQType(e.target.value as SurveyQuestionType)}
+                  className="px-3 py-2 rounded-xl text-xs text-white bg-slate-900 border border-white/15"
+                >
+                  <option value="text">Text (Editable)</option>
+                  <option value="tel">Phone Number</option>
+                  <option value="select">Dropdown (Select)</option>
+                  <option value="radio_consent">Tick / Consent Options</option>
+                </select>
+              </div>
+              {(newQType === "select" || newQType === "radio_consent") && (
+                <input
+                  type="text"
+                  placeholder="Comma-separated options (e.g. ANC, IMC)"
+                  value={newQOptions}
+                  onChange={(e) => setNewQOptions(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl text-xs text-amber-200 bg-black/40 border border-white/15"
+                />
+              )}
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1.5 text-xs text-white/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newQRequired}
+                    onChange={(e) => setNewQRequired(e.target.checked)}
+                  />
+                  <span>Required field</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!newQLabel.trim()}
+                  onClick={() => {
+                    const slugId = newQLabel
+                      .trim()
+                      .toLowerCase()
+                      .replace(/[^a-z0-9]+/g, "_")
+                      .replace(/^_|_$/g, "")
+                      .slice(0, 40) || `q_${Date.now()}`;
+                    const opts =
+                      newQType === "select" || newQType === "radio_consent"
+                        ? newQOptions
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean)
+                        : undefined;
+                    setDraftQuestions((prev) => [
+                      ...prev,
+                      {
+                        id: `${slugId}_${prev.length + 1}`,
+                        label: newQLabel.trim(),
+                        type: newQType,
+                        required: newQRequired,
+                        options: opts,
+                      },
+                    ]);
+                    setNewQLabel("");
+                    setNewQOptions("");
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white cursor-pointer disabled:opacity-40"
+                >
+                  + Add to Form
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => setQuestionsCampaign(null)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold bg-white/10 text-white/70 hover:text-white cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingQuestions}
+                onClick={async () => {
+                  setSavingQuestions(true);
+                  try {
+                    const res = await fetch("/api/campaigns", {
+                      method: "POST",
+                      headers: getAuthHeaders(),
+                      body: JSON.stringify({
+                        ...questionsCampaign,
+                        surveyQuestions: draftQuestions,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                      setCampaigns((prev) =>
+                        prev.map((c) => (c.id === data.campaign.id ? data.campaign : c))
+                      );
+                      setQuestionsCampaign(null);
+                    } else {
+                      alert(data.error || "Failed to save survey questions.");
+                    }
+                  } catch {
+                    alert("Network error while saving survey questions.");
+                  } finally {
+                    setSavingQuestions(false);
+                  }
+                }}
+                className="px-5 py-2.5 rounded-xl text-xs font-black bg-teal-400 hover:bg-teal-300 text-black cursor-pointer disabled:opacity-50"
+              >
+                {savingQuestions ? "Saving Questions..." : "Save Survey Questions"}
+              </button>
             </div>
           </div>
         </div>

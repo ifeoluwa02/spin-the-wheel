@@ -46,7 +46,11 @@ function isAuthorizedForShift(
     return !campaignId || session.campaignId?.toLowerCase() === campaignId.toLowerCase();
   }
   if (session.role === "ba") {
-    return session.checkInId === checkInId;
+    if (session.checkInId && session.checkInId === checkInId) return true;
+    if (session.storeCode) {
+      const cPrefix = `${(session.campaignId || campaignId || "").toLowerCase()}__${session.storeCode.toLowerCase()}__`;
+      if (checkInId.toLowerCase().startsWith(cPrefix)) return true;
+    }
   }
   return false;
 }
@@ -69,6 +73,12 @@ export async function GET(request: NextRequest) {
     }
 
     if (checkInId) {
+      if (!isAuthorizedForShift(request, checkInId, campaignId)) {
+        return NextResponse.json(
+          { error: "Unauthorized shift session." },
+          { status: 401 }
+        );
+      }
       const [shift, surveys] = await Promise.all([
         getCheckInById(checkInId),
         getDailySurveys(campaignId, dateStr, checkInId),
@@ -228,26 +238,49 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Verify BA Username (mandatory if configured on store) & store-specific Password / PIN
-      const expectedBaUser = (store.baUsername || "").trim().toLowerCase();
-      const inputBaUser = String(body.baUsername || "").trim().toLowerCase();
-      if (expectedBaUser && inputBaUser !== expectedBaUser) {
-        return NextResponse.json(
-          { error: `Incorrect or missing BA username for ${store.name}.` },
-          { status: 401 }
-        );
-      }
+      // Check if BA already signed in via POST /api/auth (role === "ba") for this campaign & store
+      const canonicalCodeForAuth = (store.storeCode || (store as any).code || store.id || storeCode).trim().toLowerCase();
+      const callerSession = getRequestSession(request, true);
+      const hasValidBaSession = Boolean(
+        callerSession &&
+          (callerSession.role === "superadmin" ||
+            (callerSession.role === "supervisor" &&
+              callerSession.campaignId?.toLowerCase() === cleanCampaignId) ||
+            (callerSession.role === "ba" &&
+              callerSession.campaignId?.toLowerCase() === cleanCampaignId &&
+              callerSession.storeCode?.toLowerCase() === canonicalCodeForAuth))
+      );
 
-      const effectivePin =
-        (store.baPassword && store.baPassword.trim()) ||
-        (store.pin && store.pin.trim()) ||
-        "1234";
-      const inputPin = String(pin || "").trim();
-      if (!verifyPassword(inputPin, effectivePin)) {
-        return NextResponse.json(
-          { error: "Incorrect BA password or access PIN for this location." },
-          { status: 401 }
-        );
+      const inputBaUser = String(
+        body.baUsername ||
+          (callerSession?.role === "ba" ? callerSession.username : "") ||
+          store.baUsername ||
+          ""
+      )
+        .trim()
+        .toLowerCase();
+
+      if (!hasValidBaSession) {
+        // Verify BA Username (mandatory if configured on store) & store-specific Password / PIN
+        const expectedBaUser = (store.baUsername || "").trim().toLowerCase();
+        if (expectedBaUser && inputBaUser !== expectedBaUser) {
+          return NextResponse.json(
+            { error: `Incorrect or missing BA username for ${store.name}.` },
+            { status: 401 }
+          );
+        }
+
+        const effectivePin =
+          (store.baPassword && store.baPassword.trim()) ||
+          (store.pin && store.pin.trim()) ||
+          "1234";
+        const inputPin = String(pin || "").trim();
+        if (!verifyPassword(inputPin, effectivePin)) {
+          return NextResponse.json(
+            { error: "Incorrect BA password or access PIN for this location." },
+            { status: 401 }
+          );
+        }
       }
 
       // Credentials verified -> clear rate limit bucket
@@ -468,6 +501,11 @@ export async function POST(request: NextRequest) {
         dueOrBirthDate,
         diaperSizeIssued,
         currentBrandUsed,
+        clinicType,
+        hospitalName,
+        marketingConsent,
+        marketingConsentLabel,
+        surveyAnswers,
         latitude,
         longitude,
         accuracy,
@@ -509,6 +547,17 @@ export async function POST(request: NextRequest) {
       const mode: SurveyType = surveyType === "hospital" ? "hospital" : "retail";
       const validFeedback: TasteFeedback[] = ["loved_it", "good", "neutral", "disliked"];
 
+      let cleanAnswers: Record<string, string> | undefined;
+      if (surveyAnswers && typeof surveyAnswers === "object" && !Array.isArray(surveyAnswers)) {
+        cleanAnswers = {};
+        for (const [k, v] of Object.entries(surveyAnswers)) {
+          if (typeof k === "string" && k.trim() && v !== undefined && v !== null) {
+            cleanAnswers[k.trim().slice(0, 60)] = String(v).trim().slice(0, 400);
+          }
+        }
+        if (Object.keys(cleanAnswers).length === 0) cleanAnswers = undefined;
+      }
+
       const { survey, samplesLogged } = await recordSurvey({
         campaignId: String(campaignId).trim().toLowerCase(),
         checkInId: String(checkInId).trim(),
@@ -530,6 +579,22 @@ export async function POST(request: NextRequest) {
           mode === "retail" && purchasedOnShelf
             ? Math.max(1, Math.min(100, Number(packsPurchased) || 1))
             : undefined,
+        clinicType:
+          mode === "hospital" && clinicType
+            ? String(clinicType).trim().slice(0, 60)
+            : undefined,
+        hospitalName:
+          mode === "hospital" && hospitalName
+            ? String(hospitalName).trim().slice(0, 150)
+            : undefined,
+        marketingConsent:
+          mode === "hospital" && typeof marketingConsent === "boolean"
+            ? marketingConsent
+            : undefined,
+        marketingConsentLabel:
+          mode === "hospital" && marketingConsentLabel
+            ? String(marketingConsentLabel).trim().slice(0, 300)
+            : undefined,
         motherStage:
           mode === "hospital" && (motherStage === "expectant" || motherStage === "nursing")
             ? motherStage
@@ -549,6 +614,7 @@ export async function POST(request: NextRequest) {
           mode === "hospital" && currentBrandUsed
             ? String(currentBrandUsed).trim().slice(0, 80)
             : undefined,
+        surveyAnswers: cleanAnswers,
         lat: hasCoords ? latitude : undefined,
         lng: hasCoords ? longitude : undefined,
         accuracy: hasCoords && typeof accuracy === "number" ? Math.round(accuracy) : undefined,

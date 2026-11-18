@@ -316,15 +316,25 @@ export default function FieldDashboard({
         : "N/A";
       const colProductOrStage =
         s.surveyType === "hospital"
-          ? s.motherStage === "expectant"
+          ? s.clinicType
+            ? `${s.clinicType} · ${s.hospitalName || s.storeName}`
+            : s.motherStage === "expectant"
             ? `Expectant (${s.dueOrBirthDate || "N/A"})`
             : `Nursing (${s.dueOrBirthDate || "N/A"})`
           : s.productSampled || "N/A";
       const colFeedbackOrSize =
-        s.surveyType === "hospital" ? s.diaperSizeIssued || "N/A" : s.tasteFeedback || "N/A";
+        s.surveyType === "hospital"
+          ? typeof s.marketingConsent === "boolean"
+            ? s.marketingConsent
+              ? "Consent: YES"
+              : "Consent: NO"
+            : s.diaperSizeIssued || "N/A"
+          : s.tasteFeedback || "N/A";
       const colPurchaseOrBrand =
         s.surveyType === "hospital"
-          ? s.currentBrandUsed || "N/A"
+          ? s.surveyAnswers
+            ? Object.values(s.surveyAnswers).join(" | ")
+            : s.currentBrandUsed || "N/A"
           : s.purchasedOnShelf
           ? `YES (${s.packsPurchased || 1} packs)`
           : "NO";
@@ -615,18 +625,24 @@ export default function FieldDashboard({
                       </td>
                       <td className="py-3 px-3 text-white/80">
                         {s.surveyType === "hospital"
-                          ? `${s.motherStage === "expectant" ? "🤰 Expectant" : "👶 Nursing"}${s.dueOrBirthDate ? ` (${s.dueOrBirthDate})` : ""}`
+                          ? s.clinicType
+                            ? `${s.clinicType} · ${s.hospitalName || s.storeName}`
+                            : `${s.motherStage === "expectant" ? "🤰 Expectant" : "👶 Nursing"}${s.dueOrBirthDate ? ` (${s.dueOrBirthDate})` : ""}`
                           : s.productSampled || "—"}
                       </td>
                       <td className="py-3 px-3 text-white/80">
                         {s.surveyType === "hospital"
-                          ? s.diaperSizeIssued || "—"
+                          ? typeof s.marketingConsent === "boolean"
+                            ? s.marketingConsent
+                              ? "✅ Consented"
+                              : "❌ Opted Out"
+                            : s.diaperSizeIssued || "—"
                           : s.tasteFeedback?.replace("_", " ") || "—"}
                       </td>
                       <td className="py-3 px-4">
                         {s.surveyType === "hospital" ? (
                           <span className="text-amber-300 font-semibold">
-                            Uses: {s.currentBrandUsed || "N/A"}
+                            {s.clinicType ? `Clinic: ${s.clinicType}` : `Uses: ${s.currentBrandUsed || "N/A"}`}
                           </span>
                         ) : s.purchasedOnShelf ? (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
