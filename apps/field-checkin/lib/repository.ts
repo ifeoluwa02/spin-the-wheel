@@ -126,20 +126,54 @@ export function buildDeterministicCheckInId(
   return `${normalizeSlugKey(campaignId)}__${normalizeSlugKey(storeCode)}__${normalizeSlugKey(shiftDate)}`;
 }
 
+const campaignCache = new Map<string, Campaign>();
+const dirtyCampaigns = new Set<string>();
+
+async function flushDirtyCampaigns(): Promise<void> {
+  if (dirtyCampaigns.size === 0) return;
+  for (const slug of Array.from(dirtyCampaigns)) {
+    const cached = campaignCache.get(slug);
+    if (!cached) {
+      dirtyCampaigns.delete(slug);
+      continue;
+    }
+    try {
+      await withTimeout(setDoc(doc(db, "campaigns", slug), cached, { merge: true }), 3500);
+      dirtyCampaigns.delete(slug);
+    } catch {
+      // Still offline; keep in dirtyCampaigns for next reconnect
+      return;
+    }
+  }
+}
+
 /**
- * Retrieves campaign metadata and stores list from Firestore.
+ * Retrieves campaign metadata and stores list from Firestore (with offline cache fallback & auto-flush).
  * Only falls back to demo Golden Morn campaign when slug === "golden-morn".
  */
 export async function getCampaign(slug: string): Promise<Campaign | null> {
   const cleanSlug = normalizeSlugKey(slug || "golden-morn");
   if (cleanSlug === SUPERADMIN_CONFIG_DOC_ID) return null;
+  const localCached = campaignCache.get(cleanSlug);
+
   try {
-    const snap = await getDoc(doc(db, "campaigns", cleanSlug));
+    await flushDirtyCampaigns();
+    const snap = await withTimeout(getDoc(doc(db, "campaigns", cleanSlug)), 4000);
     if (snap.exists()) {
-      return { id: snap.id, ...snap.data() } as Campaign;
+      const remote = { id: snap.id, ...snap.data() } as Campaign;
+      // Prefer localCached if it has unsynced newer edits
+      if (localCached && (localCached.updatedAt || 0) > (remote.updatedAt || 0)) {
+        return localCached;
+      }
+      campaignCache.set(cleanSlug, remote);
+      return remote;
     }
   } catch (err) {
     console.warn("Could not fetch campaign from Firestore:", err);
+  }
+
+  if (localCached) {
+    return localCached;
   }
 
   if (cleanSlug === "golden-morn") {
@@ -694,18 +728,39 @@ export async function getDailySurveys(
 
 export async function getAllCampaigns(): Promise<Campaign[]> {
   try {
-    const snap = await getDocs(collection(db, "campaigns"));
-    const list = snap.docs
-      .filter((d) => d.id !== SUPERADMIN_CONFIG_DOC_ID)
-      .map((d) => ({
-        id: d.id,
-        ...(d.data() as Campaign),
-      }));
+    await flushDirtyCampaigns();
+    const snap = await withTimeout(getDocs(collection(db, "campaigns")), 4500);
+    const mergedMap = new Map<string, Campaign>();
+
+    for (const d of snap.docs) {
+      if (d.id === SUPERADMIN_CONFIG_DOC_ID) continue;
+      const remote = { id: d.id, ...(d.data() as Campaign) };
+      mergedMap.set(d.id, remote);
+      const existingLocal = campaignCache.get(d.id);
+      if (!existingLocal || (remote.updatedAt || 0) >= (existingLocal.updatedAt || 0)) {
+        campaignCache.set(d.id, remote);
+      }
+    }
+
+    // Merge any locally cached campaigns (e.g. created while offline)
+    for (const [slug, localCamp] of campaignCache.entries()) {
+      const rem = mergedMap.get(slug);
+      if (!rem || (localCamp.updatedAt || 0) > (rem.updatedAt || 0)) {
+        mergedMap.set(slug, localCamp);
+      }
+    }
+
+    const list = Array.from(mergedMap.values());
     if (list.length > 0) {
       return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     }
   } catch (err) {
-    console.warn("Could not list campaigns from Firestore:", err);
+    console.warn("Could not list campaigns from Firestore, using memory cache:", err);
+    if (campaignCache.size > 0) {
+      return Array.from(campaignCache.values()).sort(
+        (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+      );
+    }
   }
   return [
     {
@@ -732,9 +787,21 @@ export async function saveCampaign(campaign: Campaign): Promise<Campaign> {
     id: slug,
     updatedAt: now,
     createdAt: campaign.createdAt || now,
-  });
-  await setDoc(docRef, payload, { merge: true });
-  return payload as Campaign;
+  }) as Campaign;
+
+  campaignCache.set(slug, payload);
+  dirtyCampaigns.add(slug);
+
+  try {
+    await withTimeout(setDoc(docRef, payload, { merge: true }), 4500);
+    dirtyCampaigns.delete(slug);
+  } catch (err) {
+    console.warn(
+      `Firestore unreachable while saving campaign "${slug}" — cached in memory and queued for auto-sync on reconnect:`,
+      err
+    );
+  }
+  return payload;
 }
 
 /**

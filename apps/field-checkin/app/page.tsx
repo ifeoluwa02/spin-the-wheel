@@ -120,14 +120,27 @@ function CheckInContent() {
     return headers;
   }
 
-  // ── Load Campaign via Sanitized Public API & Re-validate Cached Shift ──
+  // ── Load Campaign via Sanitized Public API (With Offline Local Cache Fallback) & Re-validate Cached Shift ──
   useEffect(() => {
     async function load() {
       try {
         setLoadingCampaign(true);
-        const res = await fetch(`/api/campaigns?slug=${encodeURIComponent(campaignSlug)}&public=1`);
-        const json = await res.json();
-        const data: Campaign | null = res.ok && json.success ? json.campaign : null;
+        let data: Campaign | null = null;
+        try {
+          const res = await fetch(`/api/campaigns?slug=${encodeURIComponent(campaignSlug)}&public=1`);
+          const json = await res.json();
+          if (res.ok && json.success && json.campaign) {
+            data = json.campaign;
+            localStorage.setItem(`field_ops_cached_campaign_${campaignSlug}`, JSON.stringify(data));
+          }
+        } catch {
+          // Offline fallback: hydrate campaign from localStorage cache
+          try {
+            const cachedCamp = localStorage.getItem(`field_ops_cached_campaign_${campaignSlug}`);
+            if (cachedCamp) data = JSON.parse(cachedCamp);
+          } catch {}
+        }
+
         setCampaign(data);
         if (data?.activationType === "hospital" || data?.activationType === "retail") {
           setSurveyMode(data.activationType);
@@ -136,7 +149,7 @@ function CheckInContent() {
         const cachedToken = localStorage.getItem(`active_shift_token_${campaignSlug}`) || "";
         if (cachedToken) setShiftToken(cachedToken);
 
-        // Verify existing BA session cookie / token
+        // Verify existing BA session cookie / token (with offline cached profile fallback)
         let verifiedBaStoreCode = "";
         try {
           const authRes = await fetch("/api/auth?role=ba", {
@@ -168,11 +181,28 @@ function CheckInContent() {
                 }
               }
             }
-          } else {
+          } else if (authRes.status === 401) {
             localStorage.removeItem(`active_shift_token_${campaignSlug}`);
+            localStorage.removeItem(`field_ops_ba_profile_${campaignSlug}`);
             setShiftToken("");
           }
-        } catch {}
+        } catch {
+          // Offline during refresh: restore BA profile from localStorage if token exists
+          if (cachedToken) {
+            try {
+              const rawProfile = localStorage.getItem(`field_ops_ba_profile_${campaignSlug}`);
+              if (rawProfile) {
+                const prof = JSON.parse(rawProfile);
+                setBaAuthenticated(true);
+                verifiedBaStoreCode = String(prof.storeCode || "").toLowerCase();
+                if (prof.store) setSelectedStore(prof.store);
+                if (prof.baName) setBaName(prof.baName);
+                if (prof.baPhone) setBaPhone(prof.baPhone);
+                if (prof.username) setBaUsername(prof.username);
+              }
+            } catch {}
+          }
+        }
 
         const cachedQueue = localStorage.getItem(`offline_queue_${campaignSlug}`);
         if (cachedQueue) {
@@ -217,7 +247,7 @@ function CheckInContent() {
   }, []);
 
   async function syncOfflineQueue() {
-    if (syncingOffline || offlineQueue.length === 0 || !activeShift) return;
+    if (syncingOffline || offlineQueue.length === 0) return;
     setSyncingOffline(true);
     const remaining: OfflineQueuedSurvey[] = [];
     for (const item of offlineQueue) {
@@ -229,13 +259,17 @@ function CheckInContent() {
         });
         const data = await res.json();
         if (res.ok && data.success) {
+          if (data.checkIn) {
+            setActiveShift(data.checkIn);
+            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
+          }
           if (data.survey) {
             setShiftSurveys((prev) => [
               data.survey,
               ...prev.filter((s) => s.id !== item.id && s.id !== data.survey.id),
             ]);
           }
-          if (typeof data.samplesLogged === "number") {
+          if (typeof data.samplesLogged === "number" && activeShift) {
             const updatedShift = { ...activeShift, samplesLogged: data.samplesLogged };
             setActiveShift(updatedShift);
             localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
@@ -839,19 +873,33 @@ function CheckInContent() {
         setShiftToken(data.token);
         localStorage.setItem(`active_shift_token_${campaignSlug}`, data.token);
       }
-      if (data.store) {
-        setSelectedStore(data.store);
-      } else if (data.user?.storeCode) {
-        const matched = stores.find(
+      const resolvedBaName = data.user?.baName || data.store?.baName || baUsername.trim() || "BA";
+      const resolvedBaPhone = data.user?.baPhone || data.store?.baPhone || "";
+      const resolvedStore =
+        data.store ||
+        stores.find(
           (s) =>
             (s.storeCode || (s as any).code || s.id || "").toLowerCase() ===
-            String(data.user.storeCode).toLowerCase()
-        );
-        if (matched) setSelectedStore(matched);
-      }
-      setBaName(data.user?.baName || data.store?.baName || baUsername.trim() || "BA");
-      setBaPhone(data.user?.baPhone || data.store?.baPhone || "");
+            String(data.user?.storeCode || "").toLowerCase()
+        ) ||
+        null;
+
+      if (resolvedStore) setSelectedStore(resolvedStore);
+      setBaName(resolvedBaName);
+      setBaPhone(resolvedBaPhone);
       setBaAuthenticated(true);
+
+      localStorage.setItem(
+        `field_ops_ba_profile_${campaignSlug}`,
+        JSON.stringify({
+          store: resolvedStore,
+          storeCode: data.user?.storeCode || resolvedStore?.storeCode || resolvedStore?.id,
+          baName: resolvedBaName,
+          baPhone: resolvedBaPhone,
+          username: baUsername.trim(),
+        })
+      );
+
       if (data.activeShift) {
         setActiveShift(data.activeShift);
         localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.activeShift));
@@ -872,6 +920,7 @@ function CheckInContent() {
     } catch {}
     localStorage.removeItem(`active_shift_token_${campaignSlug}`);
     localStorage.removeItem(`active_shift_${campaignSlug}`);
+    localStorage.removeItem(`field_ops_ba_profile_${campaignSlug}`);
     setShiftToken("");
     setBaAuthenticated(false);
     setActiveShift(null);
@@ -879,7 +928,7 @@ function CheckInContent() {
     setBaPin("");
   }
 
-  // ── Step 2: Submit Check-In ──
+  // ── Step 2: Submit Check-In (With Offline Queue Fallback) ──
   async function handleCheckInSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedStore || !baName.trim()) return;
@@ -907,27 +956,76 @@ function CheckInContent() {
     setSubmitting(true);
     setSubmitError("");
 
+    const storeCodeVal = selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "";
+    const checkInPayload = {
+      action: "check_in",
+      campaignId: campaignSlug,
+      storeCode: storeCodeVal,
+      baName: baName.trim(),
+      baUsername: baUsername.trim(),
+      baPhone: baPhone.trim(),
+      pin: baPin.trim(),
+      latitude: coords?.latitude ?? selectedStore.lat ?? 6.5244,
+      longitude: coords?.longitude ?? selectedStore.lng ?? 3.3792,
+      accuracy: coords?.accuracy,
+      timestamp: coords?.timestamp || Date.now(),
+      gpsSamples: gpsSamplesRef.current,
+      deviceId: getOrCreateDeviceId(),
+      photoUrl: photoDataUrl || undefined,
+      isSimulated: demoMode !== "real",
+    };
+
+    const queueOfflineCheckIn = () => {
+      const todayLagos = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Lagos",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      const detId = `${campaignSlug.toLowerCase()}__${storeCodeVal.toLowerCase()}__${todayLagos}`;
+      const optimisticShift: CheckInRecord = {
+        id: detId,
+        campaignId: campaignSlug,
+        storeCode: storeCodeVal,
+        storeName: selectedStore.name,
+        baName: baName.trim(),
+        baUsername: baUsername.trim() || undefined,
+        baPhone: baPhone.trim(),
+        shiftDate: todayLagos,
+        checkInTime: new Date().toISOString(),
+        checkInLat: checkInPayload.latitude,
+        checkInLng: checkInPayload.longitude,
+        checkInAccuracy: checkInPayload.accuracy,
+        targetLat: selectedStore.lat ?? checkInPayload.latitude,
+        targetLng: selectedStore.lng ?? checkInPayload.longitude,
+        distanceMeters: geofence?.distance ?? 0,
+        status: "verified",
+        photoUrl: photoDataUrl || undefined,
+        samplesLogged: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      const nextQueue: OfflineQueuedSurvey[] = [
+        { id: `checkin_${Date.now()}`, queuedAt: Date.now(), payload: checkInPayload },
+        ...offlineQueue,
+      ];
+      setOfflineQueue(nextQueue);
+      localStorage.setItem(`offline_queue_${campaignSlug}`, JSON.stringify(nextQueue));
+      setActiveShift(optimisticShift);
+      localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(optimisticShift));
+    };
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      queueOfflineCheckIn();
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
         headers: getShiftAuthHeaders(),
-        body: JSON.stringify({
-          action: "check_in",
-          campaignId: campaignSlug,
-          storeCode: selectedStore.storeCode || (selectedStore as any).code || selectedStore.id || "",
-          baName: baName.trim(),
-          baUsername: baUsername.trim(),
-          baPhone: baPhone.trim(),
-          pin: baPin.trim(),
-          latitude: coords?.latitude ?? selectedStore.lat ?? 6.5244,
-          longitude: coords?.longitude ?? selectedStore.lng ?? 3.3792,
-          accuracy: coords?.accuracy,
-          timestamp: coords?.timestamp || Date.now(),
-          gpsSamples: gpsSamplesRef.current,
-          deviceId: getOrCreateDeviceId(),
-          photoUrl: photoDataUrl || undefined,
-          isSimulated: demoMode !== "real",
-        }),
+        body: JSON.stringify(checkInPayload),
       });
 
       const data = await res.json();
@@ -943,9 +1041,9 @@ function CheckInContent() {
       }
       setActiveShift(data.checkIn);
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
-    } catch (err: any) {
-      console.error("Checkin submit error:", err);
-      setSubmitError("Network error. Please check internet connection.");
+    } catch {
+      // Network unreachable mid-check-in: create local shift & queue for auto-sync
+      queueOfflineCheckIn();
     } finally {
       setSubmitting(false);
     }
