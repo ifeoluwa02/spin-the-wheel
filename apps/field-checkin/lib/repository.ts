@@ -25,6 +25,91 @@ import type {
 
 const COLLECTION_NAME = "checkins";
 const SURVEYS_COLLECTION = "surveys";
+const SUPERADMIN_CONFIG_DOC_ID = "_admin_config_";
+
+export interface SuperAdminConfig {
+  username: string;
+  passwordHash: string;
+  setupCompleted: boolean;
+  updatedAt: number;
+}
+
+let cachedSuperAdminConfig: SuperAdminConfig | null = null;
+
+function withTimeout<T>(promise: Promise<T>, ms = 4000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Firestore request timed out")), ms);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+export async function getSuperAdminConfig(): Promise<SuperAdminConfig | null> {
+  try {
+    const snap = await withTimeout(getDoc(doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID)), 4000);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data.adminUsername && data.adminPassword) {
+        const cfg: SuperAdminConfig = {
+          username: String(data.adminUsername).trim().toLowerCase(),
+          passwordHash: String(data.adminPassword),
+          setupCompleted: true,
+          updatedAt: Number(data.updatedAt) || Date.now(),
+        };
+        cachedSuperAdminConfig = cfg;
+        return cfg;
+      }
+    }
+  } catch (err) {
+    console.warn("Could not read Superadmin config from Firestore:", err);
+  }
+  return cachedSuperAdminConfig;
+}
+
+export async function saveSuperAdminConfig(params: {
+  username: string;
+  passwordHash: string;
+}): Promise<SuperAdminConfig> {
+  const now = Date.now();
+  const cleanUser = params.username.trim().toLowerCase();
+  const cfg: SuperAdminConfig = {
+    username: cleanUser,
+    passwordHash: params.passwordHash,
+    setupCompleted: true,
+    updatedAt: now,
+  };
+  cachedSuperAdminConfig = cfg;
+
+  try {
+    await withTimeout(
+      setDoc(
+        doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID),
+        {
+          id: SUPERADMIN_CONFIG_DOC_ID,
+          name: "System Superadmin Configuration",
+          adminUsername: cleanUser,
+          adminPassword: params.passwordHash,
+          active: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      ),
+      5000
+    );
+  } catch (err) {
+    console.warn("Firestore write timed out or blocked by rules, using cached Superadmin config:", err);
+  }
+
+  return cfg;
+}
 
 function normalizeSlugKey(val: string): string {
   return String(val || "")
@@ -47,6 +132,7 @@ export function buildDeterministicCheckInId(
  */
 export async function getCampaign(slug: string): Promise<Campaign | null> {
   const cleanSlug = normalizeSlugKey(slug || "golden-morn");
+  if (cleanSlug === SUPERADMIN_CONFIG_DOC_ID) return null;
   try {
     const snap = await getDoc(doc(db, "campaigns", cleanSlug));
     if (snap.exists()) {
@@ -508,14 +594,36 @@ export async function recordSurvey(
   data: Omit<SurveyRecord, "id" | "createdAt">
 ): Promise<{ survey: SurveyRecord; samplesLogged: number }> {
   const now = Date.now();
+  const surveyId = `srv_${now}_${Math.random().toString(36).slice(2, 8)}`;
   const cleanData = stripUndefined({
     ...data,
+    id: surveyId,
     createdAt: now,
-  });
+  }) as SurveyRecord;
 
-  const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
+  // Try top-level surveys collection first; fallback to embedding on checkins/{checkInId}
+  try {
+    const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
+    cleanData.id = docRef.id;
+  } catch {
+    if (data.checkInId) {
+      try {
+        const checkInRef = doc(db, COLLECTION_NAME, data.checkInId);
+        const snap = await getDoc(checkInRef);
+        if (snap.exists()) {
+          const existingSurveys = Array.isArray(snap.data()?.surveys) ? snap.data().surveys : [];
+          await updateDoc(checkInRef, {
+            surveys: [cleanData, ...existingSurveys],
+            updatedAt: now,
+          });
+        }
+      } catch (embedErr) {
+        console.warn("Could not embed survey on check-in document:", embedErr);
+      }
+    }
+  }
+
   let samplesLogged = 0;
-
   if (data.checkInId) {
     try {
       samplesLogged = await updateShiftSampleCounter(data.checkInId, 1);
@@ -525,10 +633,7 @@ export async function recordSurvey(
   }
 
   return {
-    survey: {
-      ...(cleanData as Omit<SurveyRecord, "id">),
-      id: docRef.id,
-    },
+    survey: cleanData,
     samplesLogged,
   };
 }
@@ -555,9 +660,34 @@ export async function getDailySurveys(
       id: d.id,
     }));
     const filtered = checkInId ? list.filter((s) => s.checkInId === checkInId) : list;
-    return filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  } catch (err) {
-    console.error("Failed to fetch daily surveys:", err);
+    if (filtered.length > 0) {
+      return filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    }
+  } catch {
+    // Fallback below: read embedded surveys from checkins collection
+  }
+
+  try {
+    if (checkInId) {
+      const checkInSnap = await getDoc(doc(db, COLLECTION_NAME, checkInId));
+      if (checkInSnap.exists() && Array.isArray(checkInSnap.data()?.surveys)) {
+        return (checkInSnap.data().surveys as SurveyRecord[]).sort(
+          (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+        );
+      }
+      return [];
+    }
+
+    const dailyCheckIns = await getDailyCheckIns(campaignId, targetDate);
+    const allEmbedded: SurveyRecord[] = [];
+    for (const rec of dailyCheckIns) {
+      const arr = (rec as any).surveys;
+      if (Array.isArray(arr)) {
+        allEmbedded.push(...arr);
+      }
+    }
+    return allEmbedded.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch {
     return [];
   }
 }
@@ -565,10 +695,12 @@ export async function getDailySurveys(
 export async function getAllCampaigns(): Promise<Campaign[]> {
   try {
     const snap = await getDocs(collection(db, "campaigns"));
-    const list = snap.docs.map((d) => ({
-      id: d.id,
-      ...(d.data() as Campaign),
-    }));
+    const list = snap.docs
+      .filter((d) => d.id !== SUPERADMIN_CONFIG_DOC_ID)
+      .map((d) => ({
+        id: d.id,
+        ...(d.data() as Campaign),
+      }));
     if (list.length > 0) {
       return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     }

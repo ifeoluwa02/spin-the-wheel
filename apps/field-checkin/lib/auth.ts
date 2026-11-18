@@ -109,7 +109,7 @@ export function verifySessionToken(token?: string | null): SessionPayload | null
  */
 export function getRequestSession(
   request: NextRequest,
-  allowBaShiftCookie = false
+  preferBaShiftCookie = false
 ): SessionPayload | null {
   const authHeader = request.headers.get("authorization");
   if (authHeader && authHeader.toLowerCase().startsWith("bearer ")) {
@@ -118,18 +118,18 @@ export function getRequestSession(
     if (verified) return verified;
   }
 
-  const cookieToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (cookieToken) {
-    const verified = verifySessionToken(cookieToken);
-    if (verified) return verified;
-  }
-
-  if (allowBaShiftCookie) {
+  if (preferBaShiftCookie) {
     const baToken = request.cookies.get(BA_SHIFT_COOKIE_NAME)?.value;
     if (baToken) {
       const verified = verifySessionToken(baToken);
       if (verified) return verified;
     }
+  }
+
+  const cookieToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (cookieToken) {
+    const verified = verifySessionToken(cookieToken);
+    if (verified) return verified;
   }
 
   return null;
@@ -150,21 +150,28 @@ export function setSessionCookie(
   });
 }
 
-export function clearSessionCookies(response: NextResponse): void {
-  response.cookies.set(SESSION_COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
-  response.cookies.set(BA_SHIFT_COOKIE_NAME, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  });
+export function clearSessionCookies(
+  response: NextResponse,
+  scope: "all" | "ba" | "admin" = "all"
+): void {
+  if (scope === "all" || scope === "admin") {
+    response.cookies.set(SESSION_COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+  }
+  if (scope === "all" || scope === "ba") {
+    response.cookies.set(BA_SHIFT_COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+  }
 }
 
 // ── Sliding-Window Brute-Force Rate Limiter ──

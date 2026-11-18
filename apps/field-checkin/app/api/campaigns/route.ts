@@ -16,7 +16,8 @@ import {
   MIN_GEOFENCE_RADIUS_M,
   MAX_GEOFENCE_RADIUS_M,
 } from "@/lib/geo";
-import type { Campaign, StoreLocation } from "@/lib/types";
+import type { Campaign, StoreLocation, SurveyQuestion } from "@/lib/types";
+import { DEFAULT_HOSPITAL_QUESTIONS } from "@/lib/survey-templates";
 
 export const dynamic = "force-dynamic";
 
@@ -114,6 +115,7 @@ export async function POST(request: NextRequest) {
       primaryColor,
       secondaryColor,
       stores,
+      surveyQuestions,
       seedDefaultStores,
     } = body;
 
@@ -192,11 +194,33 @@ export async function POST(request: NextRequest) {
     ).trim();
     const hashedAdminPass = hashPassword(rawAdminPass);
 
+    const resolvedActivationType = activationType === "hospital" ? "hospital" : "retail";
+    const incomingQuestions = Array.isArray(surveyQuestions)
+      ? surveyQuestions
+          .filter((q: any) => q && typeof q.label === "string" && q.label.trim())
+          .slice(0, 30)
+          .map((q: any, idx: number): SurveyQuestion => ({
+            id: String(q.id || `q_${idx + 1}`).trim().slice(0, 60),
+            label: String(q.label).trim().slice(0, 400),
+            type:
+              q.type === "tel" || q.type === "select" || q.type === "radio_consent"
+                ? q.type
+                : "text",
+            required: Boolean(q.required),
+            placeholder: q.placeholder ? String(q.placeholder).trim().slice(0, 120) : undefined,
+            options: Array.isArray(q.options)
+              ? q.options.map((o: any) => String(o).trim().slice(0, 250)).filter(Boolean).slice(0, 20)
+              : undefined,
+            autoFillStoreName: Boolean(q.autoFillStoreName),
+          }))
+      : existing?.surveyQuestions ||
+        (resolvedActivationType === "hospital" ? DEFAULT_HOSPITAL_QUESTIONS : undefined);
+
     const campaignPayload: Campaign = {
       id: slug,
       name: String(name).trim().slice(0, 150),
       brandName: String(brandName || name).trim().slice(0, 120),
-      activationType: activationType === "hospital" ? "hospital" : "retail",
+      activationType: resolvedActivationType,
       adminUsername: String(
         adminUsername || existing?.adminUsername || `${slug.split("-")[0]}_admin`
       )
@@ -207,6 +231,7 @@ export async function POST(request: NextRequest) {
       primaryColor: primaryColor || existing?.primaryColor || "#14B8A6",
       secondaryColor: secondaryColor || existing?.secondaryColor || "#F59E0B",
       stores: validatedStores,
+      surveyQuestions: incomingQuestions,
       active: true,
       createdAt: existing?.createdAt || Date.now(),
     };

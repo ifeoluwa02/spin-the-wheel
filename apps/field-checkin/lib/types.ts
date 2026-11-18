@@ -30,6 +30,18 @@ export interface StoreLocation {
   polygon?: StorePolygonVertex[];
 }
 
+export type SurveyQuestionType = "text" | "tel" | "select" | "radio_consent";
+
+export interface SurveyQuestion {
+  id: string;
+  label: string;
+  type: SurveyQuestionType;
+  required?: boolean;
+  placeholder?: string;
+  options?: string[];
+  autoFillStoreName?: boolean;
+}
+
 export interface Campaign {
   id?: string;
   name: string;
@@ -39,6 +51,7 @@ export interface Campaign {
   adminPassword?: string;
   adminPin?: string;
   stores?: StoreLocation[];
+  surveyQuestions?: SurveyQuestion[];
   primaryColor?: string;
   secondaryColor?: string;
   backgroundColor?: string;
@@ -186,11 +199,18 @@ export interface SurveyRecord {
   purchasedOnShelf?: boolean;
   packsPurchased?: number;
 
-  // Hospital / Clinic Outreach Fields (e.g., Pampers)
+  // Hospital / Clinic Outreach Fields (e.g., Cussons / Molfix ANC & IMC)
+  clinicType?: string;
+  hospitalName?: string;
+  marketingConsent?: boolean;
+  marketingConsentLabel?: string;
   motherStage?: "expectant" | "nursing";
   dueOrBirthDate?: string;
   diaperSizeIssued?: "Newborn (Size 1)" | "Size 2" | "Size 3";
   currentBrandUsed?: string;
+
+  // Dynamic Superadmin-configured custom question answers
+  surveyAnswers?: Record<string, string>;
 
   // Geotag at moment of survey submission (Akida parity)
   lat?: number;
