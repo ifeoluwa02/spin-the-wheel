@@ -38,6 +38,7 @@ export default function SuperAdminPage() {
   const [newBrand, setNewBrand] = useState("");
   const [newSlug, setNewSlug] = useState("");
   const [newType, setNewType] = useState<SurveyType>("retail");
+  const [newGeofenceEnabled, setNewGeofenceEnabled] = useState(true);
   const [newAdminUser, setNewAdminUser] = useState("");
   const [newAdminPass, setNewAdminPass] = useState("");
   const [seedStarter, setSeedStarter] = useState(false);
@@ -69,6 +70,11 @@ export default function SuperAdminPage() {
   const [newQOptions, setNewQOptions] = useState("");
   const [newQRequired, setNewQRequired] = useState(true);
 
+  // ── Offline / Pending Sync State ──
+  const [isOnline, setIsOnline] = useState(true);
+  const [pendingCampaigns, setPendingCampaigns] = useState<Record<string, Campaign>>({});
+  const [syncingPending, setSyncingPending] = useState(false);
+
   function getAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (typeof window !== "undefined") {
@@ -78,9 +84,108 @@ export default function SuperAdminPage() {
     return headers;
   }
 
+  function applyAndCacheCampaigns(nextList: Campaign[]) {
+    setCampaigns(nextList);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("field_ops_cached_campaigns", JSON.stringify(nextList));
+    }
+  }
+
+  function queuePendingCampaign(camp: Campaign) {
+    const slug = camp.id || "golden-morn";
+    const updatedCamp: Campaign = { ...camp, id: slug, updatedAt: Date.now() };
+    setPendingCampaigns((prev) => {
+      const next = { ...prev, [slug]: updatedCamp };
+      if (typeof window !== "undefined") {
+        localStorage.setItem("field_ops_pending_campaigns", JSON.stringify(next));
+      }
+      return next;
+    });
+    setCampaigns((prev) => {
+      const nextList = [updatedCamp, ...prev.filter((c) => c.id !== slug)];
+      if (typeof window !== "undefined") {
+        localStorage.setItem("field_ops_cached_campaigns", JSON.stringify(nextList));
+      }
+      return nextList;
+    });
+    return updatedCamp;
+  }
+
+  async function syncPendingCampaigns(explicitToken?: string): Promise<Record<string, Campaign>> {
+    if (typeof window === "undefined") return {};
+    let storedPending: Record<string, Campaign> = {};
+    try {
+      const raw = localStorage.getItem("field_ops_pending_campaigns");
+      if (raw) storedPending = JSON.parse(raw);
+    } catch {}
+
+    const entries = Object.entries(storedPending);
+    if (entries.length === 0) return {};
+
+    setSyncingPending(true);
+    const token = explicitToken ?? localStorage.getItem("field_ops_superadmin_token");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const remaining: Record<string, Campaign> = {};
+    for (const [slug, camp] of entries) {
+      try {
+        const res = await fetch("/api/campaigns", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(camp),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          if (res.status >= 500) remaining[slug] = camp;
+        }
+      } catch {
+        remaining[slug] = camp;
+      }
+    }
+
+    setPendingCampaigns(remaining);
+    if (Object.keys(remaining).length > 0) {
+      localStorage.setItem("field_ops_pending_campaigns", JSON.stringify(remaining));
+    } else {
+      localStorage.removeItem("field_ops_pending_campaigns");
+    }
+    setSyncingPending(false);
+    return remaining;
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsOnline(navigator.onLine);
+    try {
+      const rawPending = localStorage.getItem("field_ops_pending_campaigns");
+      if (rawPending) setPendingCampaigns(JSON.parse(rawPending));
+    } catch {}
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      loadCampaigns();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     async function verifyAndLoad() {
       const token = localStorage.getItem("field_ops_superadmin_token");
+      if (token) {
+        // Hydrate cached campaigns immediately so offline refreshes never lose events
+        try {
+          const cached = localStorage.getItem("field_ops_cached_campaigns");
+          if (cached) setCampaigns(JSON.parse(cached));
+        } catch {}
+      }
       try {
         const res = await fetch("/api/auth", {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -92,8 +197,20 @@ export default function SuperAdminPage() {
             await loadCampaigns(token || undefined);
             return;
           }
+        } else if (res.status === 401) {
+          localStorage.removeItem("field_ops_superadmin_token");
+          setIsAuthenticated(false);
+          setLoading(false);
+          return;
         }
-      } catch {}
+      } catch {
+        // Network offline during refresh: if token exists locally, allow offline access to cached campaigns
+        if (token) {
+          setIsAuthenticated(true);
+          setLoading(false);
+          return;
+        }
+      }
       localStorage.removeItem("field_ops_superadmin_token");
       setIsAuthenticated(false);
       setLoading(false);
@@ -105,19 +222,37 @@ export default function SuperAdminPage() {
   async function loadCampaigns(explicitToken?: string) {
     setLoading(true);
     try {
+      // First push any pending offline campaign edits to the server
+      const remainingPending = await syncPendingCampaigns(explicitToken);
+
       const token = explicitToken ?? localStorage.getItem("field_ops_superadmin_token");
       const res = await fetch("/api/campaigns", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setCampaigns(data.campaigns || []);
+        const serverList: Campaign[] = data.campaigns || [];
+        const mergedMap = new Map<string, Campaign>();
+        for (const c of serverList) {
+          if (c.id) mergedMap.set(c.id, c);
+        }
+        // Keep any still-unsynced local campaigns merged on top
+        for (const [slug, localCamp] of Object.entries(remainingPending)) {
+          mergedMap.set(slug, localCamp);
+        }
+        applyAndCacheCampaigns(
+          Array.from(mergedMap.values()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        );
       } else if (res.status === 401) {
         setIsAuthenticated(false);
         localStorage.removeItem("field_ops_superadmin_token");
       }
     } catch (err) {
-      console.error("Failed to load campaigns:", err);
+      console.warn("Offline while loading campaigns — displaying cached campaigns:", err);
+      try {
+        const cached = localStorage.getItem("field_ops_cached_campaigns");
+        if (cached) setCampaigns(JSON.parse(cached));
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -175,18 +310,28 @@ export default function SuperAdminPage() {
       .replace(/-+/g, "-")
       .replace(/^-|-$/g, "");
 
+    const payload: Campaign = {
+      id: slug,
+      name: newName.trim(),
+      brandName: newBrand.trim() || newName.trim(),
+      activationType: newType,
+      geofenceEnabled: newGeofenceEnabled,
+      adminUsername: newAdminUser.trim() || `${slug.split("-")[0]}_admin`,
+      adminPassword: newAdminPass.trim() || "2026",
+      adminPin: newAdminPass.trim() || "2026",
+      stores: [],
+      surveyQuestions: newType === "hospital" ? DEFAULT_HOSPITAL_QUESTIONS : undefined,
+      active: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
     try {
       const res = await fetch("/api/campaigns", {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({
-          id: slug,
-          name: newName.trim(),
-          brandName: newBrand.trim() || newName.trim(),
-          activationType: newType,
-          adminUsername: newAdminUser.trim() || `${slug.split("-")[0]}_admin`,
-          adminPassword: newAdminPass.trim() || "2026",
-          adminPin: newAdminPass.trim() || "2026",
+          ...payload,
           seedDefaultStores: seedStarter,
         }),
       });
@@ -195,9 +340,9 @@ export default function SuperAdminPage() {
         setCreateError(data.error || "Could not create campaign.");
         return;
       }
-      setCampaigns((prev) => [
+      applyAndCacheCampaigns([
         data.campaign,
-        ...prev.filter((c) => c.id !== data.campaign.id),
+        ...campaigns.filter((c) => c.id !== data.campaign.id),
       ]);
       setIsCreateOpen(false);
       setNewName("");
@@ -205,11 +350,49 @@ export default function SuperAdminPage() {
       setNewSlug("");
       setNewAdminUser("");
       setNewAdminPass("");
+      setNewGeofenceEnabled(true);
       setSeedStarter(false);
     } catch {
-      setCreateError("Network error while creating brand event.");
+      // Offline fallback: save locally and queue for auto-sync on reconnect
+      queuePendingCampaign(payload);
+      setIsCreateOpen(false);
+      setNewName("");
+      setNewBrand("");
+      setNewSlug("");
+      setNewAdminUser("");
+      setNewAdminPass("");
+      setNewGeofenceEnabled(true);
+      setSeedStarter(false);
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function handleToggleCampaignGeofence(c: Campaign) {
+    const nextEnabled = c.geofenceEnabled === false ? true : false;
+    const optimistic: Campaign = { ...c, geofenceEnabled: nextEnabled, updatedAt: Date.now() };
+    try {
+      const res = await fetch("/api/campaigns", {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify(optimistic),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        applyAndCacheCampaigns(
+          campaigns.map((item) => (item.id === data.campaign.id ? data.campaign : item))
+        );
+        if (managingCampaign?.id === data.campaign.id) {
+          setManagingCampaign(data.campaign);
+        }
+      } else {
+        queuePendingCampaign(optimistic);
+      }
+    } catch {
+      queuePendingCampaign(optimistic);
+      if (managingCampaign?.id === optimistic.id) {
+        setManagingCampaign(optimistic);
+      }
     }
   }
 
@@ -287,20 +470,23 @@ export default function SuperAdminPage() {
       ),
     ];
 
+    const optimistic: Campaign = {
+      ...managingCampaign,
+      stores: updatedStores,
+      updatedAt: Date.now(),
+    };
+
     try {
       const res = await fetch("/api/campaigns", {
         method: "POST",
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          ...managingCampaign,
-          stores: updatedStores,
-        }),
+        body: JSON.stringify(optimistic),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setManagingCampaign(data.campaign);
-        setCampaigns((prev) =>
-          prev.map((c) => (c.id === data.campaign.id ? data.campaign : c))
+        applyAndCacheCampaigns(
+          campaigns.map((c) => (c.id === data.campaign.id ? data.campaign : c))
         );
         setStoreName("");
         setStoreCode("");
@@ -311,8 +497,15 @@ export default function SuperAdminPage() {
       } else {
         alert(data.error || "Failed to save location.");
       }
-    } catch (err) {
-      console.error("Add store error:", err);
+    } catch {
+      const queued = queuePendingCampaign(optimistic);
+      setManagingCampaign(queued);
+      setStoreName("");
+      setStoreCode("");
+      setStoreAddress("");
+      setBaName("");
+      setBaUsername("");
+      setBaPhone("");
     } finally {
       setSavingStore(false);
     }
@@ -324,24 +517,27 @@ export default function SuperAdminPage() {
     const updatedStores = (managingCampaign.stores || []).filter(
       (s) => (s.storeCode || s.id) !== codeToDelete
     );
+    const optimistic: Campaign = {
+      ...managingCampaign,
+      stores: updatedStores,
+      updatedAt: Date.now(),
+    };
     try {
       const res = await fetch("/api/campaigns", {
         method: "POST",
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          ...managingCampaign,
-          stores: updatedStores,
-        }),
+        body: JSON.stringify(optimistic),
       });
       const data = await res.json();
       if (res.ok && data.success) {
         setManagingCampaign(data.campaign);
-        setCampaigns((prev) =>
-          prev.map((c) => (c.id === data.campaign.id ? data.campaign : c))
+        applyAndCacheCampaigns(
+          campaigns.map((c) => (c.id === data.campaign.id ? data.campaign : c))
         );
       }
-    } catch (err) {
-      console.error("Delete store error:", err);
+    } catch {
+      const queued = queuePendingCampaign(optimistic);
+      setManagingCampaign(queued);
     }
   }
 
@@ -487,6 +683,33 @@ export default function SuperAdminPage() {
         ) : (
           /* ── Authenticated Multi-Brand Campaign Directory ── */
           <div className="space-y-6">
+            {(!isOnline || Object.keys(pendingCampaigns).length > 0) && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/35 flex items-center justify-between gap-3 flex-wrap text-xs">
+                <div className="flex items-center gap-2 text-amber-200 font-bold">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      isOnline ? "bg-teal-400" : "bg-amber-400 animate-pulse"
+                    }`}
+                  />
+                  <span>
+                    {!isOnline
+                      ? `Offline Mode · Changes are saved locally (${Object.keys(pendingCampaigns).length} pending cloud sync)`
+                      : `${Object.keys(pendingCampaigns).length} offline event change(s) ready to sync across board`}
+                  </span>
+                </div>
+                {isOnline && Object.keys(pendingCampaigns).length > 0 && (
+                  <button
+                    type="button"
+                    disabled={syncingPending}
+                    onClick={() => loadCampaigns()}
+                    className="px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-black text-[11px] uppercase tracking-wider cursor-pointer"
+                  >
+                    {syncingPending ? "Syncing..." : "Sync Now"}
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-lg font-black text-white">
@@ -560,6 +783,23 @@ export default function SuperAdminPage() {
                           <div className="flex items-center justify-between">
                             <span className="text-white/50">Locations Assigned:</span>
                             <span className="font-mono font-bold text-white">{storeCount} venues</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-white/50">Geofence Rule:</span>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCampaignGeofence(c)}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold border transition cursor-pointer ${
+                                c.geofenceEnabled !== false
+                                  ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25"
+                                  : "bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25"
+                              }`}
+                              title="Click to toggle GPS Geofence requirement ON or OFF for this event"
+                            >
+                              {c.geofenceEnabled !== false
+                                ? "📍 ON (200m Fence)"
+                                : "⚡ OFF (Direct Check-In)"}
+                            </button>
                           </div>
                           <div className="flex items-center justify-between">
                             <span className="text-white/50">Supervisor User:</span>
@@ -779,15 +1019,27 @@ export default function SuperAdminPage() {
                 </div>
               </div>
 
-              <label className="flex items-center gap-2 text-xs text-white/70 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={seedStarter}
-                  onChange={(e) => setSeedStarter(e.target.checked)}
-                  className="rounded border-white/20"
-                />
-                <span>Pre-load starter demo locations (can be edited or deleted anytime)</span>
-              </label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-xs text-white/85 font-semibold cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newGeofenceEnabled}
+                    onChange={(e) => setNewGeofenceEnabled(e.target.checked)}
+                    className="rounded border-white/20 accent-teal-400"
+                  />
+                  <span>Enable GPS Geofence Verification (Require BAs to be on-site within radius)</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs text-white/70 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={seedStarter}
+                    onChange={(e) => setSeedStarter(e.target.checked)}
+                    className="rounded border-white/20 accent-teal-400"
+                  />
+                  <span>Pre-load starter demo locations (can be edited or deleted anytime)</span>
+                </label>
+              </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button

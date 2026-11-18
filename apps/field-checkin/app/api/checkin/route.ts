@@ -169,13 +169,6 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (!isValidCoordinates(latitude, longitude)) {
-        return NextResponse.json(
-          { error: "Valid GPS latitude and longitude are required." },
-          { status: 400 }
-        );
-      }
-
       const demoAllowed = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
       if (isSimulated && !demoAllowed) {
         return NextResponse.json(
@@ -213,6 +206,14 @@ export async function POST(request: NextRequest) {
       const campaign = await getCampaign(cleanCampaignId);
       if (!campaign) {
         return NextResponse.json({ error: "Campaign not found." }, { status: 404 });
+      }
+
+      const geofenceRequired = campaign.geofenceEnabled !== false;
+      if (geofenceRequired && !isValidCoordinates(latitude, longitude)) {
+        return NextResponse.json(
+          { error: "Valid GPS latitude and longitude are required." },
+          { status: 400 }
+        );
       }
 
       const normCode = cleanCode.replace(/[^a-z0-9]/g, "");
@@ -286,35 +287,48 @@ export async function POST(request: NextRequest) {
       // Credentials verified -> clear rate limit bucket
       resetRateLimit(rateKey);
 
-      // Require configured store GPS coordinates (never fall back to user's own position)
-      if (!isValidCoordinates(store.lat, store.lng)) {
-        return NextResponse.json(
-          {
-            error: `Store GPS coordinates are not configured for ${store.name}. Ask a supervisor to calibrate this venue.`,
-          },
-          { status: 400 }
-        );
-      }
-
-      const targetLat = store.lat!;
-      const targetLng = store.lng!;
+      let targetLat = isValidCoordinates(store.lat, store.lng) ? store.lat! : 6.5244;
+      let targetLng = isValidCoordinates(store.lat, store.lng) ? store.lng! : 3.3792;
+      const resolvedUserLat = isValidCoordinates(latitude, longitude) ? latitude : targetLat;
+      const resolvedUserLng = isValidCoordinates(latitude, longitude) ? longitude : targetLng;
       const radius = typeof store.geofenceRadius === "number" ? store.geofenceRadius : 200;
 
-      const evalResult = evaluateGeofence(
-        { latitude, longitude, accuracy, timestamp },
-        { latitude: targetLat, longitude: targetLng },
-        radius,
-        store.polygon
-      );
+      let evalResult = {
+        inside: true,
+        distance: 0,
+        status: "verified" as "verified" | "drift" | "out_of_bounds",
+        message: "Direct check-in verified (geofence disabled for this event).",
+      };
 
-      if (!evalResult.inside) {
-        return NextResponse.json(
-          {
-            error: evalResult.message,
-            evaluation: evalResult,
-          },
-          { status: 403 }
+      if (geofenceRequired) {
+        if (!isValidCoordinates(store.lat, store.lng)) {
+          return NextResponse.json(
+            {
+              error: `Store GPS coordinates are not configured for ${store.name}. Ask a supervisor to calibrate this venue.`,
+            },
+            { status: 400 }
+          );
+        }
+
+        targetLat = store.lat!;
+        targetLng = store.lng!;
+
+        evalResult = evaluateGeofence(
+          { latitude: resolvedUserLat, longitude: resolvedUserLng, accuracy, timestamp },
+          { latitude: targetLat, longitude: targetLng },
+          radius,
+          store.polygon
         );
+
+        if (!evalResult.inside) {
+          return NextResponse.json(
+            {
+              error: evalResult.message,
+              evaluation: evalResult,
+            },
+            { status: 403 }
+          );
+        }
       }
 
       // Check if store already has an active check-in today
@@ -341,18 +355,21 @@ export async function POST(request: NextRequest) {
         return res;
       }
 
-      // Analyze GPS telemetry & spoofing signals
-      const telemetry = evaluateGpsTelemetry(
-        { latitude, longitude, accuracy, timestamp },
-        Array.isArray(gpsSamples) ? gpsSamples : undefined,
-        Boolean(isSimulated)
-      );
+      // Analyze GPS telemetry & spoofing signals (only when geofence is enabled)
+      const telemetry = geofenceRequired
+        ? evaluateGpsTelemetry(
+            { latitude: resolvedUserLat, longitude: resolvedUserLng, accuracy, timestamp },
+            Array.isArray(gpsSamples) ? gpsSamples : undefined,
+            Boolean(isSimulated)
+          )
+        : { spoofRisk: "low" as const, spoofReasons: [], freshnessOk: true };
 
       // Persist "flagged" status if indoor drift, simulated demo mode, or high spoof risk
       const status: CheckInStatus =
-        evalResult.status === "drift" ||
-        Boolean(isSimulated) ||
-        telemetry.spoofRisk === "high"
+        geofenceRequired &&
+        (evalResult.status === "drift" ||
+          Boolean(isSimulated) ||
+          telemetry.spoofRisk === "high")
           ? "flagged"
           : "verified";
 
@@ -367,12 +384,12 @@ export async function POST(request: NextRequest) {
         baPhone: String(baPhone || "").trim().slice(0, 40),
         shiftDate: todayStr,
         checkInTime: new Date().toISOString(),
-        checkInLat: latitude,
-        checkInLng: longitude,
+        checkInLat: resolvedUserLat,
+        checkInLng: resolvedUserLng,
         checkInAccuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
         targetLat,
         targetLng,
-        distanceMeters: evalResult.distance,
+        distanceMeters: Math.max(0, evalResult.distance),
         status,
         photoUrl,
         photoSha256,
