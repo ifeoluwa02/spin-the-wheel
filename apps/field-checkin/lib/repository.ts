@@ -34,43 +34,24 @@ export interface SuperAdminConfig {
   updatedAt: number;
 }
 
-let cachedSuperAdminConfig: SuperAdminConfig | null = null;
-
-function withTimeout<T>(promise: Promise<T>, ms = 4000): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("Firestore request timed out")), ms);
-    promise
-      .then((val) => {
-        clearTimeout(timer);
-        resolve(val);
-      })
-      .catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-  });
-}
-
 export async function getSuperAdminConfig(): Promise<SuperAdminConfig | null> {
   try {
-    const snap = await withTimeout(getDoc(doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID)), 4000);
+    const snap = await getDoc(doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID));
     if (snap.exists()) {
       const data = snap.data();
       if (data.adminUsername && data.adminPassword) {
-        const cfg: SuperAdminConfig = {
+        return {
           username: String(data.adminUsername).trim().toLowerCase(),
           passwordHash: String(data.adminPassword),
           setupCompleted: true,
           updatedAt: Number(data.updatedAt) || Date.now(),
         };
-        cachedSuperAdminConfig = cfg;
-        return cfg;
       }
     }
   } catch (err) {
     console.warn("Could not read Superadmin config from Firestore:", err);
   }
-  return cachedSuperAdminConfig;
+  return null;
 }
 
 export async function saveSuperAdminConfig(params: {
@@ -79,36 +60,25 @@ export async function saveSuperAdminConfig(params: {
 }): Promise<SuperAdminConfig> {
   const now = Date.now();
   const cleanUser = params.username.trim().toLowerCase();
-  const cfg: SuperAdminConfig = {
+  await setDoc(
+    doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID),
+    {
+      id: SUPERADMIN_CONFIG_DOC_ID,
+      name: "System Superadmin Configuration",
+      adminUsername: cleanUser,
+      adminPassword: params.passwordHash,
+      active: false,
+      createdAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+  return {
     username: cleanUser,
     passwordHash: params.passwordHash,
     setupCompleted: true,
     updatedAt: now,
   };
-  cachedSuperAdminConfig = cfg;
-
-  try {
-    await withTimeout(
-      setDoc(
-        doc(db, "campaigns", SUPERADMIN_CONFIG_DOC_ID),
-        {
-          id: SUPERADMIN_CONFIG_DOC_ID,
-          name: "System Superadmin Configuration",
-          adminUsername: cleanUser,
-          adminPassword: params.passwordHash,
-          active: false,
-          createdAt: now,
-          updatedAt: now,
-        },
-        { merge: true }
-      ),
-      5000
-    );
-  } catch (err) {
-    console.warn("Firestore write timed out or blocked by rules, using cached Superadmin config:", err);
-  }
-
-  return cfg;
 }
 
 function normalizeSlugKey(val: string): string {
@@ -126,54 +96,20 @@ export function buildDeterministicCheckInId(
   return `${normalizeSlugKey(campaignId)}__${normalizeSlugKey(storeCode)}__${normalizeSlugKey(shiftDate)}`;
 }
 
-const campaignCache = new Map<string, Campaign>();
-const dirtyCampaigns = new Set<string>();
-
-async function flushDirtyCampaigns(): Promise<void> {
-  if (dirtyCampaigns.size === 0) return;
-  for (const slug of Array.from(dirtyCampaigns)) {
-    const cached = campaignCache.get(slug);
-    if (!cached) {
-      dirtyCampaigns.delete(slug);
-      continue;
-    }
-    try {
-      await withTimeout(setDoc(doc(db, "campaigns", slug), cached, { merge: true }), 3500);
-      dirtyCampaigns.delete(slug);
-    } catch {
-      // Still offline; keep in dirtyCampaigns for next reconnect
-      return;
-    }
-  }
-}
-
 /**
- * Retrieves campaign metadata and stores list from Firestore (with offline cache fallback & auto-flush).
+ * Retrieves campaign metadata and stores list from Firestore.
  * Only falls back to demo Golden Morn campaign when slug === "golden-morn".
  */
 export async function getCampaign(slug: string): Promise<Campaign | null> {
   const cleanSlug = normalizeSlugKey(slug || "golden-morn");
   if (cleanSlug === SUPERADMIN_CONFIG_DOC_ID) return null;
-  const localCached = campaignCache.get(cleanSlug);
-
   try {
-    await flushDirtyCampaigns();
-    const snap = await withTimeout(getDoc(doc(db, "campaigns", cleanSlug)), 4000);
+    const snap = await getDoc(doc(db, "campaigns", cleanSlug));
     if (snap.exists()) {
-      const remote = { id: snap.id, ...snap.data() } as Campaign;
-      // Prefer localCached if it has unsynced newer edits
-      if (localCached && (localCached.updatedAt || 0) > (remote.updatedAt || 0)) {
-        return localCached;
-      }
-      campaignCache.set(cleanSlug, remote);
-      return remote;
+      return { id: snap.id, ...snap.data() } as Campaign;
     }
   } catch (err) {
     console.warn("Could not fetch campaign from Firestore:", err);
-  }
-
-  if (localCached) {
-    return localCached;
   }
 
   if (cleanSlug === "golden-morn") {
@@ -541,9 +477,33 @@ export async function getCheckInById(checkInId: string): Promise<CheckInRecord |
  */
 export async function getDailyCheckIns(
   campaignId: string,
-  dateStr?: string
+  dateStr?: string,
+  endDateStr?: string
 ): Promise<CheckInRecord[]> {
   const targetDate = dateStr || getTodayDateStr();
+  const isRange = Boolean(endDateStr && endDateStr !== targetDate);
+  const minDate = isRange && endDateStr! < targetDate ? endDateStr! : targetDate;
+  const maxDate = isRange && endDateStr! > targetDate ? endDateStr! : targetDate;
+
+  if (isRange) {
+    try {
+      const qRange = query(
+        collection(db, COLLECTION_NAME),
+        where("campaignId", "==", campaignId)
+      );
+      const snap = await getDocs(qRange);
+      const records = snap.docs
+        .map((d) => ({
+          ...(d.data() as CheckInRecord),
+          id: d.id,
+        }))
+        .filter((r) => r.shiftDate >= minDate && r.shiftDate <= maxDate);
+      return records.sort((a, b) => (b.checkInTime || "").localeCompare(a.checkInTime || ""));
+    } catch (errRange) {
+      console.error("Failed to fetch range checkins:", errRange);
+      return [];
+    }
+  }
 
   try {
     const q = query(
@@ -635,8 +595,27 @@ export async function recordSurvey(
     createdAt: now,
   }) as SurveyRecord;
 
-  const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
-  cleanData.id = docRef.id;
+  // Try top-level surveys collection first; fallback to embedding on checkins/{checkInId}
+  try {
+    const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
+    cleanData.id = docRef.id;
+  } catch {
+    if (data.checkInId) {
+      try {
+        const checkInRef = doc(db, COLLECTION_NAME, data.checkInId);
+        const snap = await getDoc(checkInRef);
+        if (snap.exists()) {
+          const existingSurveys = Array.isArray(snap.data()?.surveys) ? snap.data().surveys : [];
+          await updateDoc(checkInRef, {
+            surveys: [cleanData, ...existingSurveys],
+            updatedAt: now,
+          });
+        }
+      } catch (embedErr) {
+        console.warn("Could not embed survey on check-in document:", embedErr);
+      }
+    }
+  }
 
   let samplesLogged = 0;
   if (data.checkInId) {
@@ -659,21 +638,29 @@ export async function recordSurvey(
 export async function getDailySurveys(
   campaignId: string,
   dateStr?: string,
-  checkInId?: string
+  checkInId?: string,
+  endDateStr?: string
 ): Promise<SurveyRecord[]> {
   const targetDate = dateStr || getTodayDateStr();
+  const isRange = Boolean(endDateStr && endDateStr !== targetDate);
+  const minDate = isRange && endDateStr! < targetDate ? endDateStr! : targetDate;
+  const maxDate = isRange && endDateStr! > targetDate ? endDateStr! : targetDate;
 
   try {
-    const q = query(
-      collection(db, SURVEYS_COLLECTION),
-      where("campaignId", "==", campaignId),
-      where("shiftDate", "==", targetDate)
-    );
+    const q = isRange
+      ? query(collection(db, SURVEYS_COLLECTION), where("campaignId", "==", campaignId))
+      : query(
+          collection(db, SURVEYS_COLLECTION),
+          where("campaignId", "==", campaignId),
+          where("shiftDate", "==", targetDate)
+        );
     const snap = await getDocs(q);
-    const list = snap.docs.map((d) => ({
-      ...(d.data() as SurveyRecord),
-      id: d.id,
-    }));
+    const list = snap.docs
+      .map((d) => ({
+        ...(d.data() as SurveyRecord),
+        id: d.id,
+      }))
+      .filter((s) => !isRange || (s.shiftDate >= minDate && s.shiftDate <= maxDate));
     const filtered = checkInId ? list.filter((s) => s.checkInId === checkInId) : list;
     if (filtered.length > 0) {
       return filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -693,7 +680,7 @@ export async function getDailySurveys(
       return [];
     }
 
-    const dailyCheckIns = await getDailyCheckIns(campaignId, targetDate);
+    const dailyCheckIns = await getDailyCheckIns(campaignId, minDate, maxDate);
     const allEmbedded: SurveyRecord[] = [];
     for (const rec of dailyCheckIns) {
       const arr = (rec as any).surveys;
@@ -709,39 +696,18 @@ export async function getDailySurveys(
 
 export async function getAllCampaigns(): Promise<Campaign[]> {
   try {
-    await flushDirtyCampaigns();
-    const snap = await withTimeout(getDocs(collection(db, "campaigns")), 4500);
-    const mergedMap = new Map<string, Campaign>();
-
-    for (const d of snap.docs) {
-      if (d.id === SUPERADMIN_CONFIG_DOC_ID) continue;
-      const remote = { id: d.id, ...(d.data() as Campaign) };
-      mergedMap.set(d.id, remote);
-      const existingLocal = campaignCache.get(d.id);
-      if (!existingLocal || (remote.updatedAt || 0) >= (existingLocal.updatedAt || 0)) {
-        campaignCache.set(d.id, remote);
-      }
-    }
-
-    // Merge any locally cached campaigns (e.g. created while offline)
-    for (const [slug, localCamp] of campaignCache.entries()) {
-      const rem = mergedMap.get(slug);
-      if (!rem || (localCamp.updatedAt || 0) > (rem.updatedAt || 0)) {
-        mergedMap.set(slug, localCamp);
-      }
-    }
-
-    const list = Array.from(mergedMap.values());
+    const snap = await getDocs(collection(db, "campaigns"));
+    const list = snap.docs
+      .filter((d) => d.id !== SUPERADMIN_CONFIG_DOC_ID)
+      .map((d) => ({
+        id: d.id,
+        ...(d.data() as Campaign),
+      }));
     if (list.length > 0) {
       return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     }
   } catch (err) {
-    console.warn("Could not list campaigns from Firestore, using memory cache:", err);
-    if (campaignCache.size > 0) {
-      return Array.from(campaignCache.values()).sort(
-        (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
-      );
-    }
+    console.warn("Could not list campaigns from Firestore:", err);
   }
   return [
     {
@@ -768,21 +734,9 @@ export async function saveCampaign(campaign: Campaign): Promise<Campaign> {
     id: slug,
     updatedAt: now,
     createdAt: campaign.createdAt || now,
-  }) as Campaign;
-
-  campaignCache.set(slug, payload);
-  dirtyCampaigns.add(slug);
-
-  try {
-    await withTimeout(setDoc(docRef, payload, { merge: true }), 4500);
-    dirtyCampaigns.delete(slug);
-  } catch (err) {
-    console.warn(
-      `Firestore unreachable while saving campaign "${slug}" — cached in memory and queued for auto-sync on reconnect:`,
-      err
-    );
-  }
-  return payload;
+  });
+  await setDoc(docRef, payload, { merge: true });
+  return payload as Campaign;
 }
 
 /**

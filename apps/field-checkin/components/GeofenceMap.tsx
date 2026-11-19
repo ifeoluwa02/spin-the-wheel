@@ -10,6 +10,7 @@ interface GeofenceMapProps {
   targetLat: number;
   targetLng: number;
   radius: number;
+  polygon?: Array<{ lat: number; lng: number }>;
   targetLabel?: string;
   userLat?: number;
   userLng?: number;
@@ -27,6 +28,8 @@ const STATUS_COLOR: Record<MapGeofenceStatus, string> = {
 
 const TILE_URL =
   process.env.NEXT_PUBLIC_MAP_TILE_URL || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const SATELLITE_TILE_URL =
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 
 /**
  * Live geofence map (OpenStreetMap + Leaflet).
@@ -38,6 +41,7 @@ export default function GeofenceMap({
   targetLat,
   targetLng,
   radius,
+  polygon,
   targetLabel,
   userLat,
   userLng,
@@ -48,14 +52,17 @@ export default function GeofenceMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const LRef = useRef<typeof Leaflet | null>(null);
   const mapRef = useRef<Leaflet.Map | null>(null);
+  const tileLayerRef = useRef<Leaflet.TileLayer | null>(null);
   const layersRef = useRef<{
     fence?: Leaflet.Circle;
+    poly?: Leaflet.Polygon;
     target?: Leaflet.Marker;
     user?: Leaflet.Marker;
     accuracy?: Leaflet.Circle;
   }>({});
   const lastFitKey = useRef<string>("");
   const [ready, setReady] = React.useState(false);
+  const [tileMode, setTileMode] = React.useState<"map" | "satellite">("map");
 
   // ── Init map once ──
   useEffect(() => {
@@ -71,7 +78,7 @@ export default function GeofenceMap({
         scrollWheelZoom: false,
       }).setView([targetLat, targetLng], 17);
 
-      L.tileLayer(TILE_URL, {
+      tileLayerRef.current = L.tileLayer(TILE_URL, {
         maxZoom: 19,
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
@@ -86,11 +93,30 @@ export default function GeofenceMap({
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
+      tileLayerRef.current = null;
       layersRef.current = {};
       lastFitKey.current = "";
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Switch street map / satellite tiles ──
+  useEffect(() => {
+    const L = LRef.current;
+    const map = mapRef.current;
+    if (!ready || !L || !map) return;
+    tileLayerRef.current?.remove();
+    tileLayerRef.current = L.tileLayer(
+      tileMode === "satellite" ? SATELLITE_TILE_URL : TILE_URL,
+      {
+        maxZoom: 19,
+        attribution:
+          tileMode === "satellite"
+            ? "Tiles &copy; Esri"
+            : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }
+    ).addTo(map);
+  }, [ready, tileMode]);
 
   // ── Sync layers whenever props change ──
   useEffect(() => {
@@ -100,20 +126,38 @@ export default function GeofenceMap({
     const layers = layersRef.current;
     const color = STATUS_COLOR[status];
 
-    // Geofence boundary
+    // Geofence boundary (circle + optional polygon enclosure)
     if (!layers.fence) {
       layers.fence = L.circle([targetLat, targetLng], {
         radius,
         color,
         weight: 2,
         fillColor: color,
-        fillOpacity: 0.15,
+        fillOpacity: polygon && polygon.length >= 3 ? 0.05 : 0.15,
         dashArray: "6 4",
       }).addTo(map);
     } else {
       layers.fence.setLatLng([targetLat, targetLng]);
       layers.fence.setRadius(radius);
       layers.fence.setStyle({ color, fillColor: color });
+    }
+
+    if (polygon && polygon.length >= 3) {
+      const latlngs = polygon.map((p) => [p.lat, p.lng] as [number, number]);
+      if (!layers.poly) {
+        layers.poly = L.polygon(latlngs, {
+          color,
+          weight: 2.5,
+          fillColor: color,
+          fillOpacity: 0.22,
+        }).addTo(map);
+      } else {
+        layers.poly.setLatLngs(latlngs);
+        layers.poly.setStyle({ color, fillColor: color });
+      }
+    } else if (layers.poly) {
+      layers.poly.remove();
+      layers.poly = undefined;
     }
 
     // Target pin
@@ -167,14 +211,14 @@ export default function GeofenceMap({
 
     // Re-fit only when the target changes or the user first appears / mode jumps
     // (not on every GPS tick — that would fight the BA's own panning).
-    const fitKey = `${targetLat.toFixed(5)},${targetLng.toFixed(5)},${radius},${hasUser ? "u" : "-"},${status === "out_of_bounds" ? "o" : "i"}`;
+    const fitKey = `${targetLat.toFixed(5)},${targetLng.toFixed(5)},${radius},${polygon?.length || 0},${hasUser ? "u" : "-"},${status === "out_of_bounds" ? "o" : "i"}`;
     if (fitKey !== lastFitKey.current) {
       lastFitKey.current = fitKey;
-      let bounds = layers.fence.getBounds();
+      let bounds = layers.poly ? layers.poly.getBounds() : layers.fence.getBounds();
       if (hasUser) bounds = bounds.extend([userLat!, userLng!]);
       map.fitBounds(bounds, { padding: [24, 24], maxZoom: 18 });
     }
-  }, [ready, targetLat, targetLng, radius, targetLabel, userLat, userLng, accuracy, status]);
+  }, [ready, targetLat, targetLng, radius, polygon, targetLabel, userLat, userLng, accuracy, status]);
 
   return (
     <div className={`gf-map relative overflow-hidden rounded-xl border border-white/10 ${className}`}>
@@ -186,7 +230,29 @@ export default function GeofenceMap({
       )}
       <div className="absolute top-2 left-2 z-[500] flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/60 backdrop-blur text-[10px] font-mono text-white/80 pointer-events-none">
         <span className="w-2 h-2 rounded-full" style={{ background: STATUS_COLOR[status] }} />
-        <span>Geofence {radius}m</span>
+        <span>
+          {polygon && polygon.length >= 3 ? `Territory (${polygon.length} pts)` : `Geofence ${radius}m`}
+        </span>
+      </div>
+      <div className="absolute top-2 right-2 z-[500] flex items-center rounded-lg bg-black/70 backdrop-blur border border-white/15 overflow-hidden text-[10px] font-bold">
+        <button
+          type="button"
+          onClick={() => setTileMode("map")}
+          className={`px-2 py-1 cursor-pointer ${
+            tileMode === "map" ? "bg-teal-400 text-black" : "text-white/70 hover:text-white"
+          }`}
+        >
+          Map
+        </button>
+        <button
+          type="button"
+          onClick={() => setTileMode("satellite")}
+          className={`px-2 py-1 cursor-pointer ${
+            tileMode === "satellite" ? "bg-teal-400 text-black" : "text-white/70 hover:text-white"
+          }`}
+        >
+          Satellite
+        </button>
       </div>
     </div>
   );
