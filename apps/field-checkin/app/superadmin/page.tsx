@@ -423,17 +423,23 @@ export default function SuperAdminPage() {
     e.preventDefault();
     if (!managingCampaign || !storeName.trim()) return;
 
-    const parsedLat = Number(storeLat);
-    const parsedLng = Number(storeLng);
-    if (
-      !Number.isFinite(parsedLat) ||
-      !Number.isFinite(parsedLng) ||
-      parsedLat < -90 ||
-      parsedLat > 90 ||
-      parsedLng < -180 ||
-      parsedLng > 180 ||
-      (Math.abs(parsedLat) < 0.0001 && Math.abs(parsedLng) < 0.0001)
-    ) {
+    const geofenceRequired = managingCampaign.geofenceEnabled !== false;
+    const rawLat = storeLat.trim();
+    const rawLng = storeLng.trim();
+    const hasCoordsInput = rawLat !== "" || rawLng !== "";
+
+    const parsedLat = hasCoordsInput ? Number(rawLat) : 6.5244;
+    const parsedLng = hasCoordsInput ? Number(rawLng) : 3.3792;
+    const coordsValid =
+      Number.isFinite(parsedLat) &&
+      Number.isFinite(parsedLng) &&
+      parsedLat >= -90 &&
+      parsedLat <= 90 &&
+      parsedLng >= -180 &&
+      parsedLng <= 180 &&
+      !(Math.abs(parsedLat) < 0.0001 && Math.abs(parsedLng) < 0.0001);
+
+    if ((geofenceRequired && (!hasCoordsInput || !coordsValid)) || (hasCoordsInput && !coordsValid)) {
       alert("Please enter valid GPS latitude and longitude coordinates for this venue.");
       return;
     }
@@ -1167,12 +1173,12 @@ export default function SuperAdminPage() {
                 </div>
                 <div>
                   <label className="block text-[10px] font-bold uppercase text-white/50 mb-1">
-                    Latitude / Longitude
+                    Latitude / Longitude {managingCampaign.geofenceEnabled === false && "(Optional)"}
                   </label>
                   <div className="grid grid-cols-2 gap-1.5">
                     <input
                       type="text"
-                      required
+                      required={managingCampaign.geofenceEnabled !== false}
                       value={storeLat}
                       onChange={(e) => setStoreLat(e.target.value)}
                       placeholder="Lat"
@@ -1180,7 +1186,7 @@ export default function SuperAdminPage() {
                     />
                     <input
                       type="text"
-                      required
+                      required={managingCampaign.geofenceEnabled !== false}
                       value={storeLng}
                       onChange={(e) => setStoreLng(e.target.value)}
                       placeholder="Lng"

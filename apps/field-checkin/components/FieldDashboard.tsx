@@ -202,12 +202,13 @@ export default function FieldDashboard({
         stateFilter === "all" ||
         (store.state && store.state.toLowerCase() === stateFilter.toLowerCase());
 
-      const status = checkIn ? checkIn.status : "absent";
       const matchesStatus =
         statusFilter === "all" ||
         (statusFilter === "absent" && !checkIn) ||
-        (statusFilter === "verified" && checkIn?.status === "verified") ||
-        (statusFilter === "flagged" && checkIn?.status === "flagged");
+        (statusFilter === "verified" &&
+          (checkIn?.status === "verified" || checkIn?.status === "checked_out")) ||
+        (statusFilter === "flagged" &&
+          (checkIn?.status === "flagged" || checkIn?.status === "rejected"));
 
       return matchesSearch && matchesState && matchesStatus;
     });
@@ -215,9 +216,13 @@ export default function FieldDashboard({
 
   // Metrics
   const totalStores = stores.length;
-  const verifiedCount = combinedStoreRecords.filter((r) => r.checkIn?.status === "verified").length;
-  const flaggedCount = combinedStoreRecords.filter((r) => r.checkIn?.status === "flagged").length;
-  const absentCount = totalStores - (verifiedCount + flaggedCount);
+  const verifiedCount = combinedStoreRecords.filter(
+    (r) => r.checkIn?.status === "verified" || r.checkIn?.status === "checked_out"
+  ).length;
+  const flaggedCount = combinedStoreRecords.filter(
+    (r) => r.checkIn?.status === "flagged"
+  ).length;
+  const absentCount = combinedStoreRecords.filter((r) => !r.checkIn).length;
   const totalSamples = records.reduce((acc, r) => acc + (r.samplesLogged || 0), 0);
 
   // ── CSV Export for Client Invoicing ──
@@ -252,7 +257,15 @@ export default function FieldDashboard({
     const rows = combinedStoreRecords.map(({ store, checkIn }) => {
       const inTime = checkIn?.checkInTime ? new Date(checkIn.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "N/A";
       const outTime = checkIn?.checkOutTime ? new Date(checkIn.checkOutTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "N/A";
-      const statusText = checkIn ? (checkIn.status === "verified" ? "VERIFIED ON-SITE" : "FLAGGED (OUTSIDE GEOFENCE)") : "ABSENT / NO SHOW";
+      const statusText = !checkIn
+        ? "ABSENT / NO SHOW"
+        : checkIn.status === "verified"
+        ? "VERIFIED ON-SITE"
+        : checkIn.status === "checked_out"
+        ? "SHIFT COMPLETED (VERIFIED)"
+        : checkIn.status === "rejected"
+        ? "REJECTED BY SUPERVISOR"
+        : "FLAGGED (OUTSIDE GEOFENCE)";
 
       return [
         escapeCsvCell(store.storeCode || (store as any).code || store.id || ""),
@@ -281,6 +294,7 @@ export default function FieldDashboard({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   // ── CSV Export for Consumer Surveys ──
@@ -364,6 +378,7 @@ export default function FieldDashboard({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   }
 
   const filteredSurveys = useMemo(() => {
@@ -691,7 +706,8 @@ export default function FieldDashboard({
               <tbody className="divide-y divide-white/5">
                 {filteredRows.map(({ store, checkIn }) => {
                   const hasRecord = Boolean(checkIn);
-                  const isVerified = checkIn?.status === "verified";
+                  const isVerified =
+                    checkIn?.status === "verified" || checkIn?.status === "checked_out";
                   const isFlagged = checkIn?.status === "flagged";
                   const arrivalTime = checkIn?.checkInTime
                     ? new Date(checkIn.checkInTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })

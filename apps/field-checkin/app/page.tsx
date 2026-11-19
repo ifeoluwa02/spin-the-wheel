@@ -250,6 +250,7 @@ function CheckInContent() {
     if (syncingOffline || offlineQueue.length === 0) return;
     setSyncingOffline(true);
     const remaining: OfflineQueuedSurvey[] = [];
+    let latestShift: CheckInRecord | null = activeShift;
     for (const item of offlineQueue) {
       try {
         const res = await fetch("/api/checkin", {
@@ -260,6 +261,7 @@ function CheckInContent() {
         const data = await res.json();
         if (res.ok && data.success) {
           if (data.checkIn) {
+            latestShift = data.checkIn;
             setActiveShift(data.checkIn);
             localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
           }
@@ -269,13 +271,18 @@ function CheckInContent() {
               ...prev.filter((s) => s.id !== item.id && s.id !== data.survey.id),
             ]);
           }
-          if (typeof data.samplesLogged === "number" && activeShift) {
-            const updatedShift = { ...activeShift, samplesLogged: data.samplesLogged };
-            setActiveShift(updatedShift);
-            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
+          if (typeof data.samplesLogged === "number" && latestShift) {
+            latestShift = { ...latestShift, samplesLogged: data.samplesLogged };
+            setActiveShift(latestShift);
+            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(latestShift));
           }
-        } else if (res.status >= 500) {
+        } else if (res.status === 401 || res.status === 403 || res.status >= 500) {
           remaining.push(item);
+          if (res.status === 401 || res.status === 403) {
+            setSubmitError(
+              "Your BA shift session expired while offline. Please sign in again to sync your queued items."
+            );
+          }
         }
       } catch {
         remaining.push(item);

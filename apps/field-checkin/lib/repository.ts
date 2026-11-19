@@ -635,27 +635,8 @@ export async function recordSurvey(
     createdAt: now,
   }) as SurveyRecord;
 
-  // Try top-level surveys collection first; fallback to embedding on checkins/{checkInId}
-  try {
-    const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
-    cleanData.id = docRef.id;
-  } catch {
-    if (data.checkInId) {
-      try {
-        const checkInRef = doc(db, COLLECTION_NAME, data.checkInId);
-        const snap = await getDoc(checkInRef);
-        if (snap.exists()) {
-          const existingSurveys = Array.isArray(snap.data()?.surveys) ? snap.data().surveys : [];
-          await updateDoc(checkInRef, {
-            surveys: [cleanData, ...existingSurveys],
-            updatedAt: now,
-          });
-        }
-      } catch (embedErr) {
-        console.warn("Could not embed survey on check-in document:", embedErr);
-      }
-    }
-  }
+  const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
+  cleanData.id = docRef.id;
 
   let samplesLogged = 0;
   if (data.checkInId) {
