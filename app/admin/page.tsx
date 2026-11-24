@@ -34,6 +34,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { getGradientContrastColor, isLightColor } from "@/lib/colors";
 import { getRemainingStock } from "@/lib/pickPrize";
 import TeamTab from "@/components/TeamTab";
+import StorePrizeAnalytics from "@/components/StorePrizeAnalytics";
 
 type Tab = "analytics" | "branding" | "prizes" | "stores" | "export" | "luckydraw" | "team";
 
@@ -1410,7 +1411,38 @@ export default function AdminDashboard() {
 
         {/* ── Analytics Tab ── */}
         {activeTab === "analytics" && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div className="space-y-8">
+            {/* Live Store Prize Analytics Dashboard (Matching Excel / Google Sheet Spec) */}
+            <StorePrizeAnalytics
+              campaign={campaign}
+              campaignSlug={campaignSlug}
+              storeInventoriesMap={storeInventoriesMap}
+              participants={participants}
+              totalWinnersCount={campaignStats?.totalWinners || winnersCount}
+              totalSpinsCount={campaignStats?.totalSpins || totalParticipants}
+              onNavigateToExport={(storeCode) => {
+                if (storeCode) {
+                  setStoreFilter(storeCode);
+                }
+                setActiveTab("export");
+              }}
+              onRefreshData={async () => {
+                try {
+                  const res = await fetch(`/api/admin/analytics?campaignId=${encodeURIComponent(campaignSlug)}&sync=true`);
+                  const data = await res.json();
+                  if (data.success) {
+                    if (data.prizeCounts) setPrizeCountsMap(data.prizeCounts);
+                    if (data.storeInventories) setStoreInventoriesMap(data.storeInventories);
+                    if (data.storesSummary) setStoresSummaryMap(data.storesSummary);
+                    if (data.totalCount) setTotalRecords(data.totalCount);
+                  }
+                } catch (e) {
+                  console.error("Refresh analytics error:", e);
+                }
+              }}
+            />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="rounded-2xl p-6 space-y-5" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
               <div className="flex items-center justify-between">
                 <h3 className="font-black text-white text-sm" style={{ fontFamily: "Rubik, sans-serif" }}>Prize Distribution & Inventory</h3>
@@ -1564,6 +1596,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
             </div>
+          </div>
           </div>
         )}
 
