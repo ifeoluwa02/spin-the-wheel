@@ -20,16 +20,18 @@ import {
   ArrowUpRight,
   Filter,
   Check,
+  Loader2,
 } from "lucide-react";
 
 interface StorePrizeAnalyticsProps {
   campaign: Campaign;
   campaignSlug: string;
-  storeInventoriesMap: Record<
+  storeInventoriesMap?: Record<
     string,
     { storeCode: string; claimedCounts: Record<string, number> }
   >;
-  participants: Participant[];
+  storesSummaryMap?: Record<string, { spins: number; winners: number }>;
+  participants?: Participant[];
   totalWinnersCount?: number;
   totalSpinsCount?: number;
   onNavigateToExport?: (storeCode?: string) => void;
@@ -53,7 +55,6 @@ const VIBRANT_PALETTE = [
 
 function getPrizeColor(prize: Prize, index: number): string {
   if (prize.color && prize.color !== "#000000" && prize.color !== "#111827") {
-    // If color is very dark navy/black, brighten it for high contrast on dark glass cards
     if (prize.color.toLowerCase() === "#1e3a8a") return "#4f46e5";
     if (prize.color.toLowerCase() === "#166534") return "#16a34a";
     return prize.color;
@@ -61,35 +62,12 @@ function getPrizeColor(prize: Prize, index: number): string {
   return VIBRANT_PALETTE[index % VIBRANT_PALETTE.length];
 }
 
-/**
- * Matches a store with its corresponding storeInventory document.
- */
-function getStoreInventory(
-  store: StoreLocation,
-  invMap: Record<string, { storeCode: string; claimedCounts: Record<string, number> }>
-) {
-  const rawCode = (store.code || "").trim().toLowerCase();
-  const rawId = (store.id || "").trim().toLowerCase();
-  const slugName = (store.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-
-  return (
-    invMap[rawCode] ||
-    invMap[rawId] ||
-    invMap[slugName] ||
-    Object.values(invMap).find(
-      (v) =>
-        (v.storeCode && v.storeCode.toLowerCase() === rawCode) ||
-        (v.storeCode && v.storeCode.toLowerCase() === rawId)
-    ) ||
-    null
-  );
-}
-
 export default function StorePrizeAnalytics({
   campaign,
   campaignSlug,
-  storeInventoriesMap,
-  participants,
+  storeInventoriesMap = {},
+  storesSummaryMap = {},
+  participants = [],
   totalWinnersCount = 0,
   totalSpinsCount = 0,
   onNavigateToExport,
@@ -101,6 +79,18 @@ export default function StorePrizeAnalytics({
   // Store Chain & Branch Filters
   const [selectedChain, setSelectedChain] = useState<string>("");
   const [selectedBranchId, setSelectedBranchId] = useState<string>("all");
+
+  // Live Server Analytics State (Fetched directly from /api/admin/analytics)
+  const [apiAnalytics, setApiAnalytics] = useState<{
+    totalCount: number;
+    winnersCount: number;
+    prizeCounts: Record<string, number>;
+  } | null>(null);
+  const [isAnalyticsLoading, setIsAnalyticsLoading] = useState<boolean>(false);
+
+  // Live Participants for Winners Directory
+  const [directoryRows, setDirectoryRows] = useState<Participant[]>([]);
+  const [isDirectoryLoading, setIsDirectoryLoading] = useState<boolean>(false);
 
   // Interactive Hover on Donut Chart
   const [hoveredPrizeId, setHoveredPrizeId] = useState<string | null>(null);
@@ -127,7 +117,15 @@ export default function StorePrizeAnalytics({
     return map;
   }, [stores]);
 
-  // Calculate total prizes per chain to rank them
+  // Available branches for currently selected chain
+  const availableBranches = useMemo(() => {
+    if (!selectedChain || selectedChain === "all") {
+      return [];
+    }
+    return chainsMap.get(selectedChain) || [];
+  }, [selectedChain, chainsMap]);
+
+  // Grouped chains list with real branch counts and initial rankings
   const chainsList = useMemo(() => {
     const list: Array<{
       name: string;
@@ -139,20 +137,9 @@ export default function StorePrizeAnalytics({
     chainsMap.forEach((chainStores, chainName) => {
       let chainTotal = 0;
       chainStores.forEach((s) => {
-        const inv = getStoreInventory(s, storeInventoriesMap);
-        if (inv?.claimedCounts) {
-          Object.values(inv.claimedCounts).forEach((count) => {
-            chainTotal += Number(count) || 0;
-          });
-        } else {
-          const localWins = participants.filter(
-            (p) =>
-              (p.storeCode?.toLowerCase() === (s.code || "").toLowerCase() ||
-                p.storeCode === s.id) &&
-              p.won
-          ).length;
-          chainTotal += localWins;
-        }
+        const cleanCode = (s.code || s.id || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+        const summaryWins = storesSummaryMap[cleanCode]?.winners || 0;
+        chainTotal += summaryWins;
       });
 
       list.push({
@@ -163,73 +150,126 @@ export default function StorePrizeAnalytics({
       });
     });
 
-    // Sort descending by total prizes won, then alphabetically
     return list.sort((a, b) => b.totalPrizesWon - a.totalPrizesWon || a.name.localeCompare(b.name));
-  }, [chainsMap, storeInventoriesMap, participants]);
+  }, [chainsMap, storesSummaryMap]);
 
   // Set default selectedChain on mount if not selected
   useEffect(() => {
     if (!selectedChain && chainsList.length > 0) {
-      // Find "Justrite" if it exists, otherwise use top chain
       const justrite = chainsList.find((c) => c.name.toLowerCase().includes("justrite"));
       setSelectedChain(justrite ? justrite.name : chainsList[0].name);
     }
   }, [chainsList, selectedChain]);
 
-  // Stores matching currently selected chain & branch filter
-  const currentMatchingStores = useMemo(() => {
-    if (!selectedChain || selectedChain === "all") {
-      return stores;
-    }
+  // ── SEPARATE API FETCH FOR REAL ANALYTICS ──
+  // Fetches real, authoritative analytics from /api/admin/analytics whenever the store or branch filter changes
+  useEffect(() => {
+    if (!campaignSlug) return;
 
-    const chainStores = chainsMap.get(selectedChain) || [];
-    if (selectedBranchId === "all") {
-      return chainStores;
-    }
+    let isMounted = true;
+    setIsAnalyticsLoading(true);
 
-    return chainStores.filter((s) => s.id === selectedBranchId || s.code === selectedBranchId);
-  }, [selectedChain, selectedBranchId, chainsMap, stores]);
+    const params = new URLSearchParams();
+    params.set("c", campaignSlug);
 
-  // Available branches for current chain
-  const availableBranches = useMemo(() => {
-    if (!selectedChain || selectedChain === "all") {
-      return [];
-    }
-    return chainsMap.get(selectedChain) || [];
-  }, [selectedChain, chainsMap]);
-
-  // Compute Prize Distributions & Totals for current selection
-  const analyticsData = useMemo(() => {
-    const countsByPrize: Record<string, number> = {};
-
-    currentMatchingStores.forEach((s) => {
-      const inv = getStoreInventory(s, storeInventoriesMap);
-      if (inv?.claimedCounts) {
-        Object.entries(inv.claimedCounts).forEach(([prizeId, count]) => {
-          countsByPrize[prizeId] = (countsByPrize[prizeId] || 0) + (Number(count) || 0);
-        });
+    if (selectedChain && selectedChain !== "all") {
+      if (selectedBranchId !== "all") {
+        const branchStore = availableBranches.find(
+          (b) => b.id === selectedBranchId || b.code === selectedBranchId
+        );
+        const code = branchStore?.code || selectedBranchId;
+        params.set("store", code);
       } else {
-        prizes.forEach((prize) => {
-          const localCount = participants.filter(
-            (p) =>
-              (p.storeCode?.toLowerCase() === (s.code || "").toLowerCase() ||
-                p.storeCode === s.id) &&
-              p.prizeId === prize.id
-          ).length;
-          if (localCount > 0) {
-            countsByPrize[prize.id] = (countsByPrize[prize.id] || 0) + localCount;
-          }
-        });
+        const codes = availableBranches
+          .map((b) => b.code || b.id)
+          .filter(Boolean);
+        if (codes.length > 0) {
+          params.set("storeCodes", codes.join(","));
+        }
       }
-    });
+    }
 
-    // Map prizes with their metadata
-    let totalWon = 0;
+    fetch(`/api/admin/analytics?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!isMounted) return;
+        if (data.success) {
+          setApiAnalytics({
+            totalCount: data.totalCount || 0,
+            winnersCount: data.winnersCount || 0,
+            prizeCounts: data.prizeCounts || {},
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch real store analytics from API:", err);
+      })
+      .finally(() => {
+        if (isMounted) setIsAnalyticsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedChain, selectedBranchId, availableBranches, campaignSlug]);
+
+  // ── SEPARATE API FETCH FOR WINNERS DIRECTORY ──
+  useEffect(() => {
+    if (subTab !== "winners_directory" || !campaignSlug) return;
+
+    let isMounted = true;
+    setIsDirectoryLoading(true);
+
+    const params = new URLSearchParams();
+    params.set("campaignId", campaignSlug);
+    params.set("limit", "50");
+
+    if (selectedChain && selectedChain !== "all") {
+      if (selectedBranchId !== "all") {
+        const branchStore = availableBranches.find(
+          (b) => b.id === selectedBranchId || b.code === selectedBranchId
+        );
+        params.set("store", branchStore?.code || selectedBranchId);
+      } else {
+        const firstCode = availableBranches[0]?.code || "";
+        if (firstCode) params.set("store", firstCode);
+      }
+    }
+
+    if (directorySearch.trim()) {
+      params.set("search", directorySearch.trim());
+    }
+
+    fetch(`/api/admin/participants?${params.toString()}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!isMounted) return;
+        if (data.success && Array.isArray(data.participants)) {
+          setDirectoryRows(data.participants);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (isMounted) setIsDirectoryLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [subTab, selectedChain, selectedBranchId, availableBranches, campaignSlug, directorySearch]);
+
+  // Compute Prize Distributions from real API response
+  const analyticsData = useMemo(() => {
+    const countsByPrize: Record<string, number> = apiAnalytics?.prizeCounts || {};
+
+    let totalWon = apiAnalytics?.winnersCount !== undefined
+      ? apiAnalytics.winnersCount
+      : Object.values(countsByPrize).reduce((a, b) => a + Number(b), 0);
+
     const breakdown = prizes
       .filter((p) => !p.isLosing)
       .map((prize, idx) => {
         const count = countsByPrize[prize.id] || 0;
-        totalWon += count;
         return {
           id: prize.id,
           label: (prize.label || "Prize").trim(),
@@ -240,6 +280,11 @@ export default function StorePrizeAnalytics({
       })
       .sort((a, b) => b.count - a.count);
 
+    // If totalWon was 0 from API or not set, compute sum of prizes
+    if (totalWon === 0) {
+      totalWon = breakdown.reduce((sum, item) => sum + item.count, 0);
+    }
+
     // Calculate percentages
     const breakdownWithPct = breakdown.map((item) => ({
       ...item,
@@ -248,21 +293,17 @@ export default function StorePrizeAnalytics({
 
     const topPrize = breakdownWithPct.length > 0 && breakdownWithPct[0].count > 0 ? breakdownWithPct[0] : null;
     const diversity = breakdownWithPct.filter((item) => item.count > 0).length;
+    const branchesCount = selectedBranchId !== "all" ? 1 : (availableBranches.length || stores.length);
 
     return {
       totalPrizesWon: totalWon,
+      totalSpins: apiAnalytics?.totalCount || totalWon,
       breakdown: breakdownWithPct,
       topPrize,
       prizeDiversity: diversity,
-      branchesCount: currentMatchingStores.length,
+      branchesCount,
     };
-  }, [currentMatchingStores, storeInventoriesMap, prizes, participants]);
-
-  // Selected store prize total badge
-  const selectedChainBadgeCount = useMemo(() => {
-    const found = chainsList.find((c) => c.name === selectedChain);
-    return found ? found.totalPrizesWon : analyticsData.totalPrizesWon;
-  }, [chainsList, selectedChain, analyticsData.totalPrizesWon]);
+  }, [apiAnalytics, prizes, selectedBranchId, availableBranches, stores]);
 
   // SVG Donut Slices Math
   const donutSlices = useMemo(() => {
@@ -290,10 +331,38 @@ export default function StorePrizeAnalytics({
 
   // Handlers
   async function handleRefresh() {
-    if (!onRefreshData || isRefreshing) return;
+    if (isRefreshing) return;
     try {
       setIsRefreshing(true);
-      await onRefreshData();
+      // Force sync with sync=true on analytics endpoint
+      const params = new URLSearchParams();
+      params.set("c", campaignSlug);
+      params.set("sync", "true");
+      if (selectedChain && selectedChain !== "all") {
+        if (selectedBranchId !== "all") {
+          const branchStore = availableBranches.find(
+            (b) => b.id === selectedBranchId || b.code === selectedBranchId
+          );
+          params.set("store", branchStore?.code || selectedBranchId);
+        } else {
+          const codes = availableBranches.map((b) => b.code || b.id).filter(Boolean);
+          if (codes.length > 0) params.set("storeCodes", codes.join(","));
+        }
+      }
+
+      const res = await fetch(`/api/admin/analytics?${params.toString()}`);
+      const data = await res.json();
+      if (data.success) {
+        setApiAnalytics({
+          totalCount: data.totalCount || 0,
+          winnersCount: data.winnersCount || 0,
+          prizeCounts: data.prizeCounts || {},
+        });
+      }
+
+      if (onRefreshData) {
+        await onRefreshData();
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -301,48 +370,21 @@ export default function StorePrizeAnalytics({
 
   function handleExportStoreCsv() {
     if (onNavigateToExport) {
-      const storeCode = selectedBranchId !== "all" ? selectedBranchId : currentMatchingStores[0]?.code;
-      onNavigateToExport(storeCode);
+      const activeCode = selectedBranchId !== "all"
+        ? selectedBranchId
+        : availableBranches[0]?.code || "";
+      onNavigateToExport(activeCode);
       return;
     }
 
-    // Direct local CSV download for current selection
-    const headers = [
-      "Participant Name",
-      "Phone",
-      "Store Code",
-      "Store Name",
-      "Prize Won",
-      "Date",
-    ];
-
-    const storeCodesSet = new Set(
-      currentMatchingStores.map((s) => (s.code || s.id || "").toLowerCase())
-    );
-
-    const storeParticipants = participants.filter((p) =>
-      storeCodesSet.has((p.storeCode || "").toLowerCase())
-    );
-
-    const rows = storeParticipants.map((p) => [
-      `"${(p.name || "").replace(/"/g, '""')}"`,
-      `"${p.phone || ""}"`,
-      `"${p.storeCode || ""}"`,
-      `"${(p.storeName || "").replace(/"/g, '""')}"`,
-      `"${(p.prizeLabel || "").replace(/"/g, '""')}"`,
-      `"${p.createdAt ? new Date(p.createdAt).toISOString() : ""}"`,
-    ]);
-
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${selectedChain.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_winners_${Date.now()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    // Trigger full CSV export through API for real records
+    const activeCode = selectedBranchId !== "all"
+      ? selectedBranchId
+      : availableBranches[0]?.code || "";
+    const exportUrl = `/api/admin/participants?campaignId=${encodeURIComponent(campaignSlug)}&export=true${
+      activeCode ? `&store=${encodeURIComponent(activeCode)}` : ""
+    }`;
+    window.open(exportUrl, "_blank");
   }
 
   // Active hover item data
@@ -420,18 +462,16 @@ export default function StorePrizeAnalytics({
             </button>
           </div>
 
-          {onRefreshData && (
-            <button
-              type="button"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              title="Refresh Analytics Data"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white transition-all cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-amber-400" : ""}`} />
-              <span className="hidden sm:inline">Sync</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing || isAnalyticsLoading}
+            title="Fetch Fresh Analytics from Server"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/10 text-white transition-all cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing || isAnalyticsLoading ? "animate-spin text-amber-400" : ""}`} />
+            <span className="hidden sm:inline">Sync</span>
+          </button>
 
           <button
             type="button"
@@ -475,10 +515,10 @@ export default function StorePrizeAnalytics({
                   <ChevronDown className="w-3.5 h-3.5 text-white/40 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
 
-                {/* Prize Count Badge */}
+                {/* Real Prize Count Badge */}
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  {selectedChainBadgeCount.toLocaleString()} prizes
+                  <span className={`w-1.5 h-1.5 rounded-full bg-emerald-400 ${isAnalyticsLoading ? "animate-ping" : "animate-pulse"}`} />
+                  {isAnalyticsLoading ? "Fetching..." : `${analyticsData.totalPrizesWon.toLocaleString()} prizes`}
                 </span>
               </div>
 
@@ -496,7 +536,7 @@ export default function StorePrizeAnalytics({
                         All Branches ({availableBranches.length})
                       </option>
                       {availableBranches.map((b) => (
-                        <option key={b.id || b.code} value={b.id || b.code}>
+                        <option key={b.id || b.code} value={b.code || b.id}>
                           {b.city ? `${b.city} (${b.state || "Branch"})` : b.name || b.code}
                         </option>
                       ))}
@@ -519,7 +559,7 @@ export default function StorePrizeAnalytics({
               <div className="flex items-center gap-1.5 text-white/60">
                 <span className="text-white/40">Total Winners:</span>
                 <span className="font-bold text-amber-300">
-                  {analyticsData.totalPrizesWon.toLocaleString()}
+                  {isAnalyticsLoading ? "…" : analyticsData.totalPrizesWon.toLocaleString()}
                 </span>
               </div>
             </div>
@@ -528,7 +568,7 @@ export default function StorePrizeAnalytics({
           {/* ── 4 KPI Metric Cards ── */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Card 1: Total Prizes Won */}
-            <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-amber-500/30 transition-all shadow-sm">
+            <div className={`p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-amber-500/30 transition-all shadow-sm ${isAnalyticsLoading ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-white/50 uppercase tracking-wider">
                   Total Prizes Won
@@ -538,7 +578,7 @@ export default function StorePrizeAnalytics({
                 </div>
               </div>
               <div className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
-                {analyticsData.totalPrizesWon.toLocaleString()}
+                {isAnalyticsLoading ? "…" : analyticsData.totalPrizesWon.toLocaleString()}
               </div>
               <p className="text-xs text-white/40 mt-1">
                 in {selectedChain === "all" ? "All Stores" : selectedChain}
@@ -547,7 +587,7 @@ export default function StorePrizeAnalytics({
             </div>
 
             {/* Card 2: Top Prize Won */}
-            <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-blue-500/30 transition-all shadow-sm">
+            <div className={`p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-blue-500/30 transition-all shadow-sm ${isAnalyticsLoading ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-white/50 uppercase tracking-wider">
                   Top Prize Won
@@ -557,17 +597,17 @@ export default function StorePrizeAnalytics({
                 </div>
               </div>
               <div className="text-xl font-black text-white truncate" style={{ fontFamily: "Rubik, sans-serif" }}>
-                {analyticsData.topPrize?.label || "None Yet"}
+                {isAnalyticsLoading ? "…" : (analyticsData.topPrize?.label || "None Yet")}
               </div>
               <p className="text-xs text-blue-400 mt-1 font-semibold">
-                {analyticsData.topPrize
+                {analyticsData.topPrize && !isAnalyticsLoading
                   ? `${analyticsData.topPrize.count.toLocaleString()} won (${analyticsData.topPrize.percentage.toFixed(1)}%)`
-                  : "0 claims"}
+                  : "—"}
               </p>
             </div>
 
             {/* Card 3: Prize Diversity */}
-            <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-teal-500/30 transition-all shadow-sm">
+            <div className={`p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-teal-500/30 transition-all shadow-sm ${isAnalyticsLoading ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-white/50 uppercase tracking-wider">
                   Prize Diversity
@@ -577,7 +617,7 @@ export default function StorePrizeAnalytics({
                 </div>
               </div>
               <div className="text-2xl font-black text-white" style={{ fontFamily: "Rubik, sans-serif" }}>
-                {analyticsData.prizeDiversity}
+                {isAnalyticsLoading ? "…" : analyticsData.prizeDiversity}
               </div>
               <p className="text-xs text-teal-300/70 mt-1">
                 different prize items
@@ -585,7 +625,7 @@ export default function StorePrizeAnalytics({
             </div>
 
             {/* Card 4: Store Branches */}
-            <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-purple-500/30 transition-all shadow-sm">
+            <div className={`p-5 rounded-2xl bg-white/[0.03] border border-white/10 hover:border-purple-500/30 transition-all shadow-sm ${isAnalyticsLoading ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-white/50 uppercase tracking-wider">
                   Store Branches
@@ -621,13 +661,18 @@ export default function StorePrizeAnalytics({
                     </p>
                   </div>
                   <span className="text-xs font-mono text-white/40">
-                    Total: {analyticsData.totalPrizesWon.toLocaleString()}
+                    Total: {isAnalyticsLoading ? "…" : analyticsData.totalPrizesWon.toLocaleString()}
                   </span>
                 </div>
 
                 {/* SVG Donut Visual */}
                 <div className="relative flex items-center justify-center my-6 min-h-[260px]">
-                  {donutSlices.length === 0 ? (
+                  {isAnalyticsLoading ? (
+                    <div className="flex flex-col items-center justify-center gap-2 py-12 text-white/40 text-xs">
+                      <Loader2 className="w-6 h-6 animate-spin text-amber-400" />
+                      <span>Loading real store data...</span>
+                    </div>
+                  ) : donutSlices.length === 0 ? (
                     <div className="text-center py-12 text-white/30 text-xs">
                       No prize claims recorded for this store yet.
                     </div>
@@ -642,11 +687,10 @@ export default function StorePrizeAnalytics({
                         {donutSlices.map((slice) => {
                           const cx = 120;
                           const cy = 120;
-                          const R = 100; // outer radius
-                          const r = 62; // inner radius
+                          const R = 100;
+                          const r = 62;
                           const isHovered = hoveredPrizeId === slice.id;
 
-                          // Compute outer and inner arc endpoints
                           const x1 = cx + R * Math.cos(slice.startAngle);
                           const y1 = cy + R * Math.sin(slice.startAngle);
                           const x2 = cx + R * Math.cos(slice.endAngle);
@@ -659,7 +703,6 @@ export default function StorePrizeAnalytics({
 
                           const largeArc = slice.fraction > 0.5 ? 1 : 0;
 
-                          // For single item representing 100% of pie
                           if (donutSlices.length === 1) {
                             return (
                               <circle
@@ -793,12 +836,12 @@ export default function StorePrizeAnalytics({
                     </p>
                   </div>
                   <span className="text-xs font-mono font-bold text-amber-300 bg-amber-500/10 px-2.5 py-1 rounded-lg border border-amber-500/20">
-                    Total: {analyticsData.totalPrizesWon.toLocaleString()}
+                    Total: {isAnalyticsLoading ? "…" : analyticsData.totalPrizesWon.toLocaleString()}
                   </span>
                 </div>
 
                 {/* Ranked Horizontal Bars */}
-                <div className="space-y-3.5 pt-2">
+                <div className={`space-y-3.5 pt-2 transition-opacity ${isAnalyticsLoading ? "opacity-60" : ""}`}>
                   {analyticsData.breakdown.map((item, index) => {
                     const isTopWinner = index === 0 && item.count > 0;
                     const isHovered = hoveredPrizeId === item.id;
@@ -919,7 +962,7 @@ export default function StorePrizeAnalytics({
                   <th className="py-3 px-4">Branches</th>
                   <th className="py-3 px-4">Primary Locations</th>
                   <th className="py-3 px-4">Total Prizes Won</th>
-                  <th className="py-3 px-4">Top Prize</th>
+                  <th className="py-3 px-4">Top Prize Status</th>
                   <th className="py-3 px-4 text-right">Action</th>
                 </tr>
               </thead>
@@ -1009,7 +1052,7 @@ export default function StorePrizeAnalytics({
                 Winners Directory &amp; Audit Log
               </h3>
               <p className="text-xs text-white/40 mt-0.5">
-                Participant records filtered for {selectedChain === "all" ? "All Stores" : selectedChain}
+                Real participant records filtered from server for {selectedChain === "all" ? "All Stores" : selectedChain}
               </p>
             </div>
 
@@ -1037,68 +1080,60 @@ export default function StorePrizeAnalytics({
           </div>
 
           {/* Records Table */}
-          <div className="overflow-x-auto rounded-xl border border-white/5">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-white/[0.04] text-white/50 uppercase font-bold text-[10px] tracking-wider border-b border-white/5">
-                <tr>
-                  <th className="py-3 px-4">Participant Name</th>
-                  <th className="py-3 px-4">Phone Number</th>
-                  <th className="py-3 px-4">Store Code / Branch</th>
-                  <th className="py-3 px-4">Prize Won</th>
-                  <th className="py-3 px-4">Ticket ID</th>
-                  <th className="py-3 px-4 text-right">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {participants
-                  .filter((p) => {
-                    if (selectedChain !== "all") {
-                      const matchChain = currentMatchingStores.some(
-                        (s) =>
-                          (p.storeCode && p.storeCode.toLowerCase() === (s.code || "").toLowerCase()) ||
-                          p.storeCode === s.id ||
-                          (p.storeName && p.storeName.toLowerCase().includes(selectedChain.toLowerCase()))
-                      );
-                      if (!matchChain) return false;
-                    }
-
-                    if (!directorySearch.trim()) return true;
-                    const q = directorySearch.toLowerCase();
-                    return (
-                      (p.name && p.name.toLowerCase().includes(q)) ||
-                      (p.phone && p.phone.toLowerCase().includes(q)) ||
-                      (p.prizeLabel && p.prizeLabel.toLowerCase().includes(q)) ||
-                      (p.voucherCode && p.voucherCode.toLowerCase().includes(q)) ||
-                      (p.id && p.id.toLowerCase().includes(q))
-                    );
-                  })
-                  .slice(0, 100)
-                  .map((p, idx) => (
-                    <tr key={p.id || idx} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="py-3 px-4 font-bold text-white">
-                        {p.name || "Anonymous"}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-white/70">
-                        {p.phone || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-white/80">
-                        <span className="font-mono text-xs text-amber-300">
-                          {p.storeCode || p.storeName || "Main"}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 font-bold text-emerald-400">
-                        {p.prizeLabel || (p.won ? "Prize Winner" : "No Prize")}
-                      </td>
-                      <td className="py-3 px-4 font-mono text-[11px] text-white/40">
-                        {p.voucherCode || p.id || "—"}
-                      </td>
-                      <td className="py-3 px-4 text-right text-white/40 font-mono text-[11px]">
-                        {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—"}
+          <div className="overflow-x-auto rounded-xl border border-white/5 min-h-[160px]">
+            {isDirectoryLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-white/40 text-xs">
+                <Loader2 className="w-6 h-6 animate-spin text-amber-400" />
+                <span>Loading real winner records from server...</span>
+              </div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="bg-white/[0.04] text-white/50 uppercase font-bold text-[10px] tracking-wider border-b border-white/5">
+                  <tr>
+                    <th className="py-3 px-4">Participant Name</th>
+                    <th className="py-3 px-4">Phone Number</th>
+                    <th className="py-3 px-4">Store Code / Branch</th>
+                    <th className="py-3 px-4">Prize Won</th>
+                    <th className="py-3 px-4">Voucher Code</th>
+                    <th className="py-3 px-4 text-right">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {directoryRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-12 text-white/30 text-xs">
+                        No participants found for this store selection.
                       </td>
                     </tr>
-                  ))}
-              </tbody>
-            </table>
+                  ) : (
+                    directoryRows.map((p, idx) => (
+                      <tr key={p.id || idx} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3 px-4 font-bold text-white">
+                          {p.name || "Anonymous"}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-white/70">
+                          {p.phone || "—"}
+                        </td>
+                        <td className="py-3 px-4 text-white/80">
+                          <span className="font-mono text-xs text-amber-300">
+                            {p.storeCode || p.storeName || "Main"}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-bold text-emerald-400">
+                          {p.prizeLabel || (p.won ? "Prize Winner" : "No Prize")}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-[11px] text-white/40">
+                          {p.voucherCode || p.id || "—"}
+                        </td>
+                        <td className="py-3 px-4 text-right text-white/40 font-mono text-[11px]">
+                          {p.createdAt ? new Date(p.createdAt).toLocaleDateString() : "—"}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

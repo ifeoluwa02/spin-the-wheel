@@ -494,6 +494,65 @@ export async function getOrSyncCampaignAnalytics(
   return result;
 }
 
+/**
+ * Fetches real, authoritative prize analytics directly from the participants collection
+ * for a specific store code or a list of store codes (e.g. an entire store chain).
+ */
+export async function getStoreOrChainAnalytics(
+  campaignId: string,
+  options: {
+    storeCode?: string;
+    storeCodes?: string[];
+  }
+): Promise<{
+  totalSpins: number;
+  totalWinners: number;
+  prizeCounts: Record<string, number>;
+}> {
+  if (!campaignId) return { totalSpins: 0, totalWinners: 0, prizeCounts: {} };
+
+  let codes: string[] = [];
+  if (options.storeCodes && options.storeCodes.length > 0) {
+    codes = options.storeCodes.map((c) => c.trim().toLowerCase()).filter(Boolean);
+  } else if (options.storeCode && options.storeCode !== "all") {
+    codes = [options.storeCode.trim().toLowerCase()];
+  }
+
+  if (codes.length === 0) {
+    return { totalSpins: 0, totalWinners: 0, prizeCounts: {} };
+  }
+
+  let totalSpins = 0;
+  let totalWinners = 0;
+  const prizeCounts: Record<string, number> = {};
+
+  try {
+    // Firestore "in" queries accept at most 30 items
+    for (let i = 0; i < codes.length; i += 30) {
+      const chunk = codes.slice(i, i + 30);
+      const q = query(
+        collection(db, "participants"),
+        where("campaignId", "==", campaignId),
+        where("storeCode", "in", chunk)
+      );
+      const snap = await getDocs(q);
+      totalSpins += snap.size;
+      snap.forEach((docSnap) => {
+        const p = docSnap.data();
+        if (p.won) {
+          totalWinners++;
+          const pid = p.prizeId || "unknown";
+          prizeCounts[pid] = (prizeCounts[pid] || 0) + 1;
+        }
+      });
+    }
+  } catch (err) {
+    console.warn("getStoreOrChainAnalytics error:", err);
+  }
+
+  return { totalSpins, totalWinners, prizeCounts };
+}
+
 export interface GetParticipantsOptions {
   limit?: number;
   startAfterCreatedAt?: number;

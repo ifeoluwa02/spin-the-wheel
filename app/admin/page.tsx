@@ -1417,6 +1417,7 @@ export default function AdminDashboard() {
               campaign={campaign}
               campaignSlug={campaignSlug}
               storeInventoriesMap={storeInventoriesMap}
+              storesSummaryMap={storesSummaryMap}
               participants={participants}
               totalWinnersCount={campaignStats?.totalWinners || winnersCount}
               totalSpinsCount={campaignStats?.totalSpins || totalParticipants}
