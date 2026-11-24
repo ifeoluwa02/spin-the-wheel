@@ -250,6 +250,7 @@ function CheckInContent() {
     if (syncingOffline || offlineQueue.length === 0) return;
     setSyncingOffline(true);
     const remaining: OfflineQueuedSurvey[] = [];
+    let latestShift: CheckInRecord | null = activeShift;
     for (const item of offlineQueue) {
       try {
         const res = await fetch("/api/checkin", {
@@ -260,6 +261,7 @@ function CheckInContent() {
         const data = await res.json();
         if (res.ok && data.success) {
           if (data.checkIn) {
+            latestShift = data.checkIn;
             setActiveShift(data.checkIn);
             localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(data.checkIn));
           }
@@ -269,13 +271,18 @@ function CheckInContent() {
               ...prev.filter((s) => s.id !== item.id && s.id !== data.survey.id),
             ]);
           }
-          if (typeof data.samplesLogged === "number" && activeShift) {
-            const updatedShift = { ...activeShift, samplesLogged: data.samplesLogged };
-            setActiveShift(updatedShift);
-            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
+          if (typeof data.samplesLogged === "number" && latestShift) {
+            latestShift = { ...latestShift, samplesLogged: data.samplesLogged };
+            setActiveShift(latestShift);
+            localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(latestShift));
           }
-        } else if (res.status >= 500) {
+        } else if (res.status === 401 || res.status === 403 || res.status >= 500) {
           remaining.push(item);
+          if (res.status === 401 || res.status === 403) {
+            setSubmitError(
+              "Your BA shift session expired while offline. Please sign in again to sync your queued items."
+            );
+          }
         }
       } catch {
         remaining.push(item);
@@ -390,6 +397,14 @@ function CheckInContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeShift?.id, campaign?.id, surveyMode]);
 
+  function shouldShowQuestion(q: SurveyQuestion): boolean {
+    if (!q.skipIfQuestionId) return true;
+    const parentAns = (customAnswers[q.skipIfQuestionId] || "").trim().toLowerCase();
+    const expected = (q.skipIfAnswer || "").trim().toLowerCase();
+    if (!expected) return parentAns.length > 0;
+    return parentAns === expected || parentAns.split(",").map((s) => s.trim()).includes(expected);
+  }
+
   // ── Submit Consumer / Mother Survey (With Auto Geotagging & Offline Queue Fallback) ──
   async function handleSurveySubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -404,6 +419,48 @@ function CheckInContent() {
     let resolvedConsentLabel: string | undefined;
 
     if (activeQuestions) {
+      // Enforce Akida-style question validations (required, numericOnly, maxDigits, uniqueValue)
+      for (const q of activeQuestions) {
+        if (!shouldShowQuestion(q)) continue;
+        const rawAns = (customAnswers[q.id] || "").trim();
+        if (q.required && !rawAns) {
+          setSurveyErrorMsg(`Please answer required question: "${q.label}".`);
+          return;
+        }
+        if (rawAns && (q.numericOnly || q.type === "number")) {
+          const digitsOnly = rawAns.replace(/[\s\-+]/g, "");
+          if (!/^\d+$/.test(digitsOnly)) {
+            setSurveyErrorMsg(`"${q.label}" accepts numbers only.`);
+            return;
+          }
+          if (q.maxDigits && digitsOnly.length > q.maxDigits) {
+            setSurveyErrorMsg(`"${q.label}" must be at most ${q.maxDigits} digits.`);
+            return;
+          }
+        } else if (rawAns && q.maxDigits && rawAns.length > q.maxDigits) {
+          setSurveyErrorMsg(`"${q.label}" must be at most ${q.maxDigits} characters.`);
+          return;
+        }
+        if (rawAns && q.uniqueValue) {
+          const dup = shiftSurveys.some((prev) => {
+            const prevVal = (
+              prev.surveyAnswers?.[q.id] ||
+              (q.type === "tel" ? prev.respondentPhone : "") ||
+              ""
+            )
+              .trim()
+              .toLowerCase();
+            return prevVal && prevVal === rawAns.toLowerCase();
+          });
+          if (dup) {
+            setSurveyErrorMsg(
+              `Duplicate value detected for "${q.label}" ("${rawAns}"). Each entry must be unique.`
+            );
+            return;
+          }
+        }
+      }
+
       const nameQ = activeQuestions.find(
         (q) =>
           q.id.includes("name") && !q.id.includes("hospital") && !q.id.includes("store")
@@ -1363,6 +1420,7 @@ function CheckInContent() {
                   /* ── Dynamic Superadmin-Configured / Hospital (ANC-IMC + Consent) Survey Questions ── */
                   <div className="space-y-3.5">
                     {activeQuestions.map((q) => {
+                      if (!shouldShowQuestion(q)) return null;
                       const val = customAnswers[q.id] ?? "";
                       if (q.type === "select") {
                         return (
@@ -1384,6 +1442,56 @@ function CheckInContent() {
                                 </option>
                               ))}
                             </select>
+                          </div>
+                        );
+                      }
+
+                      if (q.type === "checkbox") {
+                        const selectedList = val
+                          ? val
+                              .split(",")
+                              .map((s) => s.trim())
+                              .filter(Boolean)
+                          : [];
+                        return (
+                          <div
+                            key={q.id}
+                            className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/15 space-y-2"
+                          >
+                            <p className="text-[11px] font-bold uppercase tracking-wider text-white/75">
+                              {q.label} {q.required && <span className="text-red-400">*</span>}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {(q.options || []).map((opt) => {
+                                const isChecked = selectedList.includes(opt);
+                                return (
+                                  <label
+                                    key={opt}
+                                    className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                                      isChecked
+                                        ? "bg-teal-500/15 border-teal-400 text-teal-200"
+                                        : "bg-black/30 border-white/10 text-white/70 hover:border-white/25"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        const next = isChecked
+                                          ? selectedList.filter((item) => item !== opt)
+                                          : [...selectedList, opt];
+                                        setCustomAnswers((prev) => ({
+                                          ...prev,
+                                          [q.id]: next.join(", "),
+                                        }));
+                                      }}
+                                      className="accent-teal-400"
+                                    />
+                                    <span>{opt}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
                           </div>
                         );
                       }
@@ -1432,15 +1540,29 @@ function CheckInContent() {
                         <div key={q.id}>
                           <label className="block text-[11px] font-bold uppercase tracking-wider text-white/60 mb-1">
                             {q.label} {q.required && <span className="text-red-400">*</span>}
+                            {q.maxDigits ? (
+                              <span className="ml-1 text-[10px] font-mono text-white/40">
+                                (Max {q.maxDigits} digits)
+                              </span>
+                            ) : null}
                           </label>
                           <input
-                            type={q.type === "tel" ? "tel" : "text"}
+                            type={q.type === "tel" ? "tel" : q.type === "number" ? "number" : "text"}
+                            inputMode={q.numericOnly || q.type === "number" || q.type === "tel" ? "numeric" : undefined}
+                            maxLength={q.maxDigits || undefined}
                             required={q.required}
                             placeholder={q.placeholder || ""}
                             value={val}
-                            onChange={(e) =>
-                              setCustomAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
-                            }
+                            onChange={(e) => {
+                              let nextVal = e.target.value;
+                              if (q.numericOnly || q.type === "number") {
+                                nextVal = nextVal.replace(/[^\d]/g, "");
+                              }
+                              if (q.maxDigits && nextVal.length > q.maxDigits) {
+                                nextVal = nextVal.slice(0, q.maxDigits);
+                              }
+                              setCustomAnswers((prev) => ({ ...prev, [q.id]: nextVal }));
+                            }}
                             className="w-full px-3.5 py-2.5 rounded-xl text-xs text-white bg-white/5 border border-white/15 focus:border-teal-400 focus:outline-none"
                           />
                         </div>
@@ -1887,6 +2009,7 @@ function CheckInContent() {
                           targetLat={selectedStore.lat}
                           targetLng={selectedStore.lng}
                           radius={activeRadius}
+                          polygon={selectedStore.polygon}
                           targetLabel={selectedStore.name}
                           userLat={coords?.latitude}
                           userLng={coords?.longitude}

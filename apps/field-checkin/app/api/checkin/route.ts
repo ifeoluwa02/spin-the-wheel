@@ -64,7 +64,8 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const campaignId = searchParams.get("campaignId")?.trim().toLowerCase();
-    const dateStr = searchParams.get("date") || getTodayDateStr();
+    const dateStr = searchParams.get("startDate") || searchParams.get("date") || getTodayDateStr();
+    const endDateStr = searchParams.get("endDate") || dateStr;
     const storeCode = searchParams.get("storeCode");
     const checkInId = searchParams.get("checkInId");
 
@@ -121,10 +122,17 @@ export async function GET(request: NextRequest) {
     }
 
     const [records, surveys] = await Promise.all([
-      getDailyCheckIns(campaignId, dateStr),
-      getDailySurveys(campaignId, dateStr),
+      getDailyCheckIns(campaignId, dateStr, endDateStr),
+      getDailySurveys(campaignId, dateStr, undefined, endDateStr),
     ]);
-    return NextResponse.json({ success: true, records, surveys, date: dateStr });
+    return NextResponse.json({
+      success: true,
+      records,
+      surveys,
+      date: dateStr,
+      startDate: dateStr,
+      endDate: endDateStr,
+    });
   } catch (err: any) {
     console.error("GET /api/checkin error:", err);
     return NextResponse.json(

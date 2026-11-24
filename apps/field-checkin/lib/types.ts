@@ -28,9 +28,18 @@ export interface StoreLocation {
   lng?: number;
   geofenceRadius?: number;
   polygon?: StorePolygonVertex[];
+  assignedDate?: string;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
 }
 
-export type SurveyQuestionType = "text" | "tel" | "select" | "radio_consent";
+export type SurveyQuestionType =
+  | "text"
+  | "tel"
+  | "number"
+  | "select"
+  | "checkbox"
+  | "radio_consent";
 
 export interface SurveyQuestion {
   id: string;
@@ -40,6 +49,11 @@ export interface SurveyQuestion {
   placeholder?: string;
   options?: string[];
   autoFillStoreName?: boolean;
+  numericOnly?: boolean;
+  maxDigits?: number;
+  uniqueValue?: boolean;
+  skipIfQuestionId?: string;
+  skipIfAnswer?: string;
 }
 
 export interface Campaign {
