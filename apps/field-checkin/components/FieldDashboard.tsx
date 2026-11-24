@@ -846,16 +846,27 @@ export default function FieldDashboard({
       data: Array<{ label: string; count: number; color?: string }>;
     }> = [];
 
-    // 1. Auto-generate chart for each select / radio_consent question
+    // 1. Auto-generate chart for each select / checkbox / radio_consent question
     for (const q of activeSurveyQuestions) {
-      if (q.type === "select" || q.type === "radio_consent") {
+      if (q.type === "select" || q.type === "checkbox" || q.type === "radio_consent") {
         const counts = new Map<string, number>();
         for (const s of analyticsFilteredSurveys) {
-          let val = getSurveyQuestionAnswer(s, q);
-          if (q.type === "radio_consent") {
-            val = val.toLowerCase().startsWith("yes") ? "Yes — Consented" : "No — Opted Out";
+          const raw = getSurveyQuestionAnswer(s, q);
+          if (q.type === "checkbox") {
+            const parts = raw
+              .split(",")
+              .map((p) => p.trim())
+              .filter((p) => p && p !== "—");
+            for (const part of parts) {
+              counts.set(part, (counts.get(part) || 0) + 1);
+            }
+          } else {
+            let val = raw;
+            if (q.type === "radio_consent") {
+              val = val.toLowerCase().startsWith("yes") ? "Yes — Consented" : "No — Opted Out";
+            }
+            counts.set(val, (counts.get(val) || 0) + 1);
           }
-          counts.set(val, (counts.get(val) || 0) + 1);
         }
         const data = Array.from(counts.entries())
           .map(([label, count]) => ({ label, count }))
