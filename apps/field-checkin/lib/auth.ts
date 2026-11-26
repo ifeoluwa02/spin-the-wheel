@@ -5,6 +5,11 @@ import type { Campaign, StoreLocation } from "./types";
 export const SESSION_COOKIE_NAME = "field_ops_session";
 export const BA_SHIFT_COOKIE_NAME = "field_ops_ba_shift";
 
+/** 1 hour (3,600s) inactivity window for Superadmin and Campaign Supervisor sessions */
+export const ADMIN_INACTIVITY_TTL_SECONDS = 60 * 60;
+/** 12 hours (43,200s) full-shift window for Brand Ambassador field sessions */
+export const BA_SHIFT_TTL_SECONDS = 60 * 60 * 12;
+
 function getSigningSecret(): string {
   const envSecret = process.env.AUTH_SECRET?.trim();
   if (envSecret && envSecret.length >= 16) {
@@ -64,14 +69,20 @@ export interface SessionPayload {
 
 export function createSessionToken(
   payload: Omit<SessionPayload, "exp" | "iat">,
-  ttlSeconds = 60 * 60 * 12
+  ttlSeconds?: number
 ): string {
+  const effectiveTtl =
+    typeof ttlSeconds === "number"
+      ? ttlSeconds
+      : payload.role === "ba"
+      ? BA_SHIFT_TTL_SECONDS
+      : ADMIN_INACTIVITY_TTL_SECONDS;
   const secret = getSigningSecret();
   const nowSec = Math.floor(Date.now() / 1000);
   const fullPayload: SessionPayload = {
     ...payload,
     iat: nowSec,
-    exp: nowSec + ttlSeconds,
+    exp: nowSec + effectiveTtl,
   };
   const dataB64 = Buffer.from(JSON.stringify(fullPayload)).toString("base64url");
   const sig = crypto.createHmac("sha256", secret).update(dataB64).digest("base64url");
@@ -139,14 +150,20 @@ export function setSessionCookie(
   response: NextResponse,
   token: string,
   cookieName = SESSION_COOKIE_NAME,
-  maxAgeSeconds = 60 * 60 * 12
+  maxAgeSeconds?: number
 ): void {
+  const effectiveMaxAge =
+    typeof maxAgeSeconds === "number"
+      ? maxAgeSeconds
+      : cookieName === BA_SHIFT_COOKIE_NAME
+      ? BA_SHIFT_TTL_SECONDS
+      : ADMIN_INACTIVITY_TTL_SECONDS;
   response.cookies.set(cookieName, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: maxAgeSeconds,
+    maxAge: effectiveMaxAge,
   });
 }
 
@@ -221,6 +238,88 @@ export function getClientIp(request: NextRequest): string {
  */
 export function computeSha256Hex(data: string): string {
   return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * Validates that a selfie photoUrl is strictly a base64-encoded raster image (JPEG, PNG, or WebP)
+ * and NEVER an executable data:image/svg+xml, HTML, or script payload injected via DevTools.
+ */
+export function isValidSelfieDataUrl(photoUrl: unknown, maxBytes = 900_000): photoUrl is string {
+  if (typeof photoUrl !== "string") return false;
+  if (photoUrl.length < 64 || photoUrl.length > maxBytes) return false;
+  return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(photoUrl);
+}
+
+/**
+ * Sanitizes untrusted user input against PHP tags (`<?php ... ?>`), HTML/Script tags (`<script>`),
+ * dangerous URL schemes (`javascript:`, `data:text/html`), and control characters injected via DevTools.
+ */
+export function sanitizeInputText(val: unknown, maxLen = 200): string {
+  if (val === null || val === undefined) return "";
+  let str = String(val);
+  // Strip null bytes and non-printable ASCII control characters
+  str = str.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+  // Strip PHP opening/closing tags and script blocks
+  str = str.replace(/<\?(?:php|=)?/gi, "").replace(/\?>/g, "");
+  str = str.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  // Strip raw HTML angle brackets so injected tags cannot render in any HTML/Print sink
+  str = str.replace(/[<>]/g, "");
+  // Neutralize inline script URI schemes
+  str = str.replace(/\b(?:javascript|vbscript|data\s*:\s*text\/html)\s*:/gi, "");
+  return str.trim().slice(0, maxLen);
+}
+
+const FORBIDDEN_OBJECT_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+]);
+
+/**
+ * Safely sanitizes a flat key-value map (such as `surveyAnswers`) from a request body.
+ * Blocks Prototype Pollution keys, Firestore dot/slash path injection, and PHP/HTML/XSS strings.
+ */
+export function sanitizeKeyValueMap(
+  raw: unknown,
+  maxEntries = 40,
+  maxKeyLen = 60,
+  maxValLen = 400
+): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const clean: Record<string, string> = Object.create(null);
+  let count = 0;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (count >= maxEntries) break;
+    if (typeof k !== "string" || v === undefined || v === null) continue;
+    const trimmedKey = k.trim();
+    if (
+      !trimmedKey ||
+      FORBIDDEN_OBJECT_KEYS.has(trimmedKey) ||
+      trimmedKey.startsWith("__") ||
+      trimmedKey.endsWith("__") ||
+      !/^[a-zA-Z0-9_-]{1,60}$/.test(trimmedKey)
+    ) {
+      continue;
+    }
+    const safeKey = trimmedKey.slice(0, maxKeyLen);
+    clean[safeKey] = sanitizeInputText(v, maxValLen);
+    count++;
+  }
+  const result = { ...clean };
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * Validates a hex color string (e.g. "#14B8A6"), falling back to a safe default if tampered.
+ */
+export function sanitizeHexColor(val: unknown, fallback = "#14B8A6"): string {
+  if (typeof val !== "string") return fallback;
+  const trimmed = val.trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(trimmed) ? trimmed : fallback;
 }
 
 /**

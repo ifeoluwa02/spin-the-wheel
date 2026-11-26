@@ -466,11 +466,26 @@ export default function FieldDashboard({
   }
 
   const escapeCsvCell = (val: unknown): string => {
-    let str = String(val ?? "");
-    if (/^[=+\-@\t\r]/.test(str)) {
+    let str = String(val ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+    if (/^[\s]*[=+\-@\t\r]/.test(str)) {
       str = `'${str}`;
     }
     return `"${str.replace(/"/g, '""')}"`;
+  };
+
+  const escapeTsvCell = (val: unknown): string => {
+    let str = String(val ?? "")
+      .replace(/[\t\r\n]+/g, " ")
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+    if (/^[\s]*[=+\-@]/.test(str)) {
+      str = `'${str}`;
+    }
+    return str;
+  };
+
+  const isSafeRasterDataUrl = (url?: string): boolean => {
+    if (!url || typeof url !== "string") return false;
+    return /^data:image\/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(url);
   };
 
   // ── CSV Export for Client Invoicing (Timesheet) ──
@@ -537,7 +552,7 @@ export default function FieldDashboard({
       ].join(",");
     });
 
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+    const csvContent = "\uFEFF" + [headers.map(escapeCsvCell).join(","), ...rows].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -652,7 +667,7 @@ export default function FieldDashboard({
     ]);
     const dateLabel = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
     const csvContent =
-      "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+      "\uFEFF" + [headers.map(escapeCsvCell).join(","), ...rows.map((r) => r.join(","))].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -762,7 +777,7 @@ export default function FieldDashboard({
     });
 
     const dateLabel = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+    const csvContent = "\uFEFF" + [headers.map(escapeCsvCell).join(","), ...rows].join("\r\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -778,7 +793,7 @@ export default function FieldDashboard({
     if (!filteredSurveys.length) return;
     const dynamicHeaders =
       activeSurveyQuestions.length > 0
-        ? activeSurveyQuestions.map((q) => q.label)
+        ? activeSurveyQuestions.map((q) => escapeTsvCell(q.label))
         : ["Respondent", "Phone", "Stage/Product", "Consent/Feedback"];
     const headerLine = ["RespondentID", "FieldOfficer", "Store", "Date", ...dynamicHeaders].join(
       "\t"
@@ -786,18 +801,26 @@ export default function FieldDashboard({
     const lines = filteredSurveys.map((s) => {
       const cols =
         activeSurveyQuestions.length > 0
-          ? activeSurveyQuestions.map((q) => getSurveyQuestionAnswer(s, q))
+          ? activeSurveyQuestions.map((q) => escapeTsvCell(getSurveyQuestionAnswer(s, q)))
           : [
-              s.respondentName,
-              s.respondentPhone || "",
-              s.clinicType || s.productSampled || "",
-              typeof s.marketingConsent === "boolean"
-                ? s.marketingConsent
-                  ? "YES"
-                  : "NO"
-                : s.tasteFeedback || "",
+              escapeTsvCell(s.respondentName),
+              escapeTsvCell(s.respondentPhone || ""),
+              escapeTsvCell(s.clinicType || s.productSampled || ""),
+              escapeTsvCell(
+                typeof s.marketingConsent === "boolean"
+                  ? s.marketingConsent
+                    ? "YES"
+                    : "NO"
+                  : s.tasteFeedback || ""
+              ),
             ];
-      return [s.id, s.baName, s.storeName, s.shiftDate, ...cols].join("\t");
+      return [
+        escapeTsvCell(s.id),
+        escapeTsvCell(s.baName),
+        escapeTsvCell(s.storeName),
+        escapeTsvCell(s.shiftDate),
+        ...cols,
+      ].join("\t");
     });
     navigator.clipboard?.writeText([headerLine, ...lines].join("\n"));
     setCopyFeedback(true);
@@ -1737,11 +1760,17 @@ export default function FieldDashboard({
                       className="relative h-56 bg-black cursor-pointer overflow-hidden"
                       onClick={() => setInspectingItem({ store: matchedStore, checkIn: rec })}
                     >
-                      <img
-                        src={rec.photoUrl}
-                        alt={rec.baName}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      />
+                      {isSafeRasterDataUrl(rec.photoUrl) ? (
+                        <img
+                          src={rec.photoUrl}
+                          alt={rec.baName}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-xs text-white/40 font-mono">
+                          INVALID PHOTO FORMAT
+                        </div>
+                      )}
                       <div className="absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-black/75 backdrop-blur border border-white/15">
                         {isVerified ? (
                           <span className="text-emerald-300">● {rec.status}</span>
@@ -2182,7 +2211,7 @@ export default function FieldDashboard({
               {/* Left Column: Attendance Selfie Photo + Verification Metadata */}
               <div className="md:col-span-5 space-y-3">
                 <div className="rounded-2xl overflow-hidden border border-white/10 bg-black h-72 flex items-center justify-center">
-                  {inspectingItem.checkIn.photoUrl ? (
+                  {isSafeRasterDataUrl(inspectingItem.checkIn.photoUrl) ? (
                     <img
                       src={inspectingItem.checkIn.photoUrl}
                       alt="Attendance Proof"

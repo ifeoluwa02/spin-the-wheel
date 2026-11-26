@@ -1,7 +1,6 @@
 import {
   collection,
   doc,
-  addDoc,
   setDoc,
   getDoc,
   getDocs,
@@ -14,6 +13,10 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { calculateDistanceMeters, evaluateGeofence, isValidCoordinates } from "./geo";
+import {
+  generateRespondentId,
+  sanitizeClientRequestId,
+} from "./survey-templates";
 import type {
   CheckInRecord,
   CheckOutSubmitPayload,
@@ -203,12 +206,35 @@ export async function recordCheckIn(
       const existingSnap = await tx.get(docRef);
       if (existingSnap.exists()) {
         const existingData = existingSnap.data() as CheckInRecord;
-        if (existingData.status !== "checked_out" && existingData.status !== "rejected") {
+        // Idempotent retry: active shift OR exact same selfie SHA-256 hash retried after offline queue delay
+        if (
+          (existingData.status !== "checked_out" && existingData.status !== "rejected") ||
+          (existingData.photoSha256 &&
+            data.photoSha256 &&
+            existingData.photoSha256 === data.photoSha256)
+        ) {
           return {
             checkIn: { ...existingData, id: existingSnap.id },
             alreadyExisted: true,
           };
         }
+        // If re-checking in on the same day after an earlier check-out with a new selfie, preserve samplesLogged & history
+        const preservedRaw = stripUndefined({
+          ...raw,
+          samplesLogged: Math.max(Number(existingData.samplesLogged) || 0, Number(raw.samplesLogged) || 0),
+          inFencePingCount: (Number(existingData.inFencePingCount) || 0) + 1,
+          outOfFencePingCount: Number(existingData.outOfFencePingCount) || 0,
+          breadcrumbs: [
+            ...(Array.isArray(existingData.breadcrumbs) ? existingData.breadcrumbs.slice(-49) : []),
+            initialBreadcrumb,
+          ],
+          createdAt: existingData.createdAt || now,
+        });
+        tx.set(docRef, preservedRaw);
+        return {
+          checkIn: { ...(preservedRaw as CheckInRecord), id: detId },
+          alreadyExisted: false,
+        };
       }
       tx.set(docRef, raw);
       return {
@@ -218,8 +244,17 @@ export async function recordCheckIn(
     });
     return result;
   } catch {
-    // Fallback if transaction fails (e.g. legacy doc id)
-    await setDoc(docRef, raw);
+    const existingSnap = await getDoc(docRef);
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data() as CheckInRecord;
+      if (existingData.status !== "checked_out" && existingData.status !== "rejected") {
+        return {
+          checkIn: { ...existingData, id: existingSnap.id },
+          alreadyExisted: true,
+        };
+      }
+    }
+    await setDoc(docRef, raw, { merge: true });
     return {
       checkIn: { ...(raw as CheckInRecord), id: detId },
       alreadyExisted: false,
@@ -228,78 +263,82 @@ export async function recordCheckIn(
 }
 
 /**
- * Records departure / check-out for an active shift, including check-out geofence verification.
+ * Records departure / check-out for an active shift atomically inside a transaction.
+ * Idempotent: repeated check-out calls return the original check-out record without mutating timestamps.
  */
 export async function recordCheckOut(
   payload: CheckOutSubmitPayload,
   allowedRadius = 200
 ): Promise<CheckInRecord> {
   const docRef = doc(db, COLLECTION_NAME, payload.checkInId);
-  const snap = await getDoc(docRef);
 
-  if (!snap.exists()) {
-    throw new Error("Check-in record not found.");
-  }
-
-  const existing = snap.data() as CheckInRecord;
-  if (existing.status === "checked_out") {
-    return { ...existing, id: snap.id };
-  }
-
-  const nowIso = new Date().toISOString();
-  const nowTs = Date.now();
-
-  // Compute total hours worked
-  let hoursWorked = 0;
-  if (existing.checkInTime) {
-    const diffMs = nowTs - new Date(existing.checkInTime).getTime();
-    hoursWorked = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
-  }
-
-  const updates: Record<string, any> = {
-    checkOutTime: nowIso,
-    status: "checked_out",
-    hoursWorked,
-    updatedAt: nowTs,
-  };
-
-  if (isValidCoordinates(payload.latitude, payload.longitude)) {
-    updates.checkOutLat = payload.latitude;
-    updates.checkOutLng = payload.longitude;
-    if (typeof payload.accuracy === "number") {
-      updates.checkOutAccuracy = payload.accuracy;
+  return await runTransaction(db, async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists()) {
+      throw new Error("Check-in record not found.");
     }
-    if (isValidCoordinates(existing.targetLat, existing.targetLng)) {
-      const evalOut = evaluateGeofence(
-        {
-          latitude: payload.latitude!,
-          longitude: payload.longitude!,
-          accuracy: payload.accuracy,
-        },
-        { latitude: existing.targetLat, longitude: existing.targetLng },
-        allowedRadius
-      );
-      updates.checkOutDistanceMeters = evalOut.distance >= 0 ? evalOut.distance : undefined;
-      updates.checkOutInsideFence = evalOut.inside;
+
+    const existing = snap.data() as CheckInRecord;
+    if (existing.status === "checked_out") {
+      return { ...existing, id: snap.id };
     }
-  }
 
-  if (payload.notes !== undefined) {
-    updates.notes = String(payload.notes).trim().slice(0, 2000);
-  }
+    const nowIso = new Date().toISOString();
+    const nowTs = Date.now();
 
-  const cleanUpdates = stripUndefined(updates);
-  await updateDoc(docRef, cleanUpdates);
+    let hoursWorked = 0;
+    if (existing.checkInTime) {
+      const diffMs = nowTs - new Date(existing.checkInTime).getTime();
+      hoursWorked = Math.max(0, Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10);
+    }
 
-  return {
-    ...existing,
-    ...cleanUpdates,
-    id: snap.id,
-  };
+    const updates: Record<string, any> = {
+      checkOutTime: nowIso,
+      status: "checked_out",
+      hoursWorked,
+      updatedAt: nowTs,
+    };
+
+    if (isValidCoordinates(payload.latitude, payload.longitude)) {
+      updates.checkOutLat = payload.latitude;
+      updates.checkOutLng = payload.longitude;
+      if (typeof payload.accuracy === "number") {
+        updates.checkOutAccuracy = payload.accuracy;
+      }
+      if (isValidCoordinates(existing.targetLat, existing.targetLng)) {
+        const evalOut = evaluateGeofence(
+          {
+            latitude: payload.latitude!,
+            longitude: payload.longitude!,
+            accuracy: payload.accuracy,
+          },
+          { latitude: existing.targetLat, longitude: existing.targetLng },
+          allowedRadius
+        );
+        updates.checkOutDistanceMeters = evalOut.distance >= 0 ? evalOut.distance : undefined;
+        updates.checkOutInsideFence = evalOut.inside;
+      }
+    }
+
+    if (payload.notes !== undefined) {
+      updates.notes = String(payload.notes).trim().slice(0, 2000);
+    }
+
+    const cleanUpdates = stripUndefined(updates);
+    tx.update(docRef, cleanUpdates);
+
+    return {
+      ...existing,
+      ...cleanUpdates,
+      id: snap.id,
+    };
+  });
 }
 
 /**
  * Records a live GPS heartbeat during an active shift (Akida-style continuous presence).
+ * Idempotent: deduplicates identical clientRequestId retries or rapid duplicate pings (< 5s apart at same coords)
+ * so network retries never double-increment outOfFencePingCount or falsely flag a shift.
  */
 export async function recordShiftHeartbeat(params: {
   checkInId: string;
@@ -307,77 +346,103 @@ export async function recordShiftHeartbeat(params: {
   longitude: number;
   accuracy?: number;
   allowedRadius?: number;
+  clientRequestId?: string;
 }): Promise<{
   checkIn: CheckInRecord;
   inside: boolean;
   distanceMeters: number;
 }> {
   const docRef = doc(db, COLLECTION_NAME, params.checkInId);
-  const snap = await getDoc(docRef);
-  if (!snap.exists()) {
-    throw new Error("Active shift record not found.");
-  }
+  const cleanReqId = sanitizeClientRequestId(params.clientRequestId);
 
-  const existing = snap.data() as CheckInRecord;
-  if (existing.status === "checked_out") {
-    throw new Error("Shift is already checked out.");
-  }
+  return await runTransaction(db, async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists()) {
+      throw new Error("Active shift record not found.");
+    }
 
-  const evalPing = evaluateGeofence(
-    {
-      latitude: params.latitude,
-      longitude: params.longitude,
+    const existing = snap.data() as CheckInRecord & { lastHeartbeatRequestId?: string };
+    if (existing.status === "checked_out") {
+      throw new Error("Shift is already checked out.");
+    }
+
+    const evalPing = evaluateGeofence(
+      {
+        latitude: params.latitude,
+        longitude: params.longitude,
+        accuracy: params.accuracy,
+      },
+      { latitude: existing.targetLat, longitude: existing.targetLng },
+      params.allowedRadius || 200
+    );
+
+    const now = Date.now();
+    const dist = evalPing.distance >= 0 ? evalPing.distance : 0;
+
+    const isSameRequestId = Boolean(cleanReqId && existing.lastHeartbeatRequestId === cleanReqId);
+    const isRapidDuplicatePing = Boolean(
+      existing.lastHeartbeatAt &&
+        now - existing.lastHeartbeatAt < 5000 &&
+        typeof existing.lastLat === "number" &&
+        typeof existing.lastLng === "number" &&
+        Math.abs(existing.lastLat - params.latitude) < 0.00002 &&
+        Math.abs(existing.lastLng - params.longitude) < 0.00002
+    );
+
+    if (isSameRequestId || isRapidDuplicatePing) {
+      return {
+        checkIn: { ...existing, id: snap.id },
+        inside: evalPing.inside,
+        distanceMeters: dist,
+      };
+    }
+
+    const crumb: GpsBreadcrumb = stripUndefined({
+      timestamp: now,
+      lat: params.latitude,
+      lng: params.longitude,
       accuracy: params.accuracy,
-    },
-    { latitude: existing.targetLat, longitude: existing.targetLng },
-    params.allowedRadius || 200
-  );
+      distanceMeters: dist,
+      inside: evalPing.inside,
+    });
 
-  const now = Date.now();
-  const dist = evalPing.distance >= 0 ? evalPing.distance : 0;
-  const crumb: GpsBreadcrumb = stripUndefined({
-    timestamp: now,
-    lat: params.latitude,
-    lng: params.longitude,
-    accuracy: params.accuracy,
-    distanceMeters: dist,
-    inside: evalPing.inside,
+    const prevCrumbs = Array.isArray(existing.breadcrumbs) ? existing.breadcrumbs : [];
+    const nextCrumbs = [...prevCrumbs.slice(-49), crumb];
+    const inCount = (existing.inFencePingCount || 0) + (evalPing.inside ? 1 : 0);
+    const outCount = (existing.outOfFencePingCount || 0) + (evalPing.inside ? 0 : 1);
+
+    // If BA has accumulated 2+ distinct out-of-fence pings while active, auto-flag shift for supervisor review
+    const nextStatus =
+      !evalPing.inside && outCount >= 2 && existing.status === "verified"
+        ? "flagged"
+        : existing.status;
+
+    const updates = stripUndefined({
+      breadcrumbs: nextCrumbs,
+      lastHeartbeatAt: now,
+      lastHeartbeatRequestId: cleanReqId,
+      lastLat: params.latitude,
+      lastLng: params.longitude,
+      lastDistanceMeters: dist,
+      inFencePingCount: inCount,
+      outOfFencePingCount: outCount,
+      status: nextStatus,
+      updatedAt: now,
+    });
+
+    tx.update(docRef, updates);
+
+    return {
+      checkIn: { ...existing, ...updates, id: snap.id },
+      inside: evalPing.inside,
+      distanceMeters: dist,
+    };
   });
-
-  const prevCrumbs = Array.isArray(existing.breadcrumbs) ? existing.breadcrumbs : [];
-  const nextCrumbs = [...prevCrumbs.slice(-49), crumb];
-  const inCount = (existing.inFencePingCount || 0) + (evalPing.inside ? 1 : 0);
-  const outCount = (existing.outOfFencePingCount || 0) + (evalPing.inside ? 0 : 1);
-
-  // If BA has accumulated 2+ out-of-fence pings while active, auto-flag shift for supervisor review
-  const nextStatus =
-    !evalPing.inside && outCount >= 2 && existing.status === "verified"
-      ? "flagged"
-      : existing.status;
-
-  const updates = stripUndefined({
-    breadcrumbs: nextCrumbs,
-    lastHeartbeatAt: now,
-    lastLat: params.latitude,
-    lastLng: params.longitude,
-    lastDistanceMeters: dist,
-    inFencePingCount: inCount,
-    outOfFencePingCount: outCount,
-    status: nextStatus,
-    updatedAt: now,
-  });
-
-  await updateDoc(docRef, updates);
-
-  return {
-    checkIn: { ...existing, ...updates, id: snap.id },
-    inside: evalPing.inside,
-    distanceMeters: dist,
-  };
 }
 
 /**
- * Supervisor review action: approves or rejects a flagged check-in record.
+ * Supervisor review action: approves or rejects a flagged check-in record atomically.
+ * Idempotent: repeated identical review decisions return existing record without mutating reviewedAt.
  */
 export async function reviewCheckInRecord(params: {
   checkInId: string;
@@ -386,31 +451,43 @@ export async function reviewCheckInRecord(params: {
   reviewNote?: string;
 }): Promise<CheckInRecord> {
   const docRef = doc(db, COLLECTION_NAME, params.checkInId);
-  const snap = await getDoc(docRef);
-  if (!snap.exists()) {
-    throw new Error("Check-in record not found.");
-  }
+  const cleanNote = params.reviewNote ? params.reviewNote.trim().slice(0, 1000) : undefined;
 
-  const existing = snap.data() as CheckInRecord;
-  const now = Date.now();
-  const nextStatus =
-    existing.status === "checked_out"
-      ? "checked_out"
-      : params.decision === "approved"
-      ? "verified"
-      : "rejected";
+  return await runTransaction(db, async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists()) {
+      throw new Error("Check-in record not found.");
+    }
 
-  const updates = stripUndefined({
-    status: nextStatus,
-    reviewStatus: params.decision,
-    reviewedBy: params.reviewedBy.slice(0, 120),
-    reviewedAt: now,
-    reviewNote: params.reviewNote ? params.reviewNote.trim().slice(0, 1000) : undefined,
-    updatedAt: now,
+    const existing = snap.data() as CheckInRecord;
+    const nextStatus =
+      existing.status === "checked_out"
+        ? "checked_out"
+        : params.decision === "approved"
+        ? "verified"
+        : "rejected";
+
+    if (
+      existing.reviewStatus === params.decision &&
+      existing.status === nextStatus &&
+      (existing.reviewNote || undefined) === cleanNote
+    ) {
+      return { ...existing, id: snap.id };
+    }
+
+    const now = Date.now();
+    const updates = stripUndefined({
+      status: nextStatus,
+      reviewStatus: params.decision,
+      reviewedBy: params.reviewedBy.slice(0, 120),
+      reviewedAt: now,
+      reviewNote: cleanNote,
+      updatedAt: now,
+    });
+
+    tx.update(docRef, updates);
+    return { ...existing, ...updates, id: snap.id };
   });
-
-  await updateDoc(docRef, updates);
-  return { ...existing, ...updates, id: snap.id };
 }
 
 /**
@@ -540,12 +617,15 @@ export async function getDailyCheckIns(
 
 /**
  * Atomically increments or decrements the shift sample/engagement counter (+1/-1 sample).
+ * Supports optional clientRequestId to prevent duplicate increments on network retry.
  */
 export async function updateShiftSampleCounter(
   checkInId: string,
-  delta: number
+  delta: number,
+  clientRequestId?: string
 ): Promise<number> {
   const safeDelta = delta < 0 ? -1 : 1;
+  const cleanReqId = sanitizeClientRequestId(clientRequestId);
   const docRef = doc(db, COLLECTION_NAME, checkInId);
 
   try {
@@ -554,15 +634,23 @@ export async function updateShiftSampleCounter(
       if (!currentSnap.exists()) {
         throw new Error("Check-in record not found.");
       }
-      const currentCount = (currentSnap.data()?.samplesLogged as number) || 0;
+      const data = currentSnap.data();
+      const currentCount = (data?.samplesLogged as number) || 0;
+      if (cleanReqId && data?.lastCounterRequestId === cleanReqId) {
+        return currentCount;
+      }
       if (safeDelta < 0 && currentCount <= 0) {
         return 0;
       }
       const nextCount = Math.max(0, currentCount + safeDelta);
-      tx.update(docRef, {
+      const updates: Record<string, any> = {
         samplesLogged: increment(safeDelta),
         updatedAt: Date.now(),
-      });
+      };
+      if (cleanReqId) {
+        updates.lastCounterRequestId = cleanReqId;
+      }
+      tx.update(docRef, updates);
       return nextCount;
     });
   } catch (err) {
@@ -570,66 +658,112 @@ export async function updateShiftSampleCounter(
     if (!currentSnap.exists()) {
       throw new Error("Check-in record not found.");
     }
-    const currentCount = (currentSnap.data()?.samplesLogged as number) || 0;
+    const data = currentSnap.data();
+    const currentCount = (data?.samplesLogged as number) || 0;
+    if (cleanReqId && data?.lastCounterRequestId === cleanReqId) {
+      return currentCount;
+    }
     if (safeDelta < 0 && currentCount <= 0) return 0;
-    await updateDoc(docRef, {
+    const updates: Record<string, any> = {
       samplesLogged: increment(safeDelta),
       updatedAt: Date.now(),
-    });
+    };
+    if (cleanReqId) {
+      updates.lastCounterRequestId = cleanReqId;
+    }
+    await updateDoc(docRef, updates);
     return Math.max(0, currentCount + safeDelta);
   }
 }
 
 /**
  * Records a consumer / mother survey response in Firestore "surveys" collection
- * and increments the linked shift's samplesLogged counter by +1.
+ * using a brand-prefixed Respondent ID (e.g. "MOLFIX-849201", "PZ-394012") and an
+ * atomic transaction that guarantees idempotency and prevents duplicate shift counter increments.
  */
 export async function recordSurvey(
-  data: Omit<SurveyRecord, "id" | "createdAt">
-): Promise<{ survey: SurveyRecord; samplesLogged: number }> {
+  data: Omit<SurveyRecord, "id" | "createdAt"> & {
+    respondentId?: string;
+    clientRequestId?: string;
+  },
+  campaignMeta?: { brandName?: string; name?: string; id?: string } | null
+): Promise<{ survey: SurveyRecord; samplesLogged: number; alreadyExisted: boolean }> {
   const now = Date.now();
-  const surveyId = `srv_${now}_${Math.random().toString(36).slice(2, 8)}`;
-  const cleanData = stripUndefined({
-    ...data,
-    id: surveyId,
-    createdAt: now,
-  }) as SurveyRecord;
+  const cleanReqId = sanitizeClientRequestId(data.clientRequestId);
+  const resolvedCampaign =
+    campaignMeta || (await getCampaign(data.campaignId)) || { id: data.campaignId };
 
-  // Try top-level surveys collection first; fallback to embedding on checkins/{checkInId}
-  try {
-    const docRef = await addDoc(collection(db, SURVEYS_COLLECTION), cleanData);
-    cleanData.id = docRef.id;
-  } catch {
-    if (data.checkInId) {
-      try {
-        const checkInRef = doc(db, COLLECTION_NAME, data.checkInId);
-        const snap = await getDoc(checkInRef);
-        if (snap.exists()) {
-          const existingSurveys = Array.isArray(snap.data()?.surveys) ? snap.data().surveys : [];
-          await updateDoc(checkInRef, {
-            surveys: [cleanData, ...existingSurveys],
-            updatedAt: now,
-          });
-        }
-      } catch (embedErr) {
-        console.warn("Could not embed survey on check-in document:", embedErr);
+  const candidateId = generateRespondentId(
+    resolvedCampaign,
+    data.respondentId,
+    cleanReqId
+  );
+
+  const { respondentId: _omitRespondentId, ...restData } = data;
+
+  const primarySurveyRef = doc(db, SURVEYS_COLLECTION, candidateId);
+  const checkInRef = data.checkInId ? doc(db, COLLECTION_NAME, data.checkInId) : null;
+
+  return await runTransaction(db, async (tx) => {
+    const [existingSurveySnap, checkInSnap] = await Promise.all([
+      tx.get(primarySurveyRef),
+      checkInRef ? tx.get(checkInRef) : Promise.resolve(null),
+    ]);
+
+    const currentSamples = Number(checkInSnap?.data()?.samplesLogged) || 0;
+
+    let finalSurveyId = candidateId;
+    let targetSurveyRef = primarySurveyRef;
+
+    if (existingSurveySnap.exists()) {
+      const existing = existingSurveySnap.data() as SurveyRecord;
+      const isSameRetry =
+        existing.campaignId === data.campaignId &&
+        existing.checkInId === data.checkInId &&
+        ((cleanReqId && existing.clientRequestId === cleanReqId) ||
+          (!cleanReqId &&
+            (existing.respondentName || "").trim().toLowerCase() ===
+              (data.respondentName || "").trim().toLowerCase() &&
+            (existing.respondentPhone || "").trim() ===
+              (data.respondentPhone || "").trim()));
+
+      if (isSameRetry) {
+        return {
+          survey: { ...existing, id: existingSurveySnap.id },
+          samplesLogged: currentSamples,
+          alreadyExisted: true,
+        };
       }
-    }
-  }
 
-  let samplesLogged = 0;
-  if (data.checkInId) {
-    try {
-      samplesLogged = await updateShiftSampleCounter(data.checkInId, 1);
-    } catch (err) {
-      console.warn("Could not increment shift counter after survey:", err);
+      // Collision defense: another survey already owns this 6-digit ID -> assign a fresh cryptographic Respondent ID
+      finalSurveyId = generateRespondentId(resolvedCampaign);
+      targetSurveyRef = doc(db, SURVEYS_COLLECTION, finalSurveyId);
     }
-  }
 
-  return {
-    survey: cleanData,
-    samplesLogged,
-  };
+    const cleanData = stripUndefined({
+      ...restData,
+      id: finalSurveyId,
+      clientRequestId: cleanReqId,
+      createdAt: now,
+    }) as SurveyRecord;
+
+    tx.set(targetSurveyRef, cleanData);
+
+    let nextSamplesLogged = currentSamples;
+    if (checkInRef && checkInSnap && checkInSnap.exists()) {
+      nextSamplesLogged = currentSamples + 1;
+      tx.update(checkInRef, {
+        samplesLogged: increment(1),
+        updatedAt: now,
+      });
+    }
+
+    return {
+      survey: cleanData,
+      samplesLogged: nextSamplesLogged,
+      alreadyExisted: false,
+    };
+  });
 }
 
 /**
