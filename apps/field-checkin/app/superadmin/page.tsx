@@ -673,6 +673,7 @@ export default function SuperAdminPage() {
       }
 
       const imported: StoreLocation[] = [];
+      const seenInCsv = new Set<string>();
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i]
           .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
@@ -695,6 +696,8 @@ export default function SuperAdminPage() {
           .toLowerCase()
           .replace(/[^a-z0-9-_]/g, "-")
           .replace(/-+/g, "-");
+        if (!code || seenInCsv.has(code)) continue;
+        seenInCsv.add(code);
         const lat = Number(latStr);
         const lng = Number(lngStr);
         imported.push({
@@ -2250,9 +2253,10 @@ export default function SuperAdminPage() {
                   type="button"
                   disabled={!newQLabel.trim()}
                   onClick={() => {
+                    const cleanLabel = newQLabel.trim();
+                    if (!cleanLabel) return;
                     const slugId =
-                      newQLabel
-                        .trim()
+                      cleanLabel
                         .toLowerCase()
                         .replace(/[^a-z0-9]+/g, "_")
                         .replace(/^_|_$/g, "")
@@ -2267,19 +2271,30 @@ export default function SuperAdminPage() {
                             .filter(Boolean)
                         : undefined;
                     const parsedMax = Number(newQMaxDigits);
-                    setDraftQuestions((prev) => [
-                      ...prev,
-                      {
-                        id: `${slugId}_${prev.length + 1}`,
-                        label: newQLabel.trim(),
-                        type: newQType,
-                        required: newQRequired,
-                        options: opts,
-                        numericOnly: newQNumericOnly || newQType === "number" || undefined,
-                        maxDigits: parsedMax > 0 ? parsedMax : undefined,
-                        uniqueValue: newQUniqueValue || undefined,
-                      },
-                    ]);
+                    setDraftQuestions((prev) => {
+                      if (
+                        prev.some(
+                          (existingQ) =>
+                            existingQ.label.trim().toLowerCase() === cleanLabel.toLowerCase() &&
+                            existingQ.type === newQType
+                        )
+                      ) {
+                        return prev;
+                      }
+                      return [
+                        ...prev,
+                        {
+                          id: `${slugId}_${prev.length + 1}`,
+                          label: cleanLabel,
+                          type: newQType,
+                          required: newQRequired,
+                          options: opts,
+                          numericOnly: newQNumericOnly || newQType === "number" || undefined,
+                          maxDigits: parsedMax > 0 ? parsedMax : undefined,
+                          uniqueValue: newQUniqueValue || undefined,
+                        },
+                      ];
+                    });
                     setNewQLabel("");
                     setNewQOptions("");
                     setNewQNumericOnly(false);

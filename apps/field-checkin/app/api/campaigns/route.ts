@@ -10,6 +10,8 @@ import {
   getRequestSession,
   hashPassword,
   sanitizeCampaignForPublic,
+  sanitizeInputText,
+  sanitizeHexColor,
 } from "@/lib/auth";
 import {
   isValidCoordinates,
@@ -161,9 +163,20 @@ export async function POST(request: NextRequest) {
       ? stores
       : existing?.stores || (seedDefaultStores ? DEFAULT_DEMO_STORES : []);
 
-    // Validate & normalize stores (coordinates, radius bounds, hashed credentials)
+    // Validate, normalize, & idempotently deduplicate stores by canonical storeCode
     const validatedStores: StoreLocation[] = [];
+    const seenStoreCodes = new Set<string>();
     for (const s of rawStores) {
+      const canonicalCode = String(s.storeCode || (s as any).code || s.id || s.name || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]/g, "-")
+        .replace(/-+/g, "-");
+      if (!canonicalCode || seenStoreCodes.has(canonicalCode)) {
+        continue;
+      }
+      seenStoreCodes.add(canonicalCode);
+
       let lat = Number(s.lat);
       let lng = Number(s.lng);
       if (!isValidCoordinates(lat, lng)) {
@@ -187,13 +200,33 @@ export async function POST(request: NextRequest) {
       const rawPin = String(s.baPassword || s.pin || "1234").trim();
       const hashedPin = hashPassword(rawPin);
 
+      const safePolygon = Array.isArray(s.polygon)
+        ? s.polygon
+            .filter((v: any) => v && isValidCoordinates(Number(v.lat), Number(v.lng)))
+            .slice(0, 60)
+            .map((v: any) => ({ lat: Number(v.lat), lng: Number(v.lng) }))
+        : undefined;
+
+      // Strictly whitelist StoreLocation fields (never spread arbitrary client keys)
       validatedStores.push({
-        ...s,
-        id: s.id || s.storeCode,
-        storeCode: s.storeCode || s.id,
+        id: canonicalCode,
+        storeCode: canonicalCode,
+        name: sanitizeInputText(s.name || canonicalCode, 150),
+        state: s.state ? sanitizeInputText(s.state, 60) : undefined,
+        city: s.city ? sanitizeInputText(s.city, 80) : undefined,
+        address: s.address ? sanitizeInputText(s.address, 250) : undefined,
         lat,
         lng,
         geofenceRadius: clampedRadius,
+        polygon: safePolygon && safePolygon.length >= 3 ? safePolygon : undefined,
+        baName: s.baName ? sanitizeInputText(s.baName, 120) : undefined,
+        baUsername: s.baUsername
+          ? sanitizeInputText(s.baUsername, 80).toLowerCase()
+          : undefined,
+        baPhone: s.baPhone ? sanitizeInputText(s.baPhone, 40) : undefined,
+        assignedDate: s.assignedDate ? sanitizeInputText(s.assignedDate, 30) : undefined,
+        shiftStartTime: s.shiftStartTime ? sanitizeInputText(s.shiftStartTime, 20) : undefined,
+        shiftEndTime: s.shiftEndTime ? sanitizeInputText(s.shiftEndTime, 20) : undefined,
         pin: hashedPin,
         baPassword: hashedPin,
         isActive: s.isActive !== false && s.active !== false,
@@ -206,42 +239,82 @@ export async function POST(request: NextRequest) {
     const hashedAdminPass = hashPassword(rawAdminPass);
 
     const resolvedActivationType = activationType === "hospital" ? "hospital" : "retail";
+    const seenQuestionIds = new Set<string>();
     const incomingQuestions = Array.isArray(surveyQuestions)
       ? surveyQuestions
-          .filter((q: any) => q && typeof q.label === "string" && q.label.trim())
+          .filter((q: any) => q && typeof q.label === "string" && sanitizeInputText(q.label, 400))
           .slice(0, 30)
-          .map((q: any, idx: number): SurveyQuestion => ({
-            id: String(q.id || `q_${idx + 1}`).trim().slice(0, 60),
-            label: String(q.label).trim().slice(0, 400),
-            type:
-              q.type === "tel" || q.type === "select" || q.type === "radio_consent"
-                ? q.type
-                : "text",
-            required: Boolean(q.required),
-            placeholder: q.placeholder ? String(q.placeholder).trim().slice(0, 120) : undefined,
-            options: Array.isArray(q.options)
-              ? q.options.map((o: any) => String(o).trim().slice(0, 250)).filter(Boolean).slice(0, 20)
-              : undefined,
-            autoFillStoreName: Boolean(q.autoFillStoreName),
-          }))
+          .map((q: any, idx: number): SurveyQuestion => {
+            const safeQId =
+              String(q.id || `q_${idx + 1}`)
+                .trim()
+                .replace(/[^a-zA-Z0-9_-]/g, "_")
+                .slice(0, 60) || `q_${idx + 1}`;
+            return {
+              id: safeQId,
+              label: sanitizeInputText(q.label, 400),
+              type:
+                q.type === "tel" ||
+                q.type === "number" ||
+                q.type === "select" ||
+                q.type === "checkbox" ||
+                q.type === "radio_consent"
+                  ? q.type
+                  : "text",
+              required: Boolean(q.required),
+              placeholder: q.placeholder ? sanitizeInputText(q.placeholder, 120) : undefined,
+              options: Array.isArray(q.options)
+                ? q.options
+                    .map((o: any) => sanitizeInputText(o, 250))
+                    .filter(Boolean)
+                    .slice(0, 20)
+                : undefined,
+              autoFillStoreName: Boolean(q.autoFillStoreName),
+              numericOnly: q.numericOnly ? true : undefined,
+              maxDigits:
+                typeof q.maxDigits === "number" && q.maxDigits > 0
+                  ? Math.min(40, Math.round(q.maxDigits))
+                  : undefined,
+              uniqueValue: q.uniqueValue ? true : undefined,
+              skipIfQuestionId: q.skipIfQuestionId
+                ? String(q.skipIfQuestionId)
+                    .trim()
+                    .replace(/[^a-zA-Z0-9_-]/g, "_")
+                    .slice(0, 60)
+                : undefined,
+              skipIfAnswer: q.skipIfAnswer ? sanitizeInputText(q.skipIfAnswer, 200) : undefined,
+            };
+          })
+          .filter((q) => {
+            if (seenQuestionIds.has(q.id)) return false;
+            seenQuestionIds.add(q.id);
+            return true;
+          })
       : existing?.surveyQuestions ||
         (resolvedActivationType === "hospital" ? DEFAULT_HOSPITAL_QUESTIONS : undefined);
 
+    const safeCampaignName = sanitizeInputText(name, 150);
+    if (!safeCampaignName) {
+      return NextResponse.json(
+        { error: "Valid campaign name is required." },
+        { status: 400 }
+      );
+    }
+
     const campaignPayload: Campaign = {
       id: slug,
-      name: String(name).trim().slice(0, 150),
-      brandName: String(brandName || name).trim().slice(0, 120),
+      name: safeCampaignName,
+      brandName: sanitizeInputText(brandName || safeCampaignName, 120),
       activationType: resolvedActivationType,
       geofenceEnabled: resolvedGeofenceEnabled,
-      adminUsername: String(
-        adminUsername || existing?.adminUsername || `${slug.split("-")[0]}_admin`
-      )
-        .trim()
-        .toLowerCase(),
+      adminUsername: sanitizeInputText(
+        adminUsername || existing?.adminUsername || `${slug.split("-")[0]}_admin`,
+        80
+      ).toLowerCase(),
       adminPassword: hashedAdminPass,
       adminPin: hashedAdminPass,
-      primaryColor: primaryColor || existing?.primaryColor || "#14B8A6",
-      secondaryColor: secondaryColor || existing?.secondaryColor || "#F59E0B",
+      primaryColor: sanitizeHexColor(primaryColor || existing?.primaryColor, "#14B8A6"),
+      secondaryColor: sanitizeHexColor(secondaryColor || existing?.secondaryColor, "#F59E0B"),
       stores: validatedStores,
       surveyQuestions: incomingQuestions,
       active: true,

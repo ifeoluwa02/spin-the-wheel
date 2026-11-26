@@ -23,6 +23,9 @@ import {
   resetRateLimit,
   getClientIp,
   computeSha256Hex,
+  isValidSelfieDataUrl,
+  sanitizeInputText,
+  sanitizeKeyValueMap,
 } from "@/lib/auth";
 import {
   evaluateGeofence,
@@ -30,6 +33,10 @@ import {
   isValidCoordinates,
   calculateDistanceMeters,
 } from "@/lib/geo";
+import {
+  findDuplicateUniqueSurveyAnswer,
+  generateRespondentId,
+} from "@/lib/survey-templates";
 import type { CheckInRecord, CheckInStatus, SurveyType, TasteFeedback } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -185,15 +192,10 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Validate live selfie photo evidence format & size
-      if (
-        !photoUrl ||
-        typeof photoUrl !== "string" ||
-        !photoUrl.startsWith("data:image/") ||
-        photoUrl.length > 900_000
-      ) {
+      // Validate live selfie photo evidence format & size (strictly base64 JPEG/PNG/WebP — blocks SVG XSS & PHP injection)
+      if (!isValidSelfieDataUrl(photoUrl, 900_000)) {
         return NextResponse.json(
-          { error: "A valid live camera selfie (under 900 KB) is required for check-in." },
+          { error: "A valid live camera selfie (JPEG/PNG/WebP under 900 KB) is required for check-in." },
           { status: 400 }
         );
       }
@@ -383,13 +385,17 @@ export async function POST(request: NextRequest) {
 
       const photoSha256 = computeSha256Hex(photoUrl);
 
+      const safeBaName = sanitizeInputText(store.baName || baName, 150) || "BA";
+      const safeBaPhone = sanitizeInputText(baPhone || store.baPhone, 40);
+      const safeDeviceId = deviceId ? sanitizeInputText(deviceId, 100) : undefined;
+
       const record: Omit<CheckInRecord, "id" | "createdAt" | "updatedAt"> = {
         campaignId: cleanCampaignId,
         storeCode: canonicalStoreCode,
         storeName: store.name,
-        baName: baName.trim().slice(0, 150),
+        baName: safeBaName,
         baUsername: inputBaUser || undefined,
-        baPhone: String(baPhone || "").trim().slice(0, 40),
+        baPhone: safeBaPhone,
         shiftDate: todayStr,
         checkInTime: new Date().toISOString(),
         checkInLat: resolvedUserLat,
@@ -404,7 +410,7 @@ export async function POST(request: NextRequest) {
         isSimulated: Boolean(isSimulated),
         spoofRisk: telemetry.spoofRisk,
         spoofReasons: telemetry.spoofReasons.length > 0 ? telemetry.spoofReasons : undefined,
-        deviceId: deviceId ? String(deviceId).trim().slice(0, 100) : undefined,
+        deviceId: safeDeviceId,
         samplesLogged: 0,
       };
 
@@ -434,7 +440,7 @@ export async function POST(request: NextRequest) {
 
     // ── 2. CONTINUOUS PRESENCE HEARTBEAT ACTION (Akida Live Tracking Parity) ──
     if (action === "heartbeat") {
-      const { checkInId, latitude, longitude, accuracy } = body;
+      const { checkInId, latitude, longitude, accuracy, clientRequestId } = body;
       if (!checkInId || !isValidCoordinates(latitude, longitude)) {
         return NextResponse.json(
           { error: "checkInId and valid GPS coordinates are required for heartbeat." },
@@ -454,6 +460,7 @@ export async function POST(request: NextRequest) {
         latitude,
         longitude,
         accuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
+        clientRequestId: typeof clientRequestId === "string" ? clientRequestId : undefined,
       });
 
       return NextResponse.json({
@@ -483,14 +490,14 @@ export async function POST(request: NextRequest) {
         latitude,
         longitude,
         accuracy: typeof accuracy === "number" ? Math.round(accuracy) : undefined,
-        notes,
+        notes: notes !== undefined ? sanitizeInputText(notes, 2000) : undefined,
       });
       return NextResponse.json({ success: true, checkIn: updated });
     }
 
     // ── 4. SAMPLE COUNTER INCREMENT / DECREMENT ──
     if (action === "sample_counter") {
-      const { checkInId, delta } = body;
+      const { checkInId, delta, clientRequestId } = body;
       if (!checkInId) {
         return NextResponse.json({ error: "checkInId is required." }, { status: 400 });
       }
@@ -503,13 +510,19 @@ export async function POST(request: NextRequest) {
       }
 
       const safeDelta = Number(delta) < 0 ? -1 : 1;
-      const newTotal = await updateShiftSampleCounter(checkInId, safeDelta);
+      const newTotal = await updateShiftSampleCounter(
+        checkInId,
+        safeDelta,
+        typeof clientRequestId === "string" ? clientRequestId : undefined
+      );
       return NextResponse.json({ success: true, samplesLogged: newTotal });
     }
 
-    // ── 5. SUBMIT CONSUMER / MOTHER SURVEY (With Auto Geotagging) ──
+    // ── 5. SUBMIT CONSUMER / MOTHER SURVEY (With Auto Geotagging & Brand-Prefixed Idempotency) ──
     if (action === "submit_survey") {
       const {
+        respondentId,
+        clientRequestId,
         campaignId,
         checkInId,
         storeCode,
@@ -544,17 +557,29 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (!isAuthorizedForShift(request, checkInId, campaignId)) {
+      const cleanCampaignId = String(campaignId).trim().toLowerCase();
+
+      if (!isAuthorizedForShift(request, checkInId, cleanCampaignId)) {
         return NextResponse.json(
           { error: "Unauthorized shift session. Please sign in to your shift again." },
           { status: 401 }
         );
       }
 
-      const shiftRecord = await getCheckInById(checkInId);
-      if (!shiftRecord || shiftRecord.status === "checked_out" || shiftRecord.status === "rejected") {
+      const [shiftRecord, campaign] = await Promise.all([
+        getCheckInById(checkInId),
+        getCampaign(cleanCampaignId),
+      ]);
+      if (!shiftRecord || shiftRecord.status === "rejected") {
         return NextResponse.json(
-          { error: "Cannot submit surveys to a closed or rejected shift." },
+          { error: "Cannot submit surveys to a missing or rejected shift." },
+          { status: 400 }
+        );
+      }
+      // Block fresh online submissions to a checked_out shift unless it is a late-syncing offline queue item with a clientRequestId
+      if (shiftRecord.status === "checked_out" && !clientRequestId) {
+        return NextResponse.json(
+          { error: "Cannot submit new surveys to a closed shift." },
           { status: 400 }
         );
       }
@@ -572,85 +597,121 @@ export async function POST(request: NextRequest) {
       const mode: SurveyType = surveyType === "hospital" ? "hospital" : "retail";
       const validFeedback: TasteFeedback[] = ["loved_it", "good", "neutral", "disliked"];
 
-      let cleanAnswers: Record<string, string> | undefined;
-      if (surveyAnswers && typeof surveyAnswers === "object" && !Array.isArray(surveyAnswers)) {
-        cleanAnswers = {};
-        for (const [k, v] of Object.entries(surveyAnswers)) {
-          if (typeof k === "string" && k.trim() && v !== undefined && v !== null) {
-            cleanAnswers[k.trim().slice(0, 60)] = String(v).trim().slice(0, 400);
-          }
-        }
-        if (Object.keys(cleanAnswers).length === 0) cleanAnswers = undefined;
+      const cleanAnswers = sanitizeKeyValueMap(surveyAnswers, 40, 60, 400);
+      const cleanRespondentName = sanitizeInputText(respondentName, 120);
+      const cleanRespondentPhone = sanitizeInputText(respondentPhone, 40);
+
+      if (!cleanRespondentName) {
+        return NextResponse.json(
+          { error: "Valid respondent name is required." },
+          { status: 400 }
+        );
       }
 
-      const { survey, samplesLogged } = await recordSurvey({
-        campaignId: String(campaignId).trim().toLowerCase(),
-        checkInId: String(checkInId).trim(),
-        storeCode: String(storeCode).trim(),
-        storeName: String(storeName || shiftRecord.storeName || storeCode).trim(),
-        baName: String(baName || shiftRecord.baName || "BA").trim(),
-        shiftDate: shiftRecord.shiftDate || getTodayDateStr(),
-        surveyType: mode,
-        respondentName: String(respondentName).trim().slice(0, 120),
-        respondentPhone: String(respondentPhone || "").trim().slice(0, 40),
-        productSampled:
-          mode === "retail" && productSampled
-            ? String(productSampled).trim().slice(0, 120)
-            : undefined,
-        tasteFeedback:
-          mode === "retail" && validFeedback.includes(tasteFeedback) ? tasteFeedback : undefined,
-        purchasedOnShelf: mode === "retail" ? Boolean(purchasedOnShelf) : undefined,
-        packsPurchased:
-          mode === "retail" && purchasedOnShelf
-            ? Math.max(1, Math.min(100, Number(packsPurchased) || 1))
-            : undefined,
-        clinicType:
-          mode === "hospital" && clinicType
-            ? String(clinicType).trim().slice(0, 60)
-            : undefined,
-        hospitalName:
-          mode === "hospital" && hospitalName
-            ? String(hospitalName).trim().slice(0, 150)
-            : undefined,
-        marketingConsent:
-          mode === "hospital" && typeof marketingConsent === "boolean"
-            ? marketingConsent
-            : undefined,
-        marketingConsentLabel:
-          mode === "hospital" && marketingConsentLabel
-            ? String(marketingConsentLabel).trim().slice(0, 300)
-            : undefined,
-        motherStage:
-          mode === "hospital" && (motherStage === "expectant" || motherStage === "nursing")
-            ? motherStage
-            : undefined,
-        dueOrBirthDate:
-          mode === "hospital" && dueOrBirthDate
-            ? String(dueOrBirthDate).trim().slice(0, 50)
-            : undefined,
-        diaperSizeIssued:
-          mode === "hospital" &&
-          (diaperSizeIssued === "Newborn (Size 1)" ||
-            diaperSizeIssued === "Size 2" ||
-            diaperSizeIssued === "Size 3")
-            ? diaperSizeIssued
-            : undefined,
-        currentBrandUsed:
-          mode === "hospital" && currentBrandUsed
-            ? String(currentBrandUsed).trim().slice(0, 80)
-            : undefined,
-        surveyAnswers: cleanAnswers,
-        lat: hasCoords ? latitude : undefined,
-        lng: hasCoords ? longitude : undefined,
-        accuracy: hasCoords && typeof accuracy === "number" ? Math.round(accuracy) : undefined,
-        distanceMeters: surveyDistance,
-        notes: notes ? String(notes).trim().slice(0, 500) : undefined,
-      });
+      // Server-side idempotency-aware uniqueValue enforcement (e.g., Mother's Phone Number)
+      if (campaign?.surveyQuestions?.some((q) => q.uniqueValue)) {
+        const existingSurveys = await getDailySurveys(
+          cleanCampaignId,
+          shiftRecord.shiftDate || getTodayDateStr()
+        );
+        const resolvedCandidateId = generateRespondentId(
+          campaign,
+          respondentId,
+          clientRequestId
+        );
+        const dup = findDuplicateUniqueSurveyAnswer({
+          questions: campaign.surveyQuestions,
+          incomingAnswers: cleanAnswers,
+          incomingPhone: cleanRespondentPhone,
+          existingSurveys,
+          currentRespondentId: resolvedCandidateId,
+          currentClientRequestId: typeof clientRequestId === "string" ? clientRequestId : undefined,
+        });
+        if (dup) {
+          return NextResponse.json(
+            {
+              error: `Duplicate value detected for "${dup.questionLabel}" ("${dup.duplicateValue}"). Each entry must be unique.`,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
+      // Authoritative shift attribution: always bind storeCode, storeName, and baName from verified shiftRecord
+      const { survey, samplesLogged, alreadyExisted } = await recordSurvey(
+        {
+          respondentId: typeof respondentId === "string" ? respondentId : undefined,
+          clientRequestId: typeof clientRequestId === "string" ? clientRequestId : undefined,
+          campaignId: shiftRecord.campaignId || cleanCampaignId,
+          checkInId: shiftRecord.id,
+          storeCode: shiftRecord.storeCode || sanitizeInputText(storeCode, 80),
+          storeName: shiftRecord.storeName || sanitizeInputText(storeName || storeCode, 150),
+          baName: shiftRecord.baName || sanitizeInputText(baName, 120) || "BA",
+          shiftDate: shiftRecord.shiftDate || getTodayDateStr(),
+          surveyType: mode,
+          respondentName: cleanRespondentName,
+          respondentPhone: cleanRespondentPhone,
+          productSampled:
+            mode === "retail" && productSampled
+              ? sanitizeInputText(productSampled, 120)
+              : undefined,
+          tasteFeedback:
+            mode === "retail" && validFeedback.includes(tasteFeedback) ? tasteFeedback : undefined,
+          purchasedOnShelf: mode === "retail" ? Boolean(purchasedOnShelf) : undefined,
+          packsPurchased:
+            mode === "retail" && purchasedOnShelf
+              ? Math.max(1, Math.min(100, Number(packsPurchased) || 1))
+              : undefined,
+          clinicType:
+            mode === "hospital" && clinicType
+              ? sanitizeInputText(clinicType, 60)
+              : undefined,
+          hospitalName:
+            mode === "hospital" && hospitalName
+              ? sanitizeInputText(hospitalName, 150)
+              : undefined,
+          marketingConsent:
+            mode === "hospital" && typeof marketingConsent === "boolean"
+              ? marketingConsent
+              : undefined,
+          marketingConsentLabel:
+            mode === "hospital" && marketingConsentLabel
+              ? sanitizeInputText(marketingConsentLabel, 300)
+              : undefined,
+          motherStage:
+            mode === "hospital" && (motherStage === "expectant" || motherStage === "nursing")
+              ? motherStage
+              : undefined,
+          dueOrBirthDate:
+            mode === "hospital" && dueOrBirthDate
+              ? sanitizeInputText(dueOrBirthDate, 50)
+              : undefined,
+          diaperSizeIssued:
+            mode === "hospital" &&
+            (diaperSizeIssued === "Newborn (Size 1)" ||
+              diaperSizeIssued === "Size 2" ||
+              diaperSizeIssued === "Size 3")
+              ? diaperSizeIssued
+              : undefined,
+          currentBrandUsed:
+            mode === "hospital" && currentBrandUsed
+              ? sanitizeInputText(currentBrandUsed, 80)
+              : undefined,
+          surveyAnswers: cleanAnswers,
+          lat: hasCoords ? latitude : undefined,
+          lng: hasCoords ? longitude : undefined,
+          accuracy: hasCoords && typeof accuracy === "number" ? Math.round(accuracy) : undefined,
+          distanceMeters: surveyDistance,
+          notes: notes ? sanitizeInputText(notes, 500) : undefined,
+        },
+        campaign
+      );
 
       return NextResponse.json({
         success: true,
         survey,
         samplesLogged,
+        alreadyExisted,
       });
     }
 
@@ -680,10 +741,10 @@ export async function POST(request: NextRequest) {
       }
 
       const updated = await reviewCheckInRecord({
-        checkInId,
+        checkInId: sanitizeInputText(checkInId, 120),
         decision,
-        reviewedBy: session.username,
-        reviewNote,
+        reviewedBy: sanitizeInputText(session.username, 120),
+        reviewNote: reviewNote ? sanitizeInputText(reviewNote, 1000) : undefined,
       });
 
       return NextResponse.json({

@@ -196,6 +196,7 @@ export type TasteFeedback = "loved_it" | "good" | "neutral" | "disliked";
 
 export interface SurveyRecord {
   id: string;
+  clientRequestId?: string;
   campaignId: string;
   checkInId: string;
   storeCode: string;

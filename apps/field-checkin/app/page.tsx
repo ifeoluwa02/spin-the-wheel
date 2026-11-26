@@ -10,7 +10,11 @@ import {
   ClipboardList, ListChecks, Send, ShoppingBag, HeartPulse,
 } from "lucide-react";
 import type { Campaign, StoreLocation, CheckInRecord, GeoPoint, SurveyRecord, SurveyType, TasteFeedback, SurveyQuestion } from "@/lib/types";
-import { DEFAULT_HOSPITAL_QUESTIONS } from "@/lib/survey-templates";
+import {
+  DEFAULT_HOSPITAL_QUESTIONS,
+  generateRespondentId,
+  generateClientRequestId,
+} from "@/lib/survey-templates";
 import { evaluateGeofence, formatDistance } from "@/lib/geo";
 import { drawGpsWatermark } from "@/lib/watermark";
 import GeofenceMap from "@/components/GeofenceMap";
@@ -111,6 +115,7 @@ function CheckInContent() {
   const [surveySubmitting, setSurveySubmitting] = useState(false);
   const [surveySuccessMsg, setSurveySuccessMsg] = useState("");
   const [surveyErrorMsg, setSurveyErrorMsg] = useState("");
+  const currentDraftIdsRef = useRef<{ respondentId: string; clientRequestId: string } | null>(null);
 
   function getShiftAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -253,10 +258,18 @@ function CheckInContent() {
     let latestShift: CheckInRecord | null = activeShift;
     for (const item of offlineQueue) {
       try {
+        const payloadToSync =
+          item.payload?.action === "submit_survey"
+            ? {
+                ...item.payload,
+                respondentId: item.payload.respondentId || item.id,
+                clientRequestId: item.payload.clientRequestId || item.id,
+              }
+            : item.payload;
         const res = await fetch("/api/checkin", {
           method: "POST",
           headers: getShiftAuthHeaders(),
-          body: JSON.stringify(item.payload),
+          body: JSON.stringify(payloadToSync),
         });
         const data = await res.json();
         if (res.ok && data.success) {
@@ -268,7 +281,12 @@ function CheckInContent() {
           if (data.survey) {
             setShiftSurveys((prev) => [
               data.survey,
-              ...prev.filter((s) => s.id !== item.id && s.id !== data.survey.id),
+              ...prev.filter(
+                (s) =>
+                  s.id !== item.id &&
+                  s.id !== data.survey.id &&
+                  (!s.clientRequestId || s.clientRequestId !== data.survey.clientRequestId)
+              ),
             ]);
           }
           if (typeof data.samplesLogged === "number" && latestShift) {
@@ -492,8 +510,18 @@ function CheckInContent() {
     setSurveyErrorMsg("");
     setSurveySuccessMsg("");
 
+    if (!currentDraftIdsRef.current) {
+      currentDraftIdsRef.current = {
+        respondentId: generateRespondentId(campaign || { id: campaignSlug }),
+        clientRequestId: generateClientRequestId(),
+      };
+    }
+    const draftIds = currentDraftIdsRef.current;
+
     const surveyPayload = {
       action: "submit_survey",
+      respondentId: draftIds.respondentId,
+      clientRequestId: draftIds.clientRequestId,
       campaignId: campaignSlug,
       checkInId: activeShift.id,
       storeCode: activeShift.storeCode,
@@ -520,6 +548,7 @@ function CheckInContent() {
     };
 
     const resetSurveyFields = () => {
+      currentDraftIdsRef.current = null;
       setRespondentName("");
       setRespondentPhone("");
       setPurchasedOnShelf(false);
@@ -541,7 +570,11 @@ function CheckInContent() {
     };
 
     const queueOfflineSurvey = () => {
-      const tempId = `offline_${Date.now()}`;
+      const tempId = draftIds.respondentId;
+      if (offlineQueue.some((q) => q.id === tempId || q.payload?.clientRequestId === draftIds.clientRequestId)) {
+        resetSurveyFields();
+        return;
+      }
       const newItem: OfflineQueuedSurvey = {
         id: tempId,
         queuedAt: Date.now(),
@@ -553,6 +586,7 @@ function CheckInContent() {
 
       const optimisticSurvey: SurveyRecord = {
         id: tempId,
+        clientRequestId: draftIds.clientRequestId,
         campaignId: campaignSlug,
         checkInId: activeShift.id,
         storeCode: activeShift.storeCode,
@@ -577,13 +611,16 @@ function CheckInContent() {
         notes: surveyPayload.notes,
         createdAt: Date.now(),
       };
-      setShiftSurveys((prev) => [optimisticSurvey, ...prev]);
+      setShiftSurveys((prev) => [
+        optimisticSurvey,
+        ...prev.filter((s) => s.id !== tempId && s.clientRequestId !== draftIds.clientRequestId),
+      ]);
       const updatedShift = { ...activeShift, samplesLogged: (activeShift.samplesLogged || 0) + 1 };
       setActiveShift(updatedShift);
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
 
       resetSurveyFields();
-      setSurveySuccessMsg(`📦 Saved offline for ${resolvedName}! Will auto-sync when signal returns.`);
+      setSurveySuccessMsg(`📦 Saved offline (${tempId}) for ${resolvedName}! Will auto-sync when signal returns.`);
       setTimeout(() => setSurveySuccessMsg(""), 5000);
     };
 
@@ -607,7 +644,14 @@ function CheckInContent() {
       }
 
       if (data.survey) {
-        setShiftSurveys((prev) => [data.survey, ...prev]);
+        setShiftSurveys((prev) => [
+          data.survey,
+          ...prev.filter(
+            (s) =>
+              s.id !== data.survey.id &&
+              (!s.clientRequestId || s.clientRequestId !== data.survey.clientRequestId)
+          ),
+        ]);
       }
       const nextCount = typeof data.samplesLogged === "number" && data.samplesLogged > 0
         ? data.samplesLogged
@@ -617,7 +661,9 @@ function CheckInContent() {
       localStorage.setItem(`active_shift_${campaignSlug}`, JSON.stringify(updatedShift));
 
       resetSurveyFields();
-      setSurveySuccessMsg(`✅ Survey saved for ${resolvedName}! Ready for next respondent.`);
+      setSurveySuccessMsg(
+        `✅ Survey saved (${data.survey?.id || draftIds.respondentId}) for ${resolvedName}! Ready for next respondent.`
+      );
       setTimeout(() => setSurveySuccessMsg(""), 4000);
     } catch (err) {
       console.warn("Network unreachable during survey submit — queueing offline:", err);
@@ -725,6 +771,7 @@ function CheckInContent() {
   async function sendPresenceHeartbeat(manual = false) {
     if (!activeShift || !coords) return;
     if (manual) setHeartbeatPinging(true);
+    const clientRequestId = generateClientRequestId();
     try {
       const res = await fetch("/api/checkin", {
         method: "POST",
@@ -735,6 +782,7 @@ function CheckInContent() {
           latitude: coords.latitude,
           longitude: coords.longitude,
           accuracy: coords.accuracy,
+          clientRequestId,
         }),
       });
       const data = await res.json();
@@ -1062,9 +1110,10 @@ function CheckInContent() {
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
+      const queueItemId = `checkin_${detId}`;
       const nextQueue: OfflineQueuedSurvey[] = [
-        { id: `checkin_${Date.now()}`, queuedAt: Date.now(), payload: checkInPayload },
-        ...offlineQueue,
+        { id: queueItemId, queuedAt: Date.now(), payload: checkInPayload },
+        ...offlineQueue.filter((item) => item.id !== queueItemId),
       ];
       setOfflineQueue(nextQueue);
       localStorage.setItem(`offline_queue_${campaignSlug}`, JSON.stringify(nextQueue));
@@ -1110,6 +1159,7 @@ function CheckInContent() {
   async function handleCounterDelta(delta: number) {
     if (!activeShift) return;
     setCounterLoading(true);
+    const clientRequestId = generateClientRequestId();
 
     try {
       const res = await fetch("/api/checkin", {
@@ -1119,6 +1169,7 @@ function CheckInContent() {
           action: "sample_counter",
           checkInId: activeShift.id,
           delta,
+          clientRequestId,
         }),
       });
 
@@ -1142,6 +1193,11 @@ function CheckInContent() {
 
     setSubmitting(true);
     try {
+      // Flush any pending offline surveys first so no queued respondents are stranded on check-out
+      if (offlineQueue.length > 0 && (typeof navigator === "undefined" || navigator.onLine)) {
+        await syncOfflineQueue();
+      }
+
       const res = await fetch("/api/checkin", {
         method: "POST",
         headers: getShiftAuthHeaders(),
@@ -1758,8 +1814,11 @@ function CheckInContent() {
                         className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex items-start justify-between gap-2 text-xs"
                       >
                         <div className="space-y-0.5 min-w-0">
-                          <div className="font-bold text-white flex items-center gap-2">
+                          <div className="font-bold text-white flex items-center gap-2 flex-wrap">
                             <span className="truncate">{s.respondentName}</span>
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-white/80 border border-white/15">
+                              {s.id}
+                            </span>
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/25 uppercase">
                               {s.surveyType}
                             </span>

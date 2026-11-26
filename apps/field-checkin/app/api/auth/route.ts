@@ -106,9 +106,13 @@ export async function POST(request: NextRequest) {
       const newPassword = String(body.password || "").trim();
       const currentPassword = String(body.currentPassword || "").trim();
 
-      if (newUsername.length < 3 || newUsername.length > 60) {
+      if (
+        newUsername.length < 3 ||
+        newUsername.length > 60 ||
+        !/^[a-z0-9._-]{3,60}$/.test(newUsername)
+      ) {
         return NextResponse.json(
-          { error: "Username must be between 3 and 60 characters." },
+          { error: "Username must be 3–60 characters (letters, numbers, dots, hyphens, underscores only)." },
           { status: 400 }
         );
       }
