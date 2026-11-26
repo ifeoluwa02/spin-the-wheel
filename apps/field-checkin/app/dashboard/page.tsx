@@ -27,42 +27,61 @@ function FieldOpsDashboardContent() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState("");
 
+  const lastActiveStorageKey = `field_ops_last_active_${campaignSlug}`;
+
   useEffect(() => {
     async function initDashboard() {
       setLoading(true);
       setError("");
       try {
-        // 1. Verify existing session cookie / Bearer token against /api/auth
-        const savedToken = localStorage.getItem(`field_ops_token_${campaignSlug}`) || "";
-        const authHeaders: Record<string, string> = {};
-        if (savedToken) {
-          authHeaders["Authorization"] = `Bearer ${savedToken}`;
-        }
+        const INACTIVITY_LIMIT_MS = 60 * 60 * 1000; // 1 hour
+        const lastActiveRaw = localStorage.getItem(lastActiveStorageKey);
+        if (lastActiveRaw && Date.now() - Number(lastActiveRaw) >= INACTIVITY_LIMIT_MS) {
+          try {
+            await fetch("/api/auth?role=admin", { method: "DELETE" });
+          } catch {}
+          localStorage.removeItem(`field_ops_token_${campaignSlug}`);
+          localStorage.removeItem(lastActiveStorageKey);
+          setIsAuthenticated(false);
+          setAuthToken("");
+          setAuthError("Your session expired after 1 hour of inactivity. Please sign in again.");
+        } else {
+          // 1. Verify existing session cookie / Bearer token against /api/auth
+          const savedToken = localStorage.getItem(`field_ops_token_${campaignSlug}`) || "";
+          const authHeaders: Record<string, string> = {};
+          if (savedToken) {
+            authHeaders["Authorization"] = `Bearer ${savedToken}`;
+          }
 
-        const authRes = await fetch("/api/auth", { headers: authHeaders });
-        if (authRes.ok) {
-          const authData = await authRes.json();
-          const user = authData.user;
-          if (
-            authData.authenticated &&
-            user &&
-            (user.role === "superadmin" ||
-              (user.role === "supervisor" &&
-                user.campaignId?.toLowerCase() === campaignSlug))
-          ) {
-            setIsAuthenticated(true);
-            setAuthToken(savedToken);
+          const authRes = await fetch("/api/auth", { headers: authHeaders });
+          if (authRes.ok) {
+            const authData = await authRes.json();
+            const user = authData.user;
+            if (
+              authData.authenticated &&
+              user &&
+              (user.role === "superadmin" ||
+                (user.role === "supervisor" &&
+                  user.campaignId?.toLowerCase() === campaignSlug))
+            ) {
+              localStorage.setItem(lastActiveStorageKey, String(Date.now()));
+              setIsAuthenticated(true);
+              setAuthToken(savedToken);
+            } else {
+              localStorage.removeItem(`field_ops_token_${campaignSlug}`);
+              localStorage.removeItem(lastActiveStorageKey);
+            }
           } else {
             localStorage.removeItem(`field_ops_token_${campaignSlug}`);
+            localStorage.removeItem(lastActiveStorageKey);
           }
-        } else {
-          localStorage.removeItem(`field_ops_token_${campaignSlug}`);
         }
 
         // 2. Load campaign metadata via API
+        const activeToken = localStorage.getItem(`field_ops_token_${campaignSlug}`) || "";
         const campRes = await fetch(
           `/api/campaigns?slug=${encodeURIComponent(campaignSlug)}`,
-          { headers: authHeaders }
+          { headers: activeToken ? { Authorization: `Bearer ${activeToken}` } : {} }
         );
         if (campRes.ok) {
           const campData = await campRes.json();
@@ -78,7 +97,66 @@ function FieldOpsDashboardContent() {
     }
 
     initDashboard();
-  }, [campaignSlug]);
+  }, [campaignSlug, lastActiveStorageKey]);
+
+  // ── 1-Hour Inactivity Auto-Logout & Sliding Session Renewal ──
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === "undefined") return;
+    const INACTIVITY_LIMIT_MS = 60 * 60 * 1000; // 1 hour
+    const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // Renew token at most every 5 mins of active use
+    let lastRefreshAt = Date.now();
+
+    const recordActivity = () => {
+      const now = Date.now();
+      const prevActive = Number(localStorage.getItem(lastActiveStorageKey) || now);
+      if (now - prevActive >= INACTIVITY_LIMIT_MS) {
+        handleLogout("Your session expired after 1 hour of inactivity. Please sign in again.");
+        return;
+      }
+      localStorage.setItem(lastActiveStorageKey, String(now));
+
+      if (now - lastRefreshAt >= REFRESH_INTERVAL_MS) {
+        lastRefreshAt = now;
+        const currentToken = localStorage.getItem(`field_ops_token_${campaignSlug}`) || authToken;
+        fetch("/api/auth?touch=1", {
+          headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d?.token) {
+              setAuthToken(d.token);
+              localStorage.setItem(`field_ops_token_${campaignSlug}`, d.token);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    localStorage.setItem(
+      lastActiveStorageKey,
+      localStorage.getItem(lastActiveStorageKey) || String(Date.now())
+    );
+
+    const events = ["mousedown", "keydown", "touchstart", "scroll", "click"];
+    for (const ev of events) {
+      window.addEventListener(ev, recordActivity, { passive: true });
+    }
+
+    const watchdog = window.setInterval(() => {
+      const lastActive = Number(localStorage.getItem(lastActiveStorageKey) || Date.now());
+      if (Date.now() - lastActive >= INACTIVITY_LIMIT_MS) {
+        handleLogout("Your session expired after 1 hour of inactivity. Please sign in again.");
+      }
+    }, 30_000);
+
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, recordActivity);
+      }
+      window.clearInterval(watchdog);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, campaignSlug, lastActiveStorageKey]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -105,6 +183,7 @@ function FieldOpsDashboardContent() {
         setAuthToken(data.token);
         localStorage.setItem(`field_ops_token_${campaignSlug}`, data.token);
       }
+      localStorage.setItem(lastActiveStorageKey, String(Date.now()));
       setIsAuthenticated(true);
     } catch {
       setAuthError("Network error while verifying credentials.");
@@ -113,7 +192,7 @@ function FieldOpsDashboardContent() {
     }
   }
 
-  async function handleLogout() {
+  async function handleLogout(reasonMsg?: string | React.MouseEvent) {
     try {
       await fetch("/api/auth?role=admin", { method: "DELETE" });
     } catch {}
@@ -121,8 +200,12 @@ function FieldOpsDashboardContent() {
     setAuthToken("");
     localStorage.removeItem(`field_ops_token_${campaignSlug}`);
     localStorage.removeItem(`field_ops_auth_${campaignSlug}`);
+    localStorage.removeItem(lastActiveStorageKey);
     setSupervisorUsername("");
     setSupervisorPin("");
+    if (typeof reasonMsg === "string" && reasonMsg) {
+      setAuthError(reasonMsg);
+    }
   }
 
   if (loading) {

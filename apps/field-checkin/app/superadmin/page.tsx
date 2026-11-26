@@ -249,6 +249,20 @@ export default function SuperAdminPage() {
 
   useEffect(() => {
     async function verifyAndLoad() {
+      const INACTIVITY_LIMIT_MS = 60 * 60 * 1000; // 1 hour
+      const lastActiveRaw = localStorage.getItem("field_ops_superadmin_last_active");
+      if (lastActiveRaw && Date.now() - Number(lastActiveRaw) >= INACTIVITY_LIMIT_MS) {
+        try {
+          await fetch("/api/auth?role=admin", { method: "DELETE" });
+        } catch {}
+        localStorage.removeItem("field_ops_superadmin_token");
+        localStorage.removeItem("field_ops_superadmin_last_active");
+        setIsAuthenticated(false);
+        setAuthError("Your session expired after 1 hour of inactivity. Please sign in again.");
+        setLoading(false);
+        return;
+      }
+
       const token = localStorage.getItem("field_ops_superadmin_token");
       if (token) {
         try {
@@ -263,12 +277,14 @@ export default function SuperAdminPage() {
         if (res.ok) {
           const data = await res.json();
           if (data.authenticated && data.user?.role === "superadmin") {
+            localStorage.setItem("field_ops_superadmin_last_active", String(Date.now()));
             setIsAuthenticated(true);
             await loadCampaigns(token || undefined);
             return;
           }
         } else if (res.status === 401) {
           localStorage.removeItem("field_ops_superadmin_token");
+          localStorage.removeItem("field_ops_superadmin_last_active");
           setIsAuthenticated(false);
           setLoading(false);
           return;
@@ -281,12 +297,71 @@ export default function SuperAdminPage() {
         }
       }
       localStorage.removeItem("field_ops_superadmin_token");
+      localStorage.removeItem("field_ops_superadmin_last_active");
       setIsAuthenticated(false);
       setLoading(false);
     }
     verifyAndLoad();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── 1-Hour Inactivity Auto-Logout & Sliding Session Renewal ──
+  useEffect(() => {
+    if (!isAuthenticated || typeof window === "undefined") return;
+    const INACTIVITY_LIMIT_MS = 60 * 60 * 1000; // 1 hour
+    const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // Renew token at most every 5 mins of active use
+    let lastRefreshAt = Date.now();
+
+    const recordActivity = () => {
+      const now = Date.now();
+      const prevActive = Number(localStorage.getItem("field_ops_superadmin_last_active") || now);
+      if (now - prevActive >= INACTIVITY_LIMIT_MS) {
+        handleLogout("Your session expired after 1 hour of inactivity. Please sign in again.");
+        return;
+      }
+      localStorage.setItem("field_ops_superadmin_last_active", String(now));
+
+      if (now - lastRefreshAt >= REFRESH_INTERVAL_MS) {
+        lastRefreshAt = now;
+        const currentToken = localStorage.getItem("field_ops_superadmin_token");
+        fetch("/api/auth?touch=1", {
+          headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : {},
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d?.token) {
+              localStorage.setItem("field_ops_superadmin_token", d.token);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    localStorage.setItem(
+      "field_ops_superadmin_last_active",
+      localStorage.getItem("field_ops_superadmin_last_active") || String(Date.now())
+    );
+
+    const events = ["mousedown", "keydown", "touchstart", "scroll", "click"];
+    for (const ev of events) {
+      window.addEventListener(ev, recordActivity, { passive: true });
+    }
+
+    const watchdog = window.setInterval(() => {
+      const lastActive = Number(localStorage.getItem("field_ops_superadmin_last_active") || Date.now());
+      if (Date.now() - lastActive >= INACTIVITY_LIMIT_MS) {
+        handleLogout("Your session expired after 1 hour of inactivity. Please sign in again.");
+      }
+    }, 30_000);
+
+    return () => {
+      for (const ev of events) {
+        window.removeEventListener(ev, recordActivity);
+      }
+      window.clearInterval(watchdog);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   async function loadCampaigns(explicitToken?: string) {
     setLoading(true);
@@ -345,6 +420,7 @@ export default function SuperAdminPage() {
         return;
       }
       localStorage.setItem("field_ops_superadmin_token", data.token);
+      localStorage.setItem("field_ops_superadmin_last_active", String(Date.now()));
       setIsAuthenticated(true);
       loadCampaigns(data.token);
     } catch {
@@ -354,14 +430,18 @@ export default function SuperAdminPage() {
     }
   }
 
-  async function handleLogout() {
+  async function handleLogout(reasonMsg?: string | React.MouseEvent) {
     try {
       await fetch("/api/auth?role=admin", { method: "DELETE" });
     } catch {}
     localStorage.removeItem("field_ops_superadmin_token");
+    localStorage.removeItem("field_ops_superadmin_last_active");
     setIsAuthenticated(false);
     setUsername("");
     setPassword("");
+    if (typeof reasonMsg === "string" && reasonMsg) {
+      setAuthError(reasonMsg);
+    }
   }
 
   async function handleCreateCampaign(e: React.FormEvent) {

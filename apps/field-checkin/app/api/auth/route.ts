@@ -57,6 +57,26 @@ export async function GET(request: NextRequest) {
   if (!session) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
+
+  // Sliding 1-hour inactivity renewal for active Superadmin / Supervisor sessions when ?touch=1
+  if (
+    searchParams.get("touch") === "1" &&
+    (session.role === "superadmin" || session.role === "supervisor")
+  ) {
+    const refreshedToken = createSessionToken({
+      role: session.role,
+      username: session.username,
+      campaignId: session.campaignId,
+    });
+    const res = NextResponse.json({
+      authenticated: true,
+      user: session,
+      token: refreshedToken,
+    });
+    setSessionCookie(res, refreshedToken);
+    return res;
+  }
+
   return NextResponse.json({
     authenticated: true,
     user: session,

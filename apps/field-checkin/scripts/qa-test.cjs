@@ -39,6 +39,8 @@ try {
     formatDistance,
   } = require(path.join(outDir, "geo.js"));
   const {
+    ADMIN_INACTIVITY_TTL_SECONDS,
+    BA_SHIFT_TTL_SECONDS,
     hashPassword,
     isHashedPassword,
     verifyPassword,
@@ -219,6 +221,21 @@ try {
 
     const expired = createSessionToken({ role: "superadmin", username: "admin" }, -10);
     assert.equal(verifySessionToken(expired), null);
+
+    // Role-based default inactivity TTL: 1 hour (3600s) for Superadmin/Supervisor, 12 hours (43200s) for BA
+    const superToken = verifySessionToken(
+      createSessionToken({ role: "superadmin", username: "admin" })
+    );
+    const supToken = verifySessionToken(
+      createSessionToken({ role: "supervisor", username: "sup", campaignId: "molfix" })
+    );
+    const baDefaultToken = verifySessionToken(
+      createSessionToken({ role: "ba", username: "ba1", campaignId: "molfix", storeCode: "s1" })
+    );
+    assert.equal(superToken.exp - superToken.iat, ADMIN_INACTIVITY_TTL_SECONDS);
+    assert.equal(supToken.exp - supToken.iat, 3600);
+    assert.equal(baDefaultToken.exp - baDefaultToken.iat, BA_SHIFT_TTL_SECONDS);
+    assert.equal(baDefaultToken.exp - baDefaultToken.iat, 43200);
   });
 
   test("Auth", "Rate limiter blocks after max attempts and resets cleanly", () => {

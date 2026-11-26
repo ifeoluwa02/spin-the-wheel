@@ -5,6 +5,11 @@ import type { Campaign, StoreLocation } from "./types";
 export const SESSION_COOKIE_NAME = "field_ops_session";
 export const BA_SHIFT_COOKIE_NAME = "field_ops_ba_shift";
 
+/** 1 hour (3,600s) inactivity window for Superadmin and Campaign Supervisor sessions */
+export const ADMIN_INACTIVITY_TTL_SECONDS = 60 * 60;
+/** 12 hours (43,200s) full-shift window for Brand Ambassador field sessions */
+export const BA_SHIFT_TTL_SECONDS = 60 * 60 * 12;
+
 function getSigningSecret(): string {
   const envSecret = process.env.AUTH_SECRET?.trim();
   if (envSecret && envSecret.length >= 16) {
@@ -64,14 +69,20 @@ export interface SessionPayload {
 
 export function createSessionToken(
   payload: Omit<SessionPayload, "exp" | "iat">,
-  ttlSeconds = 60 * 60 * 12
+  ttlSeconds?: number
 ): string {
+  const effectiveTtl =
+    typeof ttlSeconds === "number"
+      ? ttlSeconds
+      : payload.role === "ba"
+      ? BA_SHIFT_TTL_SECONDS
+      : ADMIN_INACTIVITY_TTL_SECONDS;
   const secret = getSigningSecret();
   const nowSec = Math.floor(Date.now() / 1000);
   const fullPayload: SessionPayload = {
     ...payload,
     iat: nowSec,
-    exp: nowSec + ttlSeconds,
+    exp: nowSec + effectiveTtl,
   };
   const dataB64 = Buffer.from(JSON.stringify(fullPayload)).toString("base64url");
   const sig = crypto.createHmac("sha256", secret).update(dataB64).digest("base64url");
@@ -139,14 +150,20 @@ export function setSessionCookie(
   response: NextResponse,
   token: string,
   cookieName = SESSION_COOKIE_NAME,
-  maxAgeSeconds = 60 * 60 * 12
+  maxAgeSeconds?: number
 ): void {
+  const effectiveMaxAge =
+    typeof maxAgeSeconds === "number"
+      ? maxAgeSeconds
+      : cookieName === BA_SHIFT_COOKIE_NAME
+      ? BA_SHIFT_TTL_SECONDS
+      : ADMIN_INACTIVITY_TTL_SECONDS;
   response.cookies.set(cookieName, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: maxAgeSeconds,
+    maxAge: effectiveMaxAge,
   });
 }
 
